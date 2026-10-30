@@ -11,12 +11,15 @@
 | `BundledPlatformToolsArchive` | 官方 Windows platform-tools ZIP |
 | `BundledEdlArchive` | TB322FC 的 9008 工具归档 |
 | `BundledEdlG5Archive` | TB323FU 的独立 9008 工具归档 |
+| `BundledEdlTb710fuArchive` | TB710FU 的独立 9008 工具归档（可选） |
 | `BundledQualcommDriverArchive` | 已签名的 Qualcomm USB 驱动 ZIP |
 | `BundledEdlRawPacker` | `MultiBootKernelPatcher.exe` |
 | `BundledEdlRawUnpacker` | `UnpackTool.exe` |
 | `BundledAvbSigningKey` | AOSP 公开的 AVB RSA4096 测试材料 |
 | `BundledGblPrcEfi` | 标准 PRC GBL EFI |
 | `BundledGblRowEfi` | 标准 ROW GBL EFI |
+
+TB710FU 归档可以不提供：该型号目前没有写入路径，未内置归档时 TB710FU 的 9008 流程会提示缺少工具并停止；设置了路径但文件不存在时发布仍会停止。归档格式与其他型号相同：根目录 `manifest.json`（`schemaVersion` 为 1，`profileId` 为 `tb710fu-9008-495`，`model` 为 `TB710FU`，`androidBuild` 为加载器来源 `TB710FU/ZUXOS_1.5.04.495_WITHOUT_UBL/EDL/xbl_s_devprg_ns.melf`，`hardwareId` 为 `003050E100400000`），共用角色（`tools/edl-ng.exe`、`tools/libusb-1.0.dll`、`tools/LICENSE.txt`、Python 嵌入包与 `scripts/` 下的四个脚本）及其既有固定校验值，外加唯一的加载器 `tools/tb710fu/firehose.melf`（1573224 字节，SHA-256 `ad4689b1c52458250d46829ee46a89ec974e69f8e82eee8d4950427919e0b9eb`）。
 
 工具格式和校验常量分别见 `EdlToolchain`、`EdlRawBootTools`、`BundledQualcommDriver`、`EdlRawBootBuilder.AvbSigning` 与 `Gbl/GblRuntimeAssets`。GBL 的来源与版本见 [第三方声明](GblRuntime-NOTICE.txt)。测试签名材料不是 OEM 私钥，不能替换成其他来源的密钥。
 
@@ -33,6 +36,7 @@ dotnet publish src/FreedomInstaller.App/FreedomInstaller.App.csproj \
   -p:BundledPlatformToolsArchive=/inputs/platform-tools.zip \
   -p:BundledEdlArchive=/inputs/edl.zip \
   -p:BundledEdlG5Archive=/inputs/edl-g5.zip \
+  -p:BundledEdlTb710fuArchive=/inputs/edl-tb710fu.zip \
   -p:BundledQualcommDriverArchive=/inputs/qualcomm-driver.zip \
   -p:BundledEdlRawPacker=/inputs/MultiBootKernelPatcher.exe \
   -p:BundledEdlRawUnpacker=/inputs/UnpackTool.exe \
@@ -53,6 +57,6 @@ dotnet test tests/FreedomInstaller.Core.Tests/FreedomInstaller.Core.Tests.csproj
   -p:BundledAvbSigningKey=/inputs/avb-test-key.pem
 ```
 
-设备通信、引导打包和驱动测试另需对应工具输入。主要环境变量包括 `EDL_TOOLCHAIN_TEST_BUNDLE_PATH`、`EDL_TOOLCHAIN_G5_TEST_BUNDLE_PATH`、`QUALCOMM_DRIVER_TEST_ARCHIVE`、`EDL_RAW_PACKER_PATH`、`EDL_RAW_UNPACKER_PATH`、`EDL_RAW_LINUX_PACKER_PATH`、`EDL_RAW_LINUX_UNPACKER_PATH`、`G5_PUBLIC_ABL_PATH` 和 `G5_LOADER_FIXTURE_ROOT`。将 `EDL_CLIENT_TEST_WORK_ROOT` 与 `TEST_ARTIFACT_ROOT` 指向容器内可写、空间充足的测试目录。
+设备通信、引导打包和驱动测试另需对应工具输入。主要环境变量包括 `EDL_TOOLCHAIN_TEST_BUNDLE_PATH`、`EDL_TOOLCHAIN_G5_TEST_BUNDLE_PATH`、`EDL_TOOLCHAIN_TB710FU_TEST_BUNDLE_PATH`、`QUALCOMM_DRIVER_TEST_ARCHIVE`、`EDL_RAW_PACKER_PATH`、`EDL_RAW_UNPACKER_PATH`、`EDL_RAW_LINUX_PACKER_PATH`、`EDL_RAW_LINUX_UNPACKER_PATH`、`G5_PUBLIC_ABL_PATH` 和 `G5_LOADER_FIXTURE_ROOT`。将 `EDL_CLIENT_TEST_WORK_ROOT` 与 `TEST_ARTIFACT_ROOT` 指向容器内可写、空间充足的测试目录。
 
 测试使用合成分区与受控进程接口，不能代替真实平板的安装和启动验证。需要真实历史日志的测试必须显式提供其输入，不能将缺失输入当成已验证。
