@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+      <TargetFramework>net9.0</TargetFramework>
+      <ImplicitUsings>enable</ImplicitUsings>
+      <Platforms>AnyCPU;x64;ARM64</Platforms>
+      <Nullable>enable</Nullable>
+      <AnalysisMode>Recommended</AnalysisMode>
+      <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+      <WarningsNotAsErrors>CS1591;IDE0058;IDE0130</WarningsNotAsErrors>
+      <Nullable>enable</Nullable>
+      <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+      <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+      <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+</Project>

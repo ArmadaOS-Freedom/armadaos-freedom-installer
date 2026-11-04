@@ -17,4 +17,15 @@
     <BaseIntermediateOutputPath>$(MSBuildProjectDirectory)/obj/</BaseIntermediateOutputPath>
   </PropertyGroup>
 
+  <!-- Locally downloaded, hash-verified public build inputs. Projects consume these
+       values in ItemGroups during evaluation, so the import must run here. -->
+  <Import Project="$(BundledBuildInputsProps)"
+          Condition="'$(BundledBuildInputsProps)' != '' and Exists('$(BundledBuildInputsProps)')" />
+
+  <Target Name="FailOnMissingBundledBuildInputsProps"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(BundledBuildInputsProps)' != '' and !Exists('$(BundledBuildInputsProps)')">
+    <Error Text="BundledBuildInputsProps was specified as '$(BundledBuildInputsProps)' but the file does not exist." />
+  </Target>
+
 </Project>

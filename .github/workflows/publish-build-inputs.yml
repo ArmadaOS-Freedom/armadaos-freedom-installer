@@ -1,0 +1,83 @@
+name: Publish Build Inputs
+on:
+  push:
+    branches:
+      - 'release-inputs/**'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout temporary release-inputs branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Prepare and validate release assets
+        id: prepare
+        run: |
+          python3 maintenance/prepare_release_assets.py \
+            --manifest release-assets/publish.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Publish draft then finalize
+        shell: bash
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+          SOURCE_SHA: ${{ steps.prepare.outputs.source }}
+          TITLE: ${{ steps.prepare.outputs.title }}
+          NOTES: ${{ steps.prepare.outputs.notes }}
+          UPLOAD_LIST: ${{ steps.prepare.outputs.upload_list }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAG" ] || [ -z "$SOURCE_SHA" ] || [ -z "$TITLE" ] || [ -z "$NOTES" ] || [ -z "$UPLOAD_LIST" ]; then
+            echo "ERROR: missing required prepare outputs" >&2
+            exit 1
+          fi
+          case "$TAG" in
+            build-inputs-v*) ;;
+            *) echo "ERROR: tag must start with build-inputs-v" >&2; exit 1 ;;
+          esac
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ERROR: release $TAG already exists" >&2
+            exit 1
+          fi
+          mapfile -t files < "$UPLOAD_LIST"
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "ERROR: upload list is empty" >&2
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: asset path missing: $f" >&2
+              exit 1
+            fi
+          done
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --target "$SOURCE_SHA" \
+            --title "$TITLE" \
+            --notes-file "$NOTES"
+          gh release upload "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            "${files[@]}"
+          gh release edit "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false --latest=false
+
+      - name: Cleanup temporary release-inputs branch
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF_NAME" in
+            release-inputs/*) ;;
+            *) echo "ERROR: not on a temporary release-inputs branch: $GITHUB_REF_NAME" >&2; exit 1 ;;
+          esac
+          gh api --method DELETE \
+            "repos/$GITHUB_REPOSITORY/git/refs/heads/$GITHUB_REF_NAME"

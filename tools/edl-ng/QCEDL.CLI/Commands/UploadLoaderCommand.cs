@@ -1,0 +1,59 @@
+using System.CommandLine;
+using QCEDL.CLI.Core;
+using QCEDL.CLI.Helpers;
+
+namespace QCEDL.CLI.Commands;
+
+internal sealed class UploadLoaderCommand
+{
+    public static Command Create(GlobalOptionsBinder globalOptionsBinder)
+    {
+        var command = new Command("upload-loader", "Connects in Sahara mode and uploads the specified Firehose loader (--loader). Does not proceed to Firehose operations.")
+        {
+            // No specific options for this command itself
+        };
+
+        command.SetHandler(ExecuteAsync, globalOptionsBinder);
+
+        return command;
+    }
+
+    private static async Task<int> ExecuteAsync(GlobalOptionsBinder globalOptions)
+    {
+        Logging.Log("Executing 'upload-loader' command...", LogLevel.Trace);
+
+        if (string.IsNullOrEmpty(globalOptions.LoaderPath))
+        {
+            Logging.Log("Error: The '--loader' option is required for the 'upload-loader' command.", LogLevel.Error);
+            return 1;
+        }
+
+        return await CommandExecutor.RunAsync("upload-loader", async () =>
+        {
+            using var manager = new EdlManager(globalOptions);
+            var currentMode = await manager.DetectCurrentModeAsync();
+            switch (currentMode)
+            {
+                case DeviceMode.Sahara:
+                    Logging.Log("Device detected in Sahara mode. Proceeding with loader upload...");
+                    await manager.UploadLoaderViaSaharaAsync();
+                    Logging.Log("Loader upload process completed. Device should restart or re-enumerate.", LogLevel.Debug);
+                    break;
+                case DeviceMode.SaharaMemoryDebug:
+                    Logging.Log("Error: Device is in Sahara MemoryDebug (crashdump) mode. Cannot upload a Firehose loader.", LogLevel.Error);
+                    Logging.Log("Use a different command to handle memory dumps.", LogLevel.Error);
+                    return 1;
+                case DeviceMode.Firehose:
+                    Logging.Log("Error: Device is already in Firehose mode. Cannot upload loader.", LogLevel.Error);
+                    return 1;
+                case DeviceMode.Unknown:
+                case DeviceMode.Error:
+                default:
+                    Logging.Log($"Error: Cannot upload loader. Device mode is {currentMode} or could not be reliably determined.", LogLevel.Error);
+                    return 1;
+            }
+
+            return 0;
+        });
+    }
+}

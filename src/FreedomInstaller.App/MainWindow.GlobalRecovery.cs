@@ -341,7 +341,6 @@ public partial class MainWindow
         }
 
         bool busy = _globalOperationActive || _busy;
-        bool live = _globalEdlClient is not null || _globalEntryAttempted;
         bool frozen = _globalRestoreUncertain || _globalResetUnknown;
         bool writesAttempted = _globalRestoreWriteAttempted;
 
@@ -349,9 +348,10 @@ public partial class MainWindow
         bool backupView = _globalRecoveryMode == GlobalRecoveryMode.Backup;
         bool restoreView = _globalRecoveryMode == GlobalRecoveryMode.Restore;
 
+        // 已连接但空闲时仍允许更换备份保存位置；忙 / 冻结 / 已尝试写入时继续禁止。
         if (GlobalBrowseBackupButton is not null)
         {
-            GlobalBrowseBackupButton.IsEnabled = !busy && !frozen && !writesAttempted && !live;
+            GlobalBrowseBackupButton.IsEnabled = !busy && !frozen && !writesAttempted;
         }
 
         if (GlobalBrowseRestoreButton is not null)
@@ -366,7 +366,6 @@ public partial class MainWindow
         if (GlobalConnectButton is not null)
         {
             // 型号由连接时自动识别：没有已知配置也允许发起一次显式连接。
-            // 空闲连接允许还没有输出目录（处理器会先询问）；已有客户端但缺证明时允许一次显式复探。
             // 入口已尝试却没有客户端时不自动重跑安卓命令，交由人工重新连接 / 关闭。
             GlobalConnectButton.IsEnabled = !busy && !frozen && !writesAttempted
                 && (idleConnect || reprobeConnect);
@@ -374,9 +373,9 @@ public partial class MainWindow
 
         if (GlobalBackupButton is not null)
         {
+            // 连接已核实即可开始备份；尚未选择保存位置时处理器先询问一次，取消则不备份。
             GlobalBackupButton.IsEnabled = backupView && !busy && !frozen && !writesAttempted
-                && proof
-                && !string.IsNullOrWhiteSpace(_globalOutputParent);
+                && proof;
         }
 
         if (GlobalPrepareRestoreButton is not null)
@@ -493,11 +492,7 @@ public partial class MainWindow
             return;
         }
 
-        if (_globalEdlClient is not null || _globalEntryAttempted)
-        {
-            return;
-        }
-
+        // 已连接但空闲时允许更换保存位置；这里只作废本地准备，不改动会话、证据或已有备份。
         string? chosen = PickExistingDirectory(_globalOutputParent, "Dynamic.Global.Dialog.PickOutput");
         if (chosen is null)
         {
