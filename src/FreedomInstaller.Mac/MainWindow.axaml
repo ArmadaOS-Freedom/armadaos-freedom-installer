@@ -16,32 +16,21 @@
         Foreground="{DynamicResource InkBrush}"
         FontFamily="PingFang SC, Helvetica Neue, Arial">
 
-    <Window.Resources>
-        <!-- 仓库风帆标记：路径与 Windows 版相同（.github/assets/armada-mark-*.svg，作者 Rax），随主题用 InkBrush 着色。 -->
-        <DrawingImage x:Key="ArmadaBrandMark">
-            <DrawingGroup>
-                <GeometryDrawing Brush="Transparent" Geometry="M0,0 H512 V512 H0 Z" />
-                <GeometryDrawing Brush="{DynamicResource InkBrush}"
-                                 Geometry="M316.315 63.5C324.671 102.812 329.069 143.587 329.069 185.389C329.069 256.56 316.323 324.753 292.994 387.813C280.821 386.354 268.43 385.603 255.863 385.603C201.724 385.603 150.84 399.54 106.604 424.022C213.937 333.588 290.014 207.24 316.315 63.5Z" />
-                <GeometryDrawing Brush="{DynamicResource InkBrush}"
-                                 Geometry="M356.398 169.27C377.349 214.386 389.045 264.671 389.045 317.689C389.045 349.698 384.781 380.71 376.793 410.191C356.908 401.716 335.953 395.269 314.186 391.106C341.415 323.756 356.411 250.15 356.411 173.041C356.411 171.783 356.406 170.526 356.398 169.27Z" />
-            </DrawingGroup>
-        </DrawingImage>
-    </Window.Resources>
 
     <Grid RowDefinitions="Auto,*,Auto">
 
         <!-- ================= 顶部：品牌 + 支持 / 主题 / 语言 ================= -->
         <Grid Grid.Row="0" Margin="20,12,20,8" ColumnDefinitions="*,Auto,Auto,Auto">
             <Grid Grid.Column="0" VerticalAlignment="Center" ColumnDefinitions="Auto,*">
-                <Image Grid.Column="0"
-                       Source="{StaticResource ArmadaBrandMark}"
-                       Width="48"
-                       Height="48"
-                       Stretch="Uniform"
-                       VerticalAlignment="Center"
-                       Margin="0,0,10,0"
-                       ToolTip.Tip="ArmadaOS" />
+                <!-- 仓库风帆标记：路径与 Windows 版相同（.github/assets/armada-mark-*.svg，作者 Rax），随主题用 InkBrush 着色。 -->
+                <Viewbox Grid.Column="0" Width="48" Height="48" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,10,0" ToolTip.Tip="ArmadaOS">
+                    <Canvas Width="512" Height="512">
+                        <Path Fill="{DynamicResource InkBrush}"
+                              Data="M316.315 63.5C324.671 102.812 329.069 143.587 329.069 185.389C329.069 256.56 316.323 324.753 292.994 387.813C280.821 386.354 268.43 385.603 255.863 385.603C201.724 385.603 150.84 399.54 106.604 424.022C213.937 333.588 290.014 207.24 316.315 63.5Z" />
+                        <Path Fill="{DynamicResource InkBrush}"
+                              Data="M356.398 169.27C377.349 214.386 389.045 264.671 389.045 317.689C389.045 349.698 384.781 380.71 376.793 410.191C356.908 401.716 335.953 395.269 314.186 391.106C341.415 323.756 356.411 250.15 356.411 173.041C356.411 171.783 356.406 170.526 356.398 169.27Z" />
+                    </Canvas>
+                </Viewbox>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock Text="ArmadaOS Freedom"
                                FontSize="17"
@@ -183,7 +172,7 @@
                           Grid.Column="2"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
-                          Padding="0,0,6,0"
+                          Padding="0,0,14,0"
                           Margin="0,0,0,12"
                           IsVisible="False">
                 <StackPanel>
@@ -456,6 +445,7 @@
                             </CheckBox>
                         </Border>
                         <Expander x:Name="InternalInstallVerificationDetails"
+                                  Theme="{StaticResource SectionExpander}"
                                   IsExpanded="False"
                                   Header="{DynamicResource Static.InternalInstall.Confirm.VerificationDetailsHeader}">
                             <TextBlock x:Name="InternalInstallSummaryText"
@@ -502,7 +492,7 @@
 
                     <!-- 四个页面共用的日志 -->
                     <Border Classes="CardBorder" Margin="0,16,0,0">
-                        <Expander x:Name="InternalInstallLogExpander" Margin="0" IsExpanded="True">
+                        <Expander x:Name="InternalInstallLogExpander" Theme="{StaticResource SectionExpander}" Margin="0" IsExpanded="True">
                             <Expander.Header>
                                 <TextBlock Text="{DynamicResource Dynamic.InternalInstall.Log.Title}" Classes="H2Text" />
                             </Expander.Header>
@@ -529,7 +519,7 @@
                           Grid.ColumnSpan="3"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
-                          Padding="0,0,6,0"
+                          Padding="0,0,14,0"
                           Margin="0,0,0,12">
                 <StackPanel>
                     <TextBlock Text="{DynamicResource Static.Environment.Title}" Classes="H1Text" />
@@ -609,7 +599,7 @@
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
                           IsVisible="False"
-                          Padding="0,0,6,0"
+                          Padding="0,0,14,0"
                           Margin="0,0,0,12">
                 <StackPanel>
                     <DockPanel>
@@ -719,7 +709,7 @@
                           Grid.ColumnSpan="3"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
-                          Padding="0,0,6,0"
+                          Padding="0,0,14,0"
                           Margin="0,0,0,12"
                           IsVisible="False">
                 <StackPanel>

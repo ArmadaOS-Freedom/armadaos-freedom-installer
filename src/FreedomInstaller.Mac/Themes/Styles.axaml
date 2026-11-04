@@ -277,6 +277,62 @@
                 </Style>
             </ControlTheme>
 
+            <!-- ===== 可折叠分组：与 WPF 的 SectionExpander 一样，左侧箭头 + 标题，展开时箭头转 90° ===== -->
+            <ControlTheme x:Key="SectionExpanderHeader" TargetType="ToggleButton">
+                <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="Focusable" Value="False" />
+                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                <Setter Property="Template">
+                    <ControlTemplate>
+                        <Border Name="HeaderChrome"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="2,4">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Name="Arrow"
+                                      Data="M 0 0 L 5 5 L 0 10"
+                                      Stroke="{DynamicResource AccentBrush}"
+                                      StrokeThickness="1.8"
+                                      VerticalAlignment="Center"
+                                      Margin="0,0,8,0" />
+                                <ContentPresenter Content="{TemplateBinding Content}"
+                                                  Foreground="{TemplateBinding Foreground}"
+                                                  VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                    </ControlTemplate>
+                </Setter>
+                <Style Selector="^:pointerover /template/ Border#HeaderChrome">
+                    <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+                </Style>
+                <Style Selector="^:checked /template/ Path#Arrow">
+                    <Setter Property="RenderTransform" Value="rotate(90deg)" />
+                </Style>
+            </ControlTheme>
+
+            <ControlTheme x:Key="SectionExpander" TargetType="Expander">
+                <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+                <Setter Property="Margin" Value="0,14,0,0" />
+                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                <Setter Property="Template">
+                    <ControlTemplate>
+                        <StackPanel>
+                            <ToggleButton Name="PART_ToggleButton"
+                                          Theme="{StaticResource SectionExpanderHeader}"
+                                          Content="{TemplateBinding Header}"
+                                          IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}" />
+                            <ContentPresenter Name="PART_ContentPresenter"
+                                              Content="{TemplateBinding Content}"
+                                              IsVisible="{TemplateBinding IsExpanded}"
+                                              Margin="0,4,0,0" />
+                        </StackPanel>
+                    </ControlTemplate>
+                </Setter>
+            </ControlTheme>
+
             <!-- ===== 输入框 ===== -->
             <ControlTheme x:Key="InputTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
                 <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}" />
@@ -409,13 +465,6 @@
     </Style>
     <Style Selector="ScrollViewer">
         <Setter Property="AllowAutoHide" Value="True" />
-    </Style>
-    <Style Selector="Expander">
-        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="Margin" Value="0,14,0,0" />
     </Style>
 
 </Styles>
