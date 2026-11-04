@@ -20,7 +20,7 @@ internal static class Program
                                     --packer PATH --unpacker PATH --work DIR
                                     [--android-gib N] [--adb PATH] [--fastboot PATH]
 
-          check     第 1 步设备检查（会重启到 fastboot 再回到 Android，只读）。
+          check     第 1 步设备检查（只读；可能重启到 fastboot 再回到 Android）。
           backup    第 1 步检查 → 进入 9008 → 读取安装备份（只读），然后复位回系统。
           install   完整内部安装：检查 → 进入 9008 并备份 → 导入系统包、规划分区 → 准备 → 确认后写入。
                     写入前要求输入确认码；--work 下保存备份与证据，请勿删除。
@@ -97,7 +97,7 @@ internal static class Program
         var progress = new Progress<InternalDeviceCheckProgress>(report =>
             Console.WriteLine($"  [检查] {report.Stage}{(report.Detail is null ? string.Empty : ": " + report.Detail)}"));
 
-        Console.WriteLine("第 1 步：设备检查（会重启到 fastboot 再回到 Android）…");
+        Console.WriteLine("第 1 步：设备检查（只读；可能重启到 fastboot 再回到 Android）…");
         InternalDeviceCheckResult result = await check.CheckAsync(serial, progress, token);
 
         DeviceIdentity? identity = result.Android?.Identity;
