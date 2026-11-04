@@ -1,250 +1,327 @@
-"""Tests for maintenance/fetch_build_inputs.py using real temporary files."""
+#!/usr/bin/env python3
+"""Behavioral tests for fetch_build_inputs.py with mocked network and real hashes."""
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
+import importlib.util
 import io
 import json
 import os
-import sys
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MAINT = os.path.dirname(_HERE)
-if _MAINT not in sys.path:
-    sys.path.insert(0, _MAINT)
-
-import fetch_build_inputs as fbi  # noqa: E402
-
-
-PROPS = list(fbi.EXPECTED_PROPERTIES)
+_spec = importlib.util.spec_from_file_location(
+    "fetch_build_inputs", os.path.join(_MAINT, "fetch_build_inputs.py")
+)
+fetch = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(fetch)
 
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _manifest(entries):
-    return {"schemaVersion": 1, "release": fbi.RELEASE, "files": entries, "sources": []}
+FIXTURES = {
+    "platformTools": (b"android-platform-tools-bytes", "platform-tools-37.0.1-windows.zip"),
+    "python": (b"python-embed-bytes", "python-3.14.8-embed-amd64.zip"),
+    "libusbPackage": (b"libusb-nupkg-bytes", "LibUsbDotNet.3.0.167-alpha.nupkg"),
+    "libusbLicense": (b"libusb-Copying-text", "libusb-COPYING.txt"),
+    "gblPrc": (b"gbl-prc-efi-bytes", "gbl-6.2.192-mod2-prc.efi"),
+    "gblRow": (b"gbl-row-efi-bytes", "gbl-6.2.192-mod2-row.efi"),
+}
+
+OFFICIAL_HOSTS = {
+    "platformTools": "https://dl.google.com",
+    "python": "https://www.python.org",
+    "libusbPackage": "https://api.nuget.org",
+    "libusbLicense": "https://raw.githubusercontent.com",
+    "gblPrc": "https://github.com",
+    "gblRow": "https://github.com",
+}
 
 
-def _entry(name, prop, data):
-    return {
-        "name": name,
-        "property": prop,
+def _payload_for(download_id: str) -> bytes:
+    return FIXTURES[download_id][0]
+
+
+def _download_entry(download_id: str, *, url_override: str | None = None, extra: dict | None = None) -> dict:
+    data = _payload_for(download_id)
+    entry = {
+        "id": download_id,
+        "name": FIXTURES[download_id][1],
+        "url": url_override or f"{OFFICIAL_HOSTS[download_id]}/fixtures/{FIXTURES[download_id][1]}",
         "bytes": len(data),
         "sha256": _sha(data),
-        "url": f"https://example.invalid/{fbi.RELEASE}/{name}",
+        "version": "test",
     }
+    if extra:
+        entry.update(extra)
+    return entry
 
 
-def _write_manifest(directory, entries):
-    path = os.path.join(directory, "build-inputs.json")
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(_manifest(entries), fh)
+def _write_manifest(tmp_root: str, downloads: list[dict], **extra) -> str:
+    payload = {
+        "schemaVersion": 2,
+        "target": "win-x64",
+        "downloads": downloads,
+        "sources": [{"id": "edl-ng", "upstream": "https://github.com/strongtz/edl-ng"}],
+        "vendorFiles": [],
+    }
+    payload.update(extra)
+    path = os.path.join(tmp_root, "build-inputs.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
     return path
 
 
-class _FakeResp:
-    def __init__(self, data: bytes):
+class FakeURL:
+    def __init__(self, data: bytes) -> None:
         self._buf = io.BytesIO(data)
 
-    def read(self, n=-1):
+    def read(self, n: int = -1) -> bytes:
         return self._buf.read(n)
 
-    def __enter__(self):
+    def __enter__(self) -> "FakeURL":
         return self
 
-    def __exit__(self, *exc):
-        return False
+    def __exit__(self, *exc) -> None:
+        return None
 
 
 class FetchTests(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.dir = self._tmp.name
-        self.payloads = {name: (f"payload-{name}".encode() + os.urandom(64)) for name in PROPS}
-        self.entries = [_entry(f"file-{i}.bin", prop, self.payloads[prop]) for i, prop in enumerate(PROPS)]
-        self.manifest = _write_manifest(self.dir, self.entries)
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        self.out = os.path.join(self.root, "out")
+        self.downloads = [_download_entry(did) for did in FIXTURES]
+        self.manifest_path = _write_manifest(self.root, self.downloads)
 
-    def tearDown(self):
-        self._tmp.cleanup()
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
 
-    def _serve(self, entries):
-        by_url = {e["url"]: self.payloads[e["property"]] for e in entries}
-        calls = {"n": 0}
+    def _mock_urlopen(self, *, tamper: str | None = None, truncate: int = 0, fail_on_id: str | None = None):
+        by_url = {entry["url"]: _payload_for(entry["id"]) for entry in self.downloads}
 
-        def fake_urlopen(req, timeout=None):
-            calls["n"] += 1
-            url = req.full_url if hasattr(req, "full_url") else req
-            if url not in by_url:
-                raise AssertionError(f"unexpected url {url}")
-            return _FakeResp(by_url[url])
+        def fake_urlopen(request, timeout=None):
+            url = request.full_url if hasattr(request, "full_url") else request
+            for entry in self.downloads:
+                if entry["url"] == url and fail_on_id and entry["id"] == fail_on_id:
+                    raise urllib.error.URLError("boom")
+            data = by_url[url]
+            if tamper and self._id_for_url(url) == tamper:
+                data = b"Y" + data[1:] if data else b"Y"
+            if truncate:
+                data = data[: max(0, len(data) - truncate)]
+            return FakeURL(data)
 
-        return fake_urlopen, calls
+        return fake_urlopen
 
-    def _run(self, extra=()):
-        argv = ["--output-dir", self.dir, "--manifest", self.manifest, *extra]
-        return fbi.main(argv)
+    def _id_for_url(self, url: str) -> str | None:
+        for entry in self.downloads:
+            if entry["url"] == url:
+                return entry["id"]
+        return None
 
-    def test_successful_download_and_props(self):
-        fake, _ = self._serve(self.entries)
-        with mock.patch.object(fbi.urllib.request, "urlopen", fake):
-            rc = self._run()
-        self.assertEqual(rc, 0)
-        for entry in self.entries:
-            with open(os.path.join(self.dir, entry["name"]), "rb") as fh:
-                self.assertEqual(_sha(fh.read()), entry["sha256"])
-        props = os.path.join(self.dir, "build-inputs.props")
-        self.assertTrue(os.path.isfile(props))
-        import xml.etree.ElementTree as ET
-        tree = ET.parse(props)
-        values = {el.tag.split("}")[-1]: el.text for el in tree.getroot().iter() if el.text}
-        for entry in self.entries:
-            self.assertEqual(values[entry["property"]], os.path.join(self.dir, entry["name"]))
+    def test_manifest_has_six_official_sources_no_own_release(self) -> None:
+        real_path = os.path.join(_MAINT, "build-inputs.json")
+        with open(real_path, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+        self.assertNotIn("armadaos-freedom-installer/releases", raw)
+        manifest = fetch.load_manifest(real_path)
+        ids = [entry["id"] for entry in manifest["downloads"]]
+        self.assertEqual(sorted(ids), sorted(fetch.REQUIRED_IDS))
+        for entry in manifest["downloads"]:
+            self.assertTrue(entry["url"].startswith("https://"))
+        self.assertIn("sources", manifest)
+        self.assertIn("vendorFiles", manifest)
 
-    def test_cache_bypasses_network(self):
-        fake, calls = self._serve(self.entries)
-        with mock.patch.object(fbi.urllib.request, "urlopen", fake):
-            self.assertEqual(self._run(), 0)
-        first = calls["n"]
-        def explode(req, timeout=None):
-            raise AssertionError("network must not be used when cached")
-        with mock.patch.object(fbi.urllib.request, "urlopen", explode):
-            self.assertEqual(self._run(), 0)
-        self.assertEqual(calls["n"], first)
+    def test_load_manifest_preserves_extra_fields(self) -> None:
+        extra = {"version": "test", "source": "https://example.com"}
+        downloads = [_download_entry(did, extra=extra) for did in FIXTURES]
+        path = _write_manifest(self.root, downloads)
+        manifest = fetch.load_manifest(path)
+        for entry in manifest["downloads"]:
+            self.assertEqual(entry["version"], "test")
+            self.assertEqual(entry["source"], "https://example.com")
 
-    def test_verify_only_leaves_output_untouched(self):
-        fake, _ = self._serve(self.entries)
-        with mock.patch.object(fbi.urllib.request, "urlopen", fake):
-            self.assertEqual(self._run(), 0)
-        props = os.path.join(self.dir, "build-inputs.props")
-        os.unlink(props)
-        rc = self._run(["--verify-only"])
-        self.assertEqual(rc, 0)
-        self.assertFalse(os.path.exists(props))
-        victim = os.path.join(self.dir, self.entries[0]["name"])
-        with open(victim, "wb") as fh:
-            fh.write(b"corrupt")
-        rc = self._run(["--verify-only"])
-        self.assertNotEqual(rc, 0)
-        self.assertFalse(os.path.exists(props))
+    def test_fetch_all_downloads_then_caches(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        calls: list[str] = []
 
-    def test_corrupt_cache_redownloads(self):
-        fake, _ = self._serve(self.entries)
-        with mock.patch.object(fbi.urllib.request, "urlopen", fake):
-            self.assertEqual(self._run(), 0)
-        victim = os.path.join(self.dir, self.entries[2]["name"])
-        with open(victim, "wb") as fh:
-            fh.write(b"garbage")
-        fake, calls = self._serve(self.entries)
-        with mock.patch.object(fbi.urllib.request, "urlopen", fake):
-            self.assertEqual(self._run(), 0)
-        self.assertEqual(calls["n"], 1)
-        with open(victim, "rb") as fh:
-            self.assertEqual(_sha(fh.read()), self.entries[2]["sha256"])
+        def counting(urlopen):
+            def inner(req, timeout=None):
+                calls.append(req.full_url if hasattr(req, "full_url") else req)
+                return urlopen(req, timeout=timeout)
+            return inner
 
-    def test_sha_mismatch_aborts_and_no_part(self):
-        bad = dict(self.entries[0])
-        bad["sha256"] = "0" * 64
-        self.entries[0] = bad
-        self.manifest = _write_manifest(self.dir, self.entries)
-        fake, _ = self._serve(self.entries)
-        with mock.patch.object(fbi.urllib.request, "urlopen", fake):
-            rc = self._run()
-        self.assertNotEqual(rc, 0)
-        leftovers = [n for n in os.listdir(self.dir) if n.endswith(".part")]
-        self.assertEqual(leftovers, [])
-        self.assertFalse(os.path.exists(os.path.join(self.dir, "build-inputs.props")))
+        with mock.patch.object(fetch.urllib.request, "urlopen", counting(self._mock_urlopen())):
+            first = fetch.fetch_all(manifest, self.out)
+        self.assertEqual(set(first), set(FIXTURES))
+        for did, path in first.items():
+            self.assertTrue(os.path.isabs(path))
+            self.assertTrue(os.path.isfile(path))
+        with open(os.path.join(self.out, FIXTURES["platformTools"][1]), "rb") as handle:
+            self.assertEqual(handle.read(), _payload_for("platformTools"))
+        first_calls = len(calls)
+        self.assertEqual(first_calls, 6)
 
-    def test_size_mismatch_aborts(self):
-        bad = dict(self.entries[0])
-        bad["bytes"] = bad["bytes"] + 100
-        self.entries[0] = bad
-        self.manifest = _write_manifest(self.dir, self.entries)
-        fake, _ = self._serve(self.entries)
-        with mock.patch.object(fbi.urllib.request, "urlopen", fake):
-            rc = self._run()
-        self.assertNotEqual(rc, 0)
-        self.assertEqual([n for n in os.listdir(self.dir) if n.endswith(".part")], [])
+        # Second pass: everything cached, no network.
+        with mock.patch.object(fetch.urllib.request, "urlopen", side_effect=AssertionError("no network")):
+            second = fetch.fetch_all(manifest, self.out)
+        self.assertEqual(first, second)
 
-    def test_invalid_manifests_rejected_before_write(self):
-        cases = []
-        # duplicate property
-        dup = list(self.entries)
-        dup[1] = dict(dup[0])
-        cases.append(dup)
-        # path traversal name
-        trav = list(self.entries)
-        trav[0] = dict(trav[0], name="../evil.zip")
-        cases.append(trav)
-        # malformed sha
-        bad_sha = list(self.entries)
-        bad_sha[0] = dict(bad_sha[0], sha256="nope")
-        cases.append(bad_sha)
-        # non-https url
-        bad_url = list(self.entries)
-        bad_url[0] = dict(bad_url[0], url="http://example.invalid/x")
-        cases.append(bad_url)
-        # missing property
-        cases.append(self.entries[:-1])
-        for entries in cases:
-            with self.subTest(entries=entries[:1]):
-                self.manifest = _write_manifest(self.dir, entries)
-                def explode(req, timeout=None):
-                    raise AssertionError("must not download")
-                with mock.patch.object(fbi.urllib.request, "urlopen", explode):
-                    rc = self._run()
-                self.assertNotEqual(rc, 0)
-                for entry in entries:
-                    name = entry.get("name", "")
-                    if name and "/" not in name and ".." not in name:
-                        self.assertFalse(os.path.exists(os.path.join(self.dir, name)))
-                self.assertFalse(os.path.exists(os.path.join(self.dir, "build-inputs.props")))
+    def test_corrupt_cached_with_failed_replacement_preserves_original(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        with mock.patch.object(fetch.urllib.request, "urlopen", self._mock_urlopen()):
+            fetch.fetch_all(manifest, self.out)
+        target_id = "gblPrc"
+        target = os.path.join(self.out, FIXTURES[target_id][1])
+        with open(target, "wb") as handle:
+            handle.write(b"corrupt-cached")
+        with open(target, "rb") as handle:
+            before = handle.read()
+        with mock.patch.object(
+            fetch.urllib.request, "urlopen", self._mock_urlopen(fail_on_id=target_id)
+        ):
+            with self.assertRaises(fetch.FetchError):
+                fetch.fetch_all(manifest, self.out)
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), before)
+        # No residual .part files.
+        for name in os.listdir(self.out):
+            self.assertFalse(name.endswith(".part"), name)
 
-    def test_spaces_and_non_ascii_output(self):
-        sub = os.path.join(self.dir, "a b 中文")
-        os.makedirs(sub)
-        self.dir = sub
-        self.manifest = _write_manifest(self.dir, self.entries)
-        fake, _ = self._serve(self.entries)
-        with mock.patch.object(fbi.urllib.request, "urlopen", fake):
-            rc = self._run()
-        self.assertEqual(rc, 0)
-        import xml.etree.ElementTree as ET
-        tree = ET.parse(os.path.join(self.dir, "build-inputs.props"))
-        values = [el.text for el in tree.getroot().iter() if el.text]
-        self.assertTrue(any("a b 中文" in v for v in values))
+    def test_wrong_sha_refused_no_partial(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        with mock.patch.object(fetch.urllib.request, "urlopen", self._mock_urlopen(tamper="gblRow")):
+            with self.assertRaises(fetch.FetchError) as ctx:
+                fetch.fetch_all(manifest, self.out)
+        self.assertIn("sha256", str(ctx.exception))
+        self.assertFalse(os.path.exists(os.path.join(self.out, FIXTURES["gblRow"][1])))
+        for name in os.listdir(self.out):
+            self.assertFalse(name.endswith(".part"), name)
 
-    def test_verify_only_missing_dir_fails(self):
-        argv = ["--output-dir", os.path.join(self.dir, "missing"), "--manifest", self.manifest, "--verify-only"]
-        self.assertNotEqual(fbi.main(argv), 0)
+    def test_wrong_size_refused_no_partial(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        with mock.patch.object(fetch.urllib.request, "urlopen", self._mock_urlopen(truncate=1)):
+            with self.assertRaises(fetch.FetchError) as ctx:
+                fetch.fetch_all(manifest, self.out)
+        self.assertIn("size", str(ctx.exception))
+        for name in os.listdir(self.out):
+            self.assertFalse(name.endswith(".part"), name)
 
-    def test_normal_missing_output_dir_created(self):
-        out = os.path.join(self.dir, "newout", "nested")
-        fake, _ = self._serve(self.entries)
-        argv = ["--output-dir", out, "--manifest", self.manifest]
-        with mock.patch.object(fbi.urllib.request, "urlopen", fake):
-            rc = fbi.main(argv)
-        self.assertEqual(rc, 0)
-        self.assertTrue(os.path.isdir(out))
-        self.assertTrue(os.path.isfile(os.path.join(out, "build-inputs.props")))
+    def test_verify_only_missing_dir_no_write(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        with self.assertRaises(fetch.FetchError):
+            fetch.fetch_all(manifest, self.out, verify_only=True)
+        self.assertFalse(os.path.exists(self.out))
 
-    def test_invalid_manifest_missing_output_dir_not_created(self):
-        out = os.path.join(self.dir, "shouldnotexist")
-        dup = list(self.entries)
-        dup[1] = dict(dup[0])
-        bad_manifest = _write_manifest(self.dir, dup)
-        def explode(req, timeout=None):
-            raise AssertionError("must not download")
-        argv = ["--output-dir", out, "--manifest", bad_manifest]
-        with mock.patch.object(fbi.urllib.request, "urlopen", explode):
-            rc = fbi.main(argv)
-        self.assertNotEqual(rc, 0)
-        self.assertFalse(os.path.exists(out))
+    def test_verify_only_does_not_network(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        with mock.patch.object(fetch.urllib.request, "urlopen", self._mock_urlopen()):
+            fetch.fetch_all(manifest, self.out)
+        with mock.patch.object(
+            fetch.urllib.request, "urlopen", side_effect=AssertionError("no network")
+        ):
+            result = fetch.fetch_all(manifest, self.out, verify_only=True)
+        self.assertEqual(len(result), 6)
+
+    def test_verify_only_rejects_corrupt(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        with mock.patch.object(fetch.urllib.request, "urlopen", self._mock_urlopen()):
+            fetch.fetch_all(manifest, self.out)
+        target = os.path.join(self.out, FIXTURES["libusbLicense"][1])
+        with open(target, "wb") as handle:
+            handle.write(b"corrupt")
+        with mock.patch.object(
+            fetch.urllib.request, "urlopen", side_effect=AssertionError("no network")
+        ):
+            with self.assertRaises(fetch.FetchError):
+                fetch.fetch_all(manifest, self.out, verify_only=True)
+
+    def _bad_manifest_rejected_without_side_effects(self, mutate) -> None:
+        downloads = [_download_entry(did) for did in FIXTURES]
+        mutate(downloads)
+        path = _write_manifest(self.root, downloads)
+        output = os.path.join(self.root, "never-created")
+        with mock.patch.object(
+            fetch.urllib.request, "urlopen", side_effect=AssertionError("no network")
+        ):
+            with self.assertRaises(fetch.FetchError):
+                fetch.load_manifest(path)
+        self.assertFalse(os.path.exists(output))
+
+    def test_reject_duplicate_id(self) -> None:
+        def mutate(downloads):
+            downloads[1]["id"] = downloads[0]["id"]
+        self._bad_manifest_rejected_without_side_effects(mutate)
+
+    def test_reject_duplicate_name(self) -> None:
+        def mutate(downloads):
+            downloads[1]["name"] = downloads[0]["name"]
+        self._bad_manifest_rejected_without_side_effects(mutate)
+
+    def test_reject_path_in_name(self) -> None:
+        def mutate(downloads):
+            downloads[0]["name"] = "../evil.zip"
+        self._bad_manifest_rejected_without_side_effects(mutate)
+
+    def test_reject_non_https(self) -> None:
+        def mutate(downloads):
+            downloads[0]["url"] = "http://dl.google.com/x"
+        self._bad_manifest_rejected_without_side_effects(mutate)
+
+    def test_reject_bool_bytes(self) -> None:
+        def mutate(downloads):
+            downloads[0]["bytes"] = True
+        self._bad_manifest_rejected_without_side_effects(mutate)
+
+    def test_reject_bad_sha(self) -> None:
+        def mutate(downloads):
+            downloads[0]["sha256"] = "ABCDEF"
+        self._bad_manifest_rejected_without_side_effects(mutate)
+
+    def test_reject_missing_required_id(self) -> None:
+        downloads = [_download_entry(did) for did in FIXTURES if did != "gblRow"]
+        path = _write_manifest(self.root, downloads)
+        with mock.patch.object(
+            fetch.urllib.request, "urlopen", side_effect=AssertionError("no network")
+        ):
+            with self.assertRaises(fetch.FetchError):
+                fetch.load_manifest(path)
+
+    def test_reject_bad_schema(self) -> None:
+        path = os.path.join(self.root, "bad.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"schemaVersion": 1, "downloads": []}, handle)
+        with self.assertRaises(fetch.FetchError):
+            fetch.load_manifest(path)
+
+    def test_unicode_and_space_names(self) -> None:
+        # Unicode/space names are intentionally rejected to keep flat safe filenames.
+        downloads = [_download_entry(did) for did in FIXTURES]
+        downloads[0]["name"] = "my tools.zip"
+        path = _write_manifest(self.root, downloads)
+        with self.assertRaises(fetch.FetchError):
+            fetch.load_manifest(path)
+
+    def test_official_urls_are_not_own_release(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        for entry in manifest["downloads"]:
+            self.assertNotIn("armadaos-freedom-installer/releases", entry["url"])
+
+    def test_hash_file_roundtrip(self) -> None:
+        path = os.path.join(self.root, "x.bin")
+        with open(path, "wb") as handle:
+            handle.write(b"abc")
+        size, digest = fetch.hash_file(path)
+        self.assertEqual(size, 3)
+        self.assertEqual(digest, _sha(b"abc"))
 
 
 if __name__ == "__main__":

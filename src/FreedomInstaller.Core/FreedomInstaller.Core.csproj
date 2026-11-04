@@ -6,6 +6,21 @@
     <AssemblyName>FreedomInstaller.Core</AssemblyName>
   </PropertyGroup>
 
+  <!-- Build-time source for the six EDL tool pins. When BundledToolPinsSource is non-empty it must
+       name a generated C# file that declares the same namespace/class/const fields as the default
+       CompiledToolPins.cs; the default file is then excluded and the generated file compiled instead.
+       The property is loaded by the existing props import before this project is evaluated, so no new
+       import or global target is added here. An empty property keeps the frozen defaults. -->
+  <ItemGroup Condition="'$(BundledToolPinsSource)' != ''">
+    <Compile Remove="CompiledToolPins.cs" />
+    <Compile Include="$(BundledToolPinsSource)" Link="CompiledToolPins.cs" />
+  </ItemGroup>
+
+  <Target Name="RequireBundledToolPinsSource" BeforeTargets="PrepareForBuild"
+          Condition="'$(BundledToolPinsSource)' != '' and !Exists('$(BundledToolPinsSource)')">
+    <Error Text="BundledToolPinsSource was set explicitly but the file does not exist: $(BundledToolPinsSource)" />
+  </Target>
+
   <!-- Requested archive readers: 7z, RAR, TAR, tar.gz, tar.xz, tar.zst and tar.bz2.
        SharpCompress is a single fully managed, MIT-licensed dependency (net10 supported); no external
        archiver executable and no native helper is installed or invoked at build or run time. ZIP/ZIP64

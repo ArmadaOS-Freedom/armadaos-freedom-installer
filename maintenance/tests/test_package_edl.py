@@ -119,6 +119,8 @@ class PackageTests(unittest.TestCase):
         with zipfile.ZipFile(self.out) as archive:
             names = archive.namelist()
             self.assertEqual(names[0], "manifest.json")
+            for info in archive.infolist():
+                self.assertEqual(info.compress_type, zipfile.ZIP_DEFLATED)
             manifest_bytes = archive.read("manifest.json")
             manifest = json.loads(manifest_bytes)
             self.assertEqual(manifest["profileId"], profile["profileId"])
@@ -230,6 +232,106 @@ class PackageTests(unittest.TestCase):
             edl.package(args)
         self.assertIn("unknown profile", str(ctx.exception))
 
+    def _rebuilt_client_fixtures(self) -> tuple[dict[str, str], dict[str, tuple[int, str]], str]:
+        common = _common_fixtures(self.root)
+        materials = _material_fixtures(self.root, edl.G4_PROFILE)
+        pins = _patched_pins({**common, **materials}, edl.G4_PROFILE)
+        # Replace the client source with a fresh build and pin it explicitly.
+        rebuilt = _write(os.path.join(self.root, "common", "client-rebuilt.bin"), b"rebuilt-client-bytes")
+        common["client"] = rebuilt
+        pins["client"] = (len(b"rebuilt-client-bytes"), _sha(b"rebuilt-client-bytes"))
+        pins_path = os.path.join(self.root, "build-pins.json")
+        with open(pins_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "schemaVersion": 1,
+                    "tools": {
+                        "client": {"bytes": pins["client"][0], "sha256": pins["client"][1]},
+                        "packer": {"bytes": 1, "sha256": "0" * 64},
+                        "unpacker": {"bytes": 1, "sha256": "0" * 64},
+                    },
+                },
+                handle,
+            )
+        return common, pins, pins_path
+
+    def test_rebuilt_client_accepted_with_provided_record(self) -> None:
+        common, pins, pins_path = self._rebuilt_client_fixtures()
+        materials = _material_fixtures(self.root, edl.G4_PROFILE)
+        new_profile = _replace_profile_pins(edl.G4_PROFILE, pins)
+        args = _args(common, self.out, "tb322fc", firehose=materials["firehose"])
+        args.build_pins_json = pins_path
+        # Deliberately pin the client to a DIFFERENT value inside the patch so a
+        # successful package proves the explicit build pin overrides FIXED_PINS.
+        default_client_pin = edl.FIXED_PINS["client"]
+        override_pins = dict(pins)
+        override_pins["client"] = default_client_pin
+        with mock.patch.dict(edl.G4_PROFILE, new_profile, clear=True), \
+             mock.patch.dict(edl.FIXED_PINS, override_pins, clear=True):
+            frozen_inside_before = edl.FIXED_PINS["client"]
+            self.assertEqual(frozen_inside_before, default_client_pin)
+            self.assertNotEqual(frozen_inside_before, pins["client"])
+            report = edl.package(args)
+            self.assertEqual(edl.FIXED_PINS["client"], frozen_inside_before)
+        self.assertTrue(os.path.isfile(self.out))
+        # Global FIXED_PINS unchanged by the call.
+        self.assertEqual(edl.FIXED_PINS["client"], default_client_pin)
+        with zipfile.ZipFile(self.out) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+        entry = next(e for e in manifest["entries"] if e["role"] == "client")
+        self.assertEqual(entry["sha256"], _sha(b"rebuilt-client-bytes"))
+        self.assertIsNotNone(report)
+
+    def test_rebuilt_client_rejected_when_record_mismatches(self) -> None:
+        common, pins, pins_path = self._rebuilt_client_fixtures()
+        materials = _material_fixtures(self.root, edl.G4_PROFILE)
+        new_profile = _replace_profile_pins(edl.G4_PROFILE, pins)
+        with open(pins_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        data["tools"]["client"]["sha256"] = "1" * 64
+        with open(pins_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        args = _args(common, self.out, "tb322fc", firehose=materials["firehose"])
+        args.build_pins_json = pins_path
+        with mock.patch.dict(edl.G4_PROFILE, new_profile, clear=True), \
+             mock.patch.dict(edl.FIXED_PINS, pins, clear=True):
+            with self.assertRaises(edl.PackagingError) as ctx:
+                edl.package(args)
+        self.assertIn("client", str(ctx.exception).lower())
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_rebuilt_client_rejected_without_record(self) -> None:
+        common, pins, _pins_path = self._rebuilt_client_fixtures()
+        materials = _material_fixtures(self.root, edl.G4_PROFILE)
+        # Re-pin all OTHER roles via FIXED_PINS but leave the frozen client pin intact
+        # by only overriding the frozen value for the old bytes.
+        frozen_client = edl.FIXED_PINS["client"]
+        materials_only = {k: v for k, v in pins.items() if k != "client"}
+        new_profile = _replace_profile_pins(edl.G4_PROFILE, {**materials_only, "client": frozen_client})
+        args = _args(common, self.out, "tb322fc", firehose=materials["firehose"])
+        with mock.patch.dict(edl.G4_PROFILE, new_profile, clear=True), \
+             mock.patch.dict(edl.FIXED_PINS, {**materials_only, "client": frozen_client}, clear=True):
+            with self.assertRaises(edl.PackagingError) as ctx:
+                edl.package(args)
+        self.assertIn("client", str(ctx.exception).lower())
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_malformed_client_pin_refused(self) -> None:
+        common = _common_fixtures(self.root)
+        materials = _material_fixtures(self.root, edl.G4_PROFILE)
+        pins = _patched_pins({**common, **materials}, edl.G4_PROFILE)
+        new_profile = _replace_profile_pins(edl.G4_PROFILE, pins)
+        pins_path = os.path.join(self.root, "bad-pins.json")
+        with open(pins_path, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        args = _args(common, self.out, "tb322fc", firehose=materials["firehose"])
+        args.build_pins_json = pins_path
+        with mock.patch.dict(edl.G4_PROFILE, new_profile, clear=True), \
+             mock.patch.dict(edl.FIXED_PINS, pins, clear=True):
+            with self.assertRaises(edl.PackagingError):
+                edl.package(args)
+        self.assertFalse(os.path.exists(self.out))
+
     def test_cli_old_args_parse(self) -> None:
         common = _common_fixtures(self.root)
         materials = _material_fixtures(self.root, edl.G4_PROFILE)
@@ -253,6 +355,8 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(ns.firehose, materials["firehose"])
         for role, _flag, _help in edl.COMMON_FLAGS:
             self.assertEqual(getattr(ns, role), common[role])
+        # Old Namespace without build_pins_json must still be accepted.
+        self.assertIsNone(getattr(ns, "build_pins_json", None))
 
 
 if __name__ == "__main__":

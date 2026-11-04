@@ -7,11 +7,14 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import zipfile
 
 SCHEMA_VERSION = 1
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 CHUNK = 1024 * 1024
 
@@ -177,13 +180,13 @@ def _write_zip(
 ) -> None:
     with _open_exclusive(part) as raw:
         owned.append(part)
-        with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+        with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
             head = zipfile.ZipInfo("manifest.json")
-            head.compress_type = zipfile.ZIP_STORED
+            head.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(head, manifest_bytes)
             for role, arcname, *_rest in roles:
                 info = zipfile.ZipInfo(arcname)
-                info.compress_type = zipfile.ZIP_STORED
+                info.compress_type = zipfile.ZIP_DEFLATED
                 copied = 0
                 with archive.open(info, "w", force_zip64=True) as target, open(sources[role], "rb") as source:
                     while True:
@@ -228,8 +231,45 @@ def _resolve_g5_materials(profile: dict, args: argparse.Namespace) -> dict[str, 
     return sources
 
 
+def _effective_pins(args: argparse.Namespace) -> dict[str, tuple[int, str]]:
+    """Merge build-time client pin (if supplied) over FIXED_PINS.
+
+    Only the `client` entry may be overridden by --build-pins-json; every other
+    pin (python and all G4/G5 material pins via the profile) is preserved.
+    Without the flag the frozen client pin in FIXED_PINS is used unchanged.
+    """
+    pins = dict(FIXED_PINS)
+    build_pins_path = getattr(args, "build_pins_json", None)
+    if not build_pins_path:
+        return pins
+    try:
+        with open(build_pins_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PackagingError(
+            f"cannot read build pins JSON {build_pins_path!r}: {exc}"
+        ) from None
+    if not isinstance(data, dict) or data.get("schemaVersion") != 1:
+        raise PackagingError("build pins JSON requires schemaVersion=1")
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        raise PackagingError("build pins JSON missing 'tools' object")
+    client = tools.get("client")
+    if not isinstance(client, dict):
+        raise PackagingError("build pins JSON missing 'client' record")
+    size = client.get("bytes")
+    digest = client.get("sha256")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise PackagingError(f"build pins JSON client.bytes invalid: {size!r}")
+    if not isinstance(digest, str) or not _SHA256_RE.match(digest):
+        raise PackagingError(f"build pins JSON client.sha256 invalid: {digest!r}")
+    pins["client"] = (size, digest)
+    return pins
+
+
 def package(args: argparse.Namespace) -> dict:
     profile = _select_profile(args)
+    effective_pins = _effective_pins(args)
 
     common_sources: dict[str, str] = {}
     for role, _flag, _help in COMMON_FLAGS:
@@ -279,8 +319,8 @@ def package(args: argparse.Namespace) -> dict:
         size, digest = _hash_file(sources[role])
         if size <= 0:
             raise PackagingError(f"{role} source is empty: {sources[role]}")
-        if role in FIXED_PINS:
-            want_size, want_sha = FIXED_PINS[role]
+        if role in effective_pins:
+            want_size, want_sha = effective_pins[role]
             if size != want_size or digest != want_sha:
                 raise PackagingError(
                     f"{role} pin mismatch: got {size} bytes/{digest}, "
@@ -376,6 +416,13 @@ def main(argv: list[str] | None = None) -> int:
         help="directory holding the nine G5 loader materials (required for G5)",
     )
     parser.add_argument("--output", required=True, metavar="PATH", help="bundle ZIP output path")
+    parser.add_argument(
+        "--build-pins-json",
+        dest="build_pins_json",
+        metavar="PATH",
+        default=None,
+        help="optional schemaVersion=1 build-time pins JSON providing the client pin",
+    )
     args = parser.parse_args(argv)
     try:
         report = package(args)

@@ -1,135 +1,187 @@
 {
-  "schemaVersion": 1,
-  "release": "build-inputs-v0.7.6",
-  "files": [
+  "schemaVersion": 2,
+  "target": "win-x64",
+  "downloads": [
     {
       "name": "platform-tools-37.0.1-windows.zip",
-      "property": "BundledPlatformToolsArchive",
-      "bytes": 8044989,
+      "id": "platformTools",
+      "source": "https://developer.android.com/tools/releases/platform-tools",
       "sha256": "45f4d63113e895ebde0c90f194099a4676b6ac653bd28d54314a9e022bbc1a99",
-      "url": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/platform-tools-37.0.1-windows.zip"
+      "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip",
+      "bytes": 8044989,
+      "version": "37.0.1"
     },
     {
-      "name": "edl-g4-0.7.6.zip",
-      "property": "BundledEdlArchive",
-      "bytes": 20128699,
-      "sha256": "2d5893998f13761f38d66781a983c46331ae848940aa05eb85d8fe37fed4672d",
-      "url": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/edl-g4-0.7.6.zip"
+      "name": "python-3.14.8-embed-amd64.zip",
+      "id": "python",
+      "source": "https://github.com/python/cpython",
+      "sha256": "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310",
+      "url": "https://www.python.org/ftp/python/3.14.8/python-3.14.8-embed-amd64.zip",
+      "bytes": 12601679,
+      "version": "3.14.8"
     },
     {
-      "name": "edl-g5-0.7.6.zip",
-      "property": "BundledEdlG5Archive",
-      "bytes": 20214071,
-      "sha256": "118358ebe9ba25c2695eb20423be070ef5f44ff3daf1665d60a386d32c513bc3",
-      "url": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/edl-g5-0.7.6.zip"
+      "bytes": 492292,
+      "url": "https://api.nuget.org/v3-flatcontainer/libusbdotnet/3.0.167-alpha/libusbdotnet.3.0.167-alpha.nupkg",
+      "extract": {
+        "bytes": 157696,
+        "sha256": "72b0021906a2569b0f8e0fbcdb17dbdb37b88324787d9548617ee58629ef18ae",
+        "path": "runtimes/win-x64/native/libusb-1.0.dll"
+      },
+      "id": "libusbPackage",
+      "name": "LibUsbDotNet.3.0.167-alpha.nupkg",
+      "source": "https://github.com/LibUsbDotNet/LibUsbDotNet",
+      "sourceCommit": "77ef699a7024af055d7c6ed625dc480463c2eec7",
+      "sha256": "6efd58060d41319e1168bff179755017b8db2dccb37d29ac935ba46cd4ede7c9",
+      "version": "3.0.167-alpha"
     },
     {
-      "name": "qualcomm-usb-driver-2.1.5.2-amd64.zip",
-      "property": "BundledQualcommDriverArchive",
-      "bytes": 172710,
-      "sha256": "6863feeb4b3631cf0cd5029e5140c805ddd4ba2fa0fcce19910666a7c43e7ea9",
-      "url": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/qualcomm-usb-driver-2.1.5.2-amd64.zip"
+      "name": "libusb-COPYING.txt",
+      "id": "libusbLicense",
+      "source": "https://github.com/libusb/libusb",
+      "sha256": "5df07007198989c622f5d41de8d703e7bef3d0e79d62e24332ee739a452af62a",
+      "url": "https://raw.githubusercontent.com/libusb/libusb/v1.0.27/COPYING",
+      "bytes": 26436,
+      "version": "1.0.27"
     },
     {
-      "name": "MultiBootKernelPatcher-windows-x64.exe",
-      "property": "BundledEdlRawPacker",
-      "bytes": 277460,
-      "sha256": "a2f03fc6b0e5d1b8defb60dd2a880bd5933c5133613778b17690172570ac20bb",
-      "url": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/MultiBootKernelPatcher-windows-x64.exe"
+      "source": "https://github.com/miner7222/gbl_root_baldur",
+      "sourceCommit": "ff2a5e2cf71541a23141a9b4d8cd8e8ebe34f340",
+      "url": "https://github.com/miner7222/gbl_root_baldur/releases/download/6.2.192-mod2/generic_superfastboot_prc.efi",
+      "id": "gblPrc",
+      "bytes": 282624,
+      "version": "6.2.192-mod2",
+      "name": "gbl-6.2.192-mod2-prc.efi",
+      "sha256": "b91db7974da80976bc73add671f4adfb833aea4fd0d9d7604b75cb63415fed84"
     },
     {
-      "name": "UnpackTool-windows-x64.exe",
-      "property": "BundledEdlRawUnpacker",
-      "bytes": 262703,
-      "sha256": "24d4788646282d23665b61b28460808480420a0a72e45afca6ab1a167b4b656f",
-      "url": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/UnpackTool-windows-x64.exe"
-    },
+      "source": "https://github.com/miner7222/gbl_root_baldur",
+      "sourceCommit": "ff2a5e2cf71541a23141a9b4d8cd8e8ebe34f340",
+      "url": "https://github.com/miner7222/gbl_root_baldur/releases/download/6.2.192-mod2/generic_superfastboot_row.efi",
+      "id": "gblRow",
+      "bytes": 282624,
+      "version": "6.2.192-mod2",
+      "name": "gbl-6.2.192-mod2-row.efi",
+      "sha256": "e21f6d5ffe29113943092ac4a2a75e4fa03960831cc8855316c784b472999abd"
+    }
+  ],
+  "vendorFiles": [
     {
-      "name": "avb-aosp-testkey-rsa4096.pem",
-      "property": "BundledAvbSigningKey",
       "bytes": 3243,
       "sha256": "6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121",
-      "url": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/avb-aosp-testkey-rsa4096.pem"
+      "path": "vendor/aosp/testkey_rsa4096.pem"
     },
     {
-      "name": "gbl-6.2.192-mod2-prc.efi",
-      "property": "BundledGblPrcEfi",
-      "bytes": 282624,
-      "sha256": "b91db7974da80976bc73add671f4adfb833aea4fd0d9d7604b75cb63415fed84",
-      "url": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/gbl-6.2.192-mod2-prc.efi"
+      "bytes": 153527,
+      "sha256": "8771cb736412945178fcf087eb172a27f2fdd429026ae633a87271d51ee5212f",
+      "path": "vendor/qualcomm/driver/qcser.cat"
     },
     {
-      "name": "gbl-6.2.192-mod2-row.efi",
-      "property": "BundledGblRowEfi",
-      "bytes": 282624,
-      "sha256": "e21f6d5ffe29113943092ac4a2a75e4fa03960831cc8855316c784b472999abd",
-      "url": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/gbl-6.2.192-mod2-row.efi"
+      "bytes": 210084,
+      "sha256": "3d77c8fb0eb01e3b1a6cb1de96bee48cd4a80a95e91dc055888241fb5e8d69ac",
+      "path": "vendor/qualcomm/driver/qcser.inf"
+    },
+    {
+      "bytes": 277720,
+      "sha256": "2b8361b492c59de4c856f5dd644fe99cb09c572dfb05c4b5833301a64fcb8eef",
+      "path": "vendor/qualcomm/driver/serial/amd64/qcusbser.sys"
+    },
+    {
+      "bytes": 1697740,
+      "sha256": "a38993803139d881f47adfa66309f8d5e545c2e33eb4576d0a585afae9cd3da0",
+      "path": "vendor/qualcomm/g4/firehose.melf"
+    },
+    {
+      "bytes": 12088,
+      "sha256": "a98c7ae167f5d0daf947dc707e3c3679ea438f30ea6ebc510edf15655a14d223",
+      "path": "vendor/qualcomm/g5/multi_image_qti.mbn"
+    },
+    {
+      "bytes": 12088,
+      "sha256": "9dd679f3b38e59af6a7e22598ed85a1918cad41a0af84eac2c33e1b02d6166f8",
+      "path": "vendor/qualcomm/g5/multi_image.mbn"
+    },
+    {
+      "bytes": 315384,
+      "sha256": "109338f05b2597b1238f8b724f400f6753a393f6d84c5c534ff36294bbc2da3e",
+      "path": "vendor/qualcomm/g5/prog_firehose_ddr.elf"
+    },
+    {
+      "bytes": 564,
+      "sha256": "433749ae084aa0f1b4016b29619b0b0c377d4b2cd22d8a48b423ca6d9cbc83ca",
+      "path": "vendor/qualcomm/g5/qsahara_device_programmer.xml"
+    },
+    {
+      "bytes": 4864,
+      "sha256": "d7dc67ddd77332e558d14b7acb82bc42e1be66a07786403c96b655f46d019636",
+      "path": "vendor/qualcomm/g5/sequencer_ram.elf"
+    },
+    {
+      "bytes": 203840,
+      "sha256": "dbfdf2602cadb02fe8272abbce55f3f804ad1e98a8481586bf40fa1cbe2960e3",
+      "path": "vendor/qualcomm/g5/signed_firmware_soc_view.elf"
+    },
+    {
+      "bytes": 43760,
+      "sha256": "91f17966306617d1a47336ada238865d4faea014a12edc92f08ea79a773e667a",
+      "path": "vendor/qualcomm/g5/tme_config.elf"
+    },
+    {
+      "bytes": 180928,
+      "sha256": "199e60752d9f0db398bbc3524839a627f3ae32ab47fb58b90df124b3e0affbbb",
+      "path": "vendor/qualcomm/g5/xbl_config_devprg.elf"
+    },
+    {
+      "bytes": 1174496,
+      "sha256": "5d277384cac8fb1512562028ca30c67b2314810ad26b2546a6c8653119a056d4",
+      "path": "vendor/qualcomm/g5/xbl_sc.elf"
     }
   ],
   "sources": [
     {
-      "component": "edl-ng",
-      "baseRepository": "https://github.com/strongtz/edl-ng",
+      "upstream": "https://github.com/strongtz/edl-ng",
       "baseCommit": "834f91ea2d2dfc7b6337af0e8e54d5ea93e037f4",
-      "localChanges": [
-        "Firehose XML/raw framing fixes",
-        "Sahara XML multi-image programmer support",
-        "loader-free Sahara identify command"
+      "id": "edl-ng",
+      "changes": [
+        "Firehose XML/raw framing",
+        "Sahara multi-image loader",
+        "Sahara identify"
       ],
-      "sourceUrl": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/edl-ng-armada-0.7.6-source.zip",
-      "binaryUrl": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/edl-ng-armada-0.7.6-windows-x64.exe",
-      "license": "MIT",
-      "sourcePath": "tools/edl-ng"
+      "buildScript": "tools/build-edl-ng.sh",
+      "path": "tools/edl-ng"
     },
     {
-      "component": "boot-packers",
-      "baseRepository": "https://github.com/Project-Aloha/DualBootKernelPatcher",
+      "upstream": "https://github.com/Project-Aloha/DualBootKernelPatcher",
       "baseCommit": "2276163d066596cb0750e76cbfeec5c193b1779f",
-      "sourceRepository": "https://github.com/mydanyi/armadaos-freedom/tree/f4289696afd94a3e64869a0119d228c693a39dbb/packages/kshim-tools/vendor/packer",
-      "localChanges": [
-        "PayloadFrom aliases and DTB alignment support"
+      "id": "boot-packers",
+      "changes": [
+        "PayloadFrom aliases",
+        "DTB alignment"
       ],
-      "sourceUrl": "https://github.com/mydanyi/armadaos-freedom-installer/releases/download/build-inputs-v0.7.6/boot-packers-armada-0.7.6-source.zip",
-      "compiler": "MinGW GCC 13 posix",
-      "license": "GPL-3.0-or-later; inih BSD-3-Clause",
-      "sourcePath": "tools/boot-packers"
+      "buildScript": "tools/build-boot-packers.sh",
+      "path": "tools/boot-packers"
     },
     {
-      "component": "qualcomm-driver",
-      "version": "2.1.5.2",
-      "date": "2023-08-24",
-      "hardwareId": "USB\\VID_05C6&PID_9008",
-      "architecture": "amd64",
-      "origin": "Unmodified vendor driver files from Windows DriverStore",
-      "signer": "Microsoft Windows Hardware Compatibility Publisher",
-      "license": "Vendor terms; not covered by the installer GPL license"
+      "paths": [
+        "maintenance/avb_stock.py",
+        "maintenance/avb_stock_cli.py",
+        "maintenance/portable_gpt.py",
+        "maintenance/edl_gpt_cli.py"
+      ],
+      "repository": "https://github.com/mydanyi/armadaos-freedom-installer",
+      "id": "avb-gpt-scripts"
     },
     {
-      "component": "gbl",
-      "repository": "https://github.com/miner7222/gbl_root_baldur",
-      "version": "6.2.192-mod2",
-      "commit": "ff2a5e2cf71541a23141a9b4d8cd8e8ebe34f340",
-      "license": "GPL-3.0"
-    },
-    {
-      "component": "platform-tools",
-      "version": "37.0.1",
-      "repository": "https://developer.android.com/tools/releases/platform-tools"
-    },
-    {
-      "component": "avb-test-key",
-      "source": "https://android.googlesource.com/platform/external/avb/+/refs/heads/main/test/data/testkey_rsa4096.pem",
+      "upstream": "https://android.googlesource.com/platform/external/avb/+/refs/heads/main/test/data/testkey_rsa4096.pem",
+      "id": "aosp-test-material",
+      "path": "vendor/aosp/testkey_rsa4096.pem",
       "publicTestMaterial": true
-    },
-    {
-      "component": "g4-loader",
-      "model": "TB322FC",
-      "sourceBuild": "TB322FC_CN_OPEN_USER_Q00041.1_W_ZUXOS_1.5.10.259_ST_260611"
-    },
-    {
-      "component": "g5-loader",
-      "model": "TB323FU",
-      "sourceBuild": "QCTool-2026.3.21-1/lenovo/devprg_legion-y700-5"
     }
-  ]
+  ],
+  "vendorSources": {
+    "aosp": "Public AOSP AVB test data, original upstream bytes",
+    "driver": "Qualcomm 2.1.5.2 AMD64, 2023-08-24; unchanged DriverStore files; vendor terms",
+    "g4": "TB322FC_CN_OPEN_USER_Q00041.1_W_ZUXOS_1.5.10.259_ST_260611",
+    "g5": "QCTool-2026.3.21-1/lenovo/devprg_legion-y700-5"
+  }
 }

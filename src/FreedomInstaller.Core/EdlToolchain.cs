@@ -64,7 +64,7 @@ namespace FreedomInstaller.Core
             {
                 {
                     "client",
-                    (12015022L, "655530e926b57d70f1c690869c495253a6eaae28746f370d5b9dbf921d4a4b3b")
+                    (CompiledToolPins.ClientBytes, CompiledToolPins.ClientSha256)
                 },
                 {
                     "python",
