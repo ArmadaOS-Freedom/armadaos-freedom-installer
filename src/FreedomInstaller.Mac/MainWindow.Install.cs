@@ -210,8 +210,12 @@ public partial class MainWindow
             && !_internalInstallExecuteAttempted
             && InternalInstallEraseRiskCheck.IsChecked == true;
 
-        InternalInstallExitMaintenancePanel.IsVisible = _internalInstallClient is not null && !_internalInstallExitVerified;
-        InternalInstallExitMaintenanceButton.IsEnabled = idle && !_internalInstallExecuteAttempted;
+        // Once the install has been started the backend owns the 9008 session (and resets the tablet itself),
+        // so the exit card is no longer offered.
+        InternalInstallExitMaintenancePanel.IsVisible = _internalInstallClient is not null
+            && !_internalInstallExitVerified
+            && !_internalInstallExecuteAttempted;
+        InternalInstallExitMaintenanceButton.IsEnabled = idle;
     }
 
     private async Task RunBusyAsync(Func<CancellationToken, Task> work)
