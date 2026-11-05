@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EDL003/a1 - native stdlib EDL toolchain packager (schemaVersion 1)."""
+"""Package the pinned G4 or G5 EDL toolchain."""
 
 from __future__ import annotations
 
@@ -7,20 +7,25 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import zipfile
 
 SCHEMA_VERSION = 1
-PROFILE_ID = "g4-9008-259"
-MODEL = "TB322FC"
-ANDROID_BUILD = "TB322FC_CN_OPEN_USER_Q00041.1_W_ZUXOS_1.5.10.259_ST_260611"
-HARDWARE_ID = "0028D0E100400000"
 
-ROLES = (
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+CHUNK = 1024 * 1024
+
+
+class PackagingError(Exception):
+    """Concise, user-facing failure."""
+
+
+COMMON_ROLES = (
     ("client", "tools/edl-ng.exe"),
     ("usbLibrary", "tools/libusb-1.0.dll"),
-    ("firehose", "tools/firehose.melf"),
     ("license", "tools/LICENSE.txt"),
     ("python", "python/python-3.14.8-embed-amd64.zip"),
     ("avb", "scripts/avb_stock.py"),
@@ -29,10 +34,9 @@ ROLES = (
     ("gptCli", "scripts/edl_gpt_cli.py"),
 )
 
-FLAGS = (
+COMMON_FLAGS = (
     ("client", "--client", "edl-ng.exe source path"),
     ("usbLibrary", "--usb-library", "libusb-1.0.dll source path"),
-    ("firehose", "--firehose", "approved firehose .melf source path"),
     ("license", "--license", "edl-ng LICENSE source path"),
     ("python", "--python-zip", "official embeddable Python ZIP source path"),
     ("avb", "--avb", "avb_stock.py source path"),
@@ -41,17 +45,57 @@ FLAGS = (
     ("gptCli", "--gpt-cli", "edl_gpt_cli.py source path"),
 )
 
-PINS = {
-    "client": (7080448, "41ada68410a434eaf157211b68aeec287c6bd0b648ca161c75badf84d8bf045e"),
-    "firehose": (1697740, "a38993803139d881f47adfa66309f8d5e545c2e33eb4576d0a585afae9cd3da0"),
+FIXED_PINS = {
+    "client": (12015022, "655530e926b57d70f1c690869c495253a6eaae28746f370d5b9dbf921d4a4b3b"),
     "python": (12601679, "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310"),
 }
 
-CHUNK = 1024 * 1024
+G4_PROFILE = {
+    "profileId": "g4-9008-259",
+    "model": "TB322FC",
+    "androidBuild": "TB322FC_CN_OPEN_USER_Q00041.1_W_ZUXOS_1.5.10.259_ST_260611",
+    "hardwareId": "0028D0E100400000",
+    "materials": (
+        ("firehose", "tools/firehose.melf", 1697740,
+         "a38993803139d881f47adfa66309f8d5e545c2e33eb4576d0a585afae9cd3da0"),
+    ),
+}
 
+G5_PROFILE = {
+    "profileId": "g5-9008-y7005",
+    "model": "TB323FU",
+    "androidBuild": "QCTool-2026.3.21-1/lenovo/devprg_legion-y700-5",
+    "hardwareId": "002B40E100400000",
+    "materials": (
+        ("firehose", "tools/g5/qsahara_device_programmer.xml", 564,
+         "433749ae084aa0f1b4016b29619b0b0c377d4b2cd22d8a48b423ca6d9cbc83ca"),
+        ("image36", "tools/g5/multi_image_qti.mbn", 12088,
+         "a98c7ae167f5d0daf947dc707e3c3679ea438f30ea6ebc510edf15655a14d223"),
+        ("image37", "tools/g5/multi_image.mbn", 12088,
+         "9dd679f3b38e59af6a7e22598ed85a1918cad41a0af84eac2c33e1b02d6166f8"),
+        ("image21", "tools/g5/xbl_sc.elf", 1174496,
+         "5d277384cac8fb1512562028ca30c67b2314810ad26b2546a6c8653119a056d4"),
+        ("image60", "tools/g5/signed_firmware_soc_view.elf", 203840,
+         "dbfdf2602cadb02fe8272abbce55f3f804ad1e98a8481586bf40fa1cbe2960e3"),
+        ("image59", "tools/g5/sequencer_ram.elf", 4864,
+         "d7dc67ddd77332e558d14b7acb82bc42e1be66a07786403c96b655f46d019636"),
+        ("image61", "tools/g5/tme_config.elf", 43760,
+         "91f17966306617d1a47336ada238865d4faea014a12edc92f08ea79a773e667a"),
+        ("image13", "tools/g5/prog_firehose_ddr.elf", 315384,
+         "109338f05b2597b1238f8b724f400f6753a393f6d84c5c534ff36294bbc2da3e"),
+        ("image38", "tools/g5/xbl_config_devprg.elf", 180928,
+         "199e60752d9f0db398bbc3524839a627f3ae32ab47fb58b90df124b3e0affbbb"),
+    ),
+}
 
-class PackagingError(Exception):
-    """Concise, user-facing failure."""
+PROFILES = {
+    "g4": G4_PROFILE,
+    "tb322fc": G4_PROFILE,
+    "g5": G5_PROFILE,
+    "tb323fu": G5_PROFILE,
+}
+
+G5_ONLY_ROLES = tuple(role for role, *_ in G5_PROFILE["materials"])
 
 
 def _hash_file(path: str) -> tuple[int, str]:
@@ -83,9 +127,9 @@ def _write_atomic(path: str, payload: bytes, owned: list[str]) -> None:
     owned.remove(part)
 
 
-def _check_arcnames() -> None:
+def _check_arcnames(roles) -> None:
     seen: set[str] = set()
-    for role, arcname in ROLES:
+    for role, arcname, *_rest in roles:
         parts = arcname.split("/")
         if (
             arcname.startswith("/")
@@ -131,17 +175,18 @@ def _resolve_output(path: str, sources: dict[str, str]) -> str:
 
 
 def _write_zip(
-    part: str, manifest_bytes: bytes, sources: dict[str, str], sizes: dict[str, int], owned: list[str]
+    part: str, manifest_bytes: bytes, sources: dict[str, str], sizes: dict[str, int],
+    roles, owned: list[str]
 ) -> None:
     with _open_exclusive(part) as raw:
         owned.append(part)
-        with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+        with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
             head = zipfile.ZipInfo("manifest.json")
-            head.compress_type = zipfile.ZIP_STORED
+            head.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(head, manifest_bytes)
-            for role, arcname in ROLES:
+            for role, arcname, *_rest in roles:
                 info = zipfile.ZipInfo(arcname)
-                info.compress_type = zipfile.ZIP_STORED
+                info.compress_type = zipfile.ZIP_DEFLATED
                 copied = 0
                 with archive.open(info, "w", force_zip64=True) as target, open(sources[role], "rb") as source:
                     while True:
@@ -156,24 +201,133 @@ def _write_zip(
         os.fsync(raw.fileno())
 
 
+def _profile_key(profile: str) -> str:
+    key = profile.lower()
+    if key not in PROFILES:
+        raise PackagingError(
+            f"unknown profile: {profile} (expected one of tb322fc, tb323fu)"
+        )
+    return key
+
+
+def _select_profile(args: argparse.Namespace) -> dict:
+    profile = getattr(args, "profile", None) or "tb322fc"
+    key = _profile_key(profile)
+    return PROFILES[key]
+
+
+def _resolve_g5_materials(profile: dict, args: argparse.Namespace) -> dict[str, str]:
+    loader_root = getattr(args, "loader_root", None)
+    if not loader_root:
+        raise PackagingError("g5 profile requires --loader-root PATH")
+    if not os.path.isdir(loader_root):
+        raise PackagingError(f"loader root not a directory: {loader_root}")
+    sources: dict[str, str] = {}
+    for role, arcname, _size, _sha in profile["materials"]:
+        # Use the basename of the archive path as the file name under loader-root.
+        name = arcname.rsplit("/", 1)[-1]
+        candidate = os.path.join(loader_root, name)
+        sources[role] = _resolve_input(role, candidate)
+    return sources
+
+
+def _effective_pins(args: argparse.Namespace) -> dict[str, tuple[int, str]]:
+    """Merge build-time client pin (if supplied) over FIXED_PINS.
+
+    Only the `client` entry may be overridden by --build-pins-json; every other
+    pin (python and all G4/G5 material pins via the profile) is preserved.
+    Without the flag the frozen client pin in FIXED_PINS is used unchanged.
+    """
+    pins = dict(FIXED_PINS)
+    build_pins_path = getattr(args, "build_pins_json", None)
+    if not build_pins_path:
+        return pins
+    try:
+        with open(build_pins_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PackagingError(
+            f"cannot read build pins JSON {build_pins_path!r}: {exc}"
+        ) from None
+    if not isinstance(data, dict) or data.get("schemaVersion") != 1:
+        raise PackagingError("build pins JSON requires schemaVersion=1")
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        raise PackagingError("build pins JSON missing 'tools' object")
+    client = tools.get("client")
+    if not isinstance(client, dict):
+        raise PackagingError("build pins JSON missing 'client' record")
+    size = client.get("bytes")
+    digest = client.get("sha256")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise PackagingError(f"build pins JSON client.bytes invalid: {size!r}")
+    if not isinstance(digest, str) or not _SHA256_RE.match(digest):
+        raise PackagingError(f"build pins JSON client.sha256 invalid: {digest!r}")
+    pins["client"] = (size, digest)
+    return pins
+
+
 def package(args: argparse.Namespace) -> dict:
-    _check_arcnames()
+    profile = _select_profile(args)
+    effective_pins = _effective_pins(args)
+
+    common_sources: dict[str, str] = {}
+    for role, _flag, _help in COMMON_FLAGS:
+        common_sources[role] = _resolve_input(role, getattr(args, role))
+
+    # Material roles derived from the selected profile.
+    material_roles = tuple(profile["materials"])
+    material_sources: dict[str, str] = {}
+    if profile is G4_PROFILE:
+        firehose = getattr(args, "firehose", None)
+        if not firehose:
+            raise PackagingError("g4 profile requires --firehose")
+        material_sources["firehose"] = _resolve_input("firehose", firehose)
+    else:
+        material_sources = _resolve_g5_materials(profile, args)
+
+    if set(material_sources.keys()) != {r for r, *_ in material_roles}:
+        raise PackagingError("material role coverage mismatch for selected profile")
+
+    # Combined input set and arcname table for the selected profile.
+    roles: list[tuple[str, str, int, str]] = []
+    for role, arcname in COMMON_ROLES:
+        roles.append((role, arcname, 0, ""))
+    for role, arcname, size, sha in material_roles:
+        roles.append((role, arcname, size, sha))
+
+    # Exactness: no role duplicated.
+    if len({r[0] for r in roles}) != len(roles):
+        raise PackagingError("duplicate role in package layout")
+
+    _check_arcnames(roles)
 
     sources: dict[str, str] = {}
-    for role, _flag, _help in FLAGS:
-        sources[role] = _resolve_input(role, getattr(args, role))
-    if len(set(sources.values())) != len(ROLES):
-        raise PackagingError("each of the nine roles must be a distinct source file")
+    sources.update(common_sources)
+    sources.update(material_sources)
+
+    if len(set(sources.values())) != len(sources):
+        raise PackagingError(f"each of the {len(sources)} roles must be a distinct source file")
+
     output = _resolve_output(args.output, sources)
 
     sizes: dict[str, int] = {}
     hashes: dict[str, str] = {}
-    for role, _arcname in ROLES:
+    # Validate pins: common fixed pins plus per-profile material pins.
+    material_pins = {role: (size, sha) for role, _arcname, size, sha in material_roles}
+    for role, _arcname, *_rest in roles:
         size, digest = _hash_file(sources[role])
         if size <= 0:
             raise PackagingError(f"{role} source is empty: {sources[role]}")
-        if role in PINS:
-            want_size, want_sha = PINS[role]
+        if role in effective_pins:
+            want_size, want_sha = effective_pins[role]
+            if size != want_size or digest != want_sha:
+                raise PackagingError(
+                    f"{role} pin mismatch: got {size} bytes/{digest}, "
+                    f"expected {want_size} bytes/{want_sha}"
+                )
+        if role in material_pins:
+            want_size, want_sha = material_pins[role]
             if size != want_size or digest != want_sha:
                 raise PackagingError(
                     f"{role} pin mismatch: got {size} bytes/{digest}, "
@@ -184,13 +338,13 @@ def package(args: argparse.Namespace) -> dict:
 
     manifest = {
         "schemaVersion": SCHEMA_VERSION,
-        "profileId": PROFILE_ID,
-        "model": MODEL,
-        "androidBuild": ANDROID_BUILD,
-        "hardwareId": HARDWARE_ID,
+        "profileId": profile["profileId"],
+        "model": profile["model"],
+        "androidBuild": profile["androidBuild"],
+        "hardwareId": profile["hardwareId"],
         "entries": [
             {"role": role, "path": arcname, "bytes": sizes[role], "sha256": hashes[role]}
-            for role, arcname in ROLES
+            for role, arcname, *_rest in roles
         ],
     }
     manifest_bytes = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
@@ -204,7 +358,7 @@ def package(args: argparse.Namespace) -> dict:
     part = output + ".part"
     owned: list[str] = []
     try:
-        _write_zip(part, manifest_bytes, sources, sizes, owned)
+        _write_zip(part, manifest_bytes, sources, sizes, roles, owned)
         zip_bytes, zip_sha = _hash_file(part)
         os.replace(part, output)
         owned.remove(part)
@@ -223,11 +377,11 @@ def package(args: argparse.Namespace) -> dict:
         raise
 
     return {
-        "profileId": PROFILE_ID,
+        "profileId": profile["profileId"],
         "output": output,
         "bytes": zip_bytes,
         "sha256": zip_sha,
-        "roleCount": len(ROLES),
+        "roleCount": len(roles),
         "manifestReport": manifest_report,
         "checksumReport": checksum_report,
     }
@@ -236,11 +390,39 @@ def package(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="package_edl.py",
-        description="Build the EDL003/a1 EDL toolchain ZIP from nine explicit files.",
+        description="Build a pinned G4 or G5 EDL toolchain ZIP from explicit files.",
     )
-    for role, flag, help_text in FLAGS:
+    parser.add_argument(
+        "--profile",
+        dest="profile",
+        default="tb322fc",
+        metavar="NAME",
+        help="trusted profile: tb322fc (G4, default) or tb323fu (G5)",
+    )
+    for role, flag, help_text in COMMON_FLAGS:
         parser.add_argument(flag, dest=role, required=True, metavar="PATH", help=help_text)
+    parser.add_argument(
+        "--firehose",
+        dest="firehose",
+        metavar="PATH",
+        default=None,
+        help="approved firehose .melf source path (required for G4)",
+    )
+    parser.add_argument(
+        "--loader-root",
+        dest="loader_root",
+        metavar="PATH",
+        default=None,
+        help="directory holding the nine G5 loader materials (required for G5)",
+    )
     parser.add_argument("--output", required=True, metavar="PATH", help="bundle ZIP output path")
+    parser.add_argument(
+        "--build-pins-json",
+        dest="build_pins_json",
+        metavar="PATH",
+        default=None,
+        help="optional schemaVersion=1 build-time pins JSON providing the client pin",
+    )
     args = parser.parse_args(argv)
     try:
         report = package(args)

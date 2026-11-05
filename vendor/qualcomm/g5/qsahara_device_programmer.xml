@@ -1,0 +1,14 @@
+<?xml version="1.0" ?>
+<sahara_config>
+	<chipset>kaanapali</chipset>
+	<images>
+		<image image_id="36" image_path="multi_image_qti.mbn"/>
+		<image image_id="37" image_path="multi_image.mbn"/>
+		<image image_id="21" image_path="xbl_sc.elf"/>
+		<image image_id="60" image_path="signed_firmware_soc_view.elf"/>
+		<image image_id="59" image_path="sequencer_ram.elf"/>
+		<image image_id="61" image_path="tme_config.elf"/>
+		<image image_id="13" image_path="prog_firehose_ddr.elf"/>
+		<image image_id="38" image_path="xbl_config_devprg.elf"/>
+	</images>
+</sahara_config>

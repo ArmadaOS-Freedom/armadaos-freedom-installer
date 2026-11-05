@@ -20,29 +20,31 @@ public partial class MainWindow
 {
     private const string GlobalToolchainFolder = ".armada-installer-tools";
 
-    /// <summary>本次会话独立的探针证据目录；新连接换新目录，复探沿用原目录。</summary>
+    /// <summary>本次会话独立的工具与探针目录；新连接换新目录，复探沿用原目录。</summary>
     private string? _globalSessionDirectory;
 
-    /// <summary>在本次会话目录下创建一个全新的探针文件名；目录在探针前创建，绝不覆盖。</summary>
-    private string NewGlobalProbePath()
+    /// <summary>
+    /// 本次连接专属的工具与探针目录：位于缓存根下，与备份保存位置无关。
+    /// </summary>
+    private string GetGlobalSessionDirectory()
     {
         if (string.IsNullOrEmpty(_globalSessionDirectory))
         {
-            if (string.IsNullOrWhiteSpace(_globalOutputParent))
-            {
-                throw new InvalidOperationException(T("Dynamic.Global.Error.OutputRequired"));
-            }
-
             _globalSessionDirectory = Path.Combine(
-                _globalOutputParent!,
+                BundledTools.GetCacheRoot(),
                 "global-edl-session-" + Guid.NewGuid().ToString("N"));
         }
 
-        Directory.CreateDirectory(_globalSessionDirectory);
-        return Path.Combine(
-            _globalSessionDirectory,
-            "probe-lun0-" + Guid.NewGuid().ToString("N") + ".bin");
+        string directory = _globalSessionDirectory!;
+        Directory.CreateDirectory(directory);
+        return directory;
     }
+
+    /// <summary>在本次会话目录下创建一个全新的探针文件名；目录在探针前创建，绝不覆盖。</summary>
+    private string NewGlobalProbePath() =>
+        Path.Combine(
+            GetGlobalSessionDirectory(),
+            "probe-lun0-" + Guid.NewGuid().ToString("N") + ".bin");
 
     // ---------- 连接 ----------
 
@@ -61,16 +63,7 @@ public partial class MainWindow
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_globalOutputParent))
-        {
-            OnGlobalBrowseBackup(sender, e);
-            if (string.IsNullOrWhiteSpace(_globalOutputParent))
-            {
-                SetText(GlobalProgressStatusText, "Dynamic.Global.Error.OutputRequired");
-                return;
-            }
-        }
-
+        // 连接不再要求先选保存位置：工具与探针都放在缓存下的本次会话目录里。
         // 已有会话：只核对同一配置与同一总线序列，缺失证明时最多补一次显式探针。
         if (_globalEdlClient is not null)
         {
@@ -254,11 +247,6 @@ public partial class MainWindow
             throw new InvalidOperationException(T("Dynamic.Global.Status.BlockedBySession"));
         }
 
-        if (string.IsNullOrWhiteSpace(_globalOutputParent))
-        {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.OutputRequired"));
-        }
-
         token.ThrowIfCancellationRequested();
 
         var discovery = new WindowsEdlEndpointDiscovery();
@@ -426,11 +414,6 @@ public partial class MainWindow
 
     private async Task<EdlToolchain> LoadGlobalToolsAsync(EdlDeviceProfile profile, CancellationToken token)
     {
-        if (string.IsNullOrWhiteSpace(_globalOutputParent))
-        {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.OutputRequired"));
-        }
-
         if (!profile.IsComplete || string.IsNullOrWhiteSpace(profile.ArchiveLogicalName))
         {
             throw new InvalidOperationException(T("Dynamic.Global.Error.ProfileIncomplete"));
@@ -443,7 +426,7 @@ public partial class MainWindow
             throw new InvalidOperationException(T("Dynamic.Global.Error.ToolsMissing"));
         }
 
-        string workRoot = Path.Combine(_globalOutputParent!, GlobalToolchainFolder);
+        string workRoot = Path.Combine(GetGlobalSessionDirectory(), GlobalToolchainFolder);
         EdlToolchain tools = await EdlToolchain.LoadAsync(archive, workRoot, token);
         if (!ReferenceEquals(tools.Profile, profile))
         {
@@ -476,10 +459,14 @@ public partial class MainWindow
             return;
         }
 
+        // 连接已核实即可备份：尚未选择保存位置时先询问一次，取消则原样返回、不丢状态。
         if (string.IsNullOrWhiteSpace(_globalOutputParent))
         {
-            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.OutputRequired");
-            return;
+            OnGlobalBrowseBackup(sender, e);
+            if (string.IsNullOrWhiteSpace(_globalOutputParent))
+            {
+                return;
+            }
         }
 
         // 新一轮只读备份必然让旧还原准备失效。

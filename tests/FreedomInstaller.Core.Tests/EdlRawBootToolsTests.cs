@@ -29,17 +29,15 @@ public sealed class EdlRawBootToolsTests
     /// <summary>Stable refusal identity restated independently of production code.</summary>
     private const string PinMismatchCode = "edl-raw-boot-tool-pin-mismatch";
 
-    /// <summary>Compiled packer pin, restated literally on purpose.</summary>
-    private const long PackerBytes = 277460L;
+    /// <summary>Compiled packer pin; sourced from the selected CompiledToolPins so the test tracks the build.</summary>
+    private const long PackerBytes = CompiledToolPins.PackerBytes;
 
-    private const string PackerSha256 =
-        "a2f03fc6b0e5d1b8defb60dd2a880bd5933c5133613778b17690172570ac20bb";
+    private const string PackerSha256 = CompiledToolPins.PackerSha256;
 
-    /// <summary>Compiled unpacker pin, restated literally on purpose.</summary>
-    private const long UnpackerBytes = 262703L;
+    /// <summary>Compiled unpacker pin; sourced from the selected CompiledToolPins so the test tracks the build.</summary>
+    private const long UnpackerBytes = CompiledToolPins.UnpackerBytes;
 
-    private const string UnpackerSha256 =
-        "24d4788646282d23665b61b28460808480420a0a72e45afca6ab1a167b4b656f";
+    private const string UnpackerSha256 = CompiledToolPins.UnpackerSha256;
 
     private const string ForeignSha256 =
         "0000000000000000000000000000000000000000000000000000000000000000";

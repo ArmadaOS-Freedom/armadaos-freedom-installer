@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+	<PackageReference Include="LibUsbDotNet" Version="3.0.167-alpha" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference
+            Include="..\QCEDL.Analyzer\QCEDL.Analyzer.csproj"
+            ReferenceOutputAssembly="false"
+            OutputItemType="Analyzer"/>
+  </ItemGroup>
+</Project>

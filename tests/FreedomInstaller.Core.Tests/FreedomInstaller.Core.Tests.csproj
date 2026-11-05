@@ -21,6 +21,18 @@
     <ProjectReference Include="..\..\src\FreedomInstaller.Core\FreedomInstaller.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(BundledToolPinsSource)' != ''">
+    <!-- When the build selects an external CompiledToolPins.cs, link that exact file into the test
+         assembly so the internal-type reflection in CompiledToolPinsTests observes the same pins as Core. -->
+    <Compile Include="$(BundledToolPinsSource)" Link="CompiledToolPins.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(BundledToolPinsSource)' == ''">
+    <!-- Otherwise link the default compiled source (Core's internal type is not visible across assemblies,
+         so the tests need their own identical copy for reflection; no InternalsVisibleTo, no public type). -->
+    <Compile Include="..\..\src\FreedomInstaller.Core\CompiledToolPins.cs" Link="CompiledToolPins.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Link the real bundled-tools helper source so the extraction logic is tested without
          referencing the WPF App project (keeps these tests runnable on Linux). -->

@@ -2571,7 +2571,6 @@
                                 </CheckBox>
                             </Border>
 
-                            <!-- 原来的完整摘要（含全部哈希与工程目录）原样保留，只是默认收起。 -->
                             <Expander x:Name="InternalInstallVerificationDetails"
                                       Style="{StaticResource SectionExpander}"
                                       IsExpanded="False"
@@ -2579,7 +2578,7 @@
                                 <TextBlock x:Name="InternalInstallSummaryText"
                                            Style="{StaticResource BodyInkText}"
                                            TextWrapping="Wrap"
-                                           Margin="0,6,0,0"
+                                           Margin="0,8,0,4"
                                            Text="{DynamicResource Static.InternalInstall.Confirm.SummaryInitial}" />
                             </Expander>
 

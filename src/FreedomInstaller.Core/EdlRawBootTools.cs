@@ -29,15 +29,13 @@ public sealed class EdlRawBootTools : IDisposable
 
     private const int Sha256HexLength = 64;
 
-    private const long PackerBytes = 277460L;
+    private const long PackerBytes = CompiledToolPins.PackerBytes;
 
-    private const string PackerSha256 =
-        "a2f03fc6b0e5d1b8defb60dd2a880bd5933c5133613778b17690172570ac20bb";
+    private const string PackerSha256 = CompiledToolPins.PackerSha256;
 
-    private const long UnpackerBytes = 262703L;
+    private const long UnpackerBytes = CompiledToolPins.UnpackerBytes;
 
-    private const string UnpackerSha256 =
-        "24d4788646282d23665b61b28460808480420a0a72e45afca6ab1a167b4b656f";
+    private const string UnpackerSha256 = CompiledToolPins.UnpackerSha256;
 
     private readonly FileStream _packerStream;
 
