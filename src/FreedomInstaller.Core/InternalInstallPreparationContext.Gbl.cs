@@ -43,9 +43,12 @@ internal sealed partial class InternalInstallPreparationContext
                 ? InternalInstallBootTrustMode.AospPreserved
                 : InternalInstallBootTrustMode.AospResigned;
 
-    /// <summary>Models whose install keeps the original AVB metadata and writes only the boot candidates.</summary>
+    /// <summary>
+    /// Models whose install keeps the original AVB metadata and writes only the boot candidates, as declared by
+    /// their EDL device profile.
+    /// </summary>
     private static bool UsesPreservedAospChain(string model) =>
-        string.Equals(model, DeviceModelRoutes.Tb710fuModel, StringComparison.Ordinal);
+        EdlDeviceProfiles.FindByModel(model)?.InstallBootTrust == EdlInstallBootTrust.AospPreservedBoot;
 
     /// <summary>
     /// The early gate of the AOSP-preserving route: every source slot's original root vbmeta must be signed by
