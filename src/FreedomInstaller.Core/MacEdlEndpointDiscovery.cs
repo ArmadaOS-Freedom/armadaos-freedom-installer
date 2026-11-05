@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.Versioning;
+using System.Threading;
 using System.Xml;
 
 namespace FreedomInstaller.Core;
@@ -25,6 +26,11 @@ public sealed class MacEdlEndpointDiscovery : IEdlEndpointDiscovery
     private const string IoregPath = "/usr/sbin/ioreg";
     private static readonly TimeSpan IoregTimeout = TimeSpan.FromSeconds(10);
 
+    // ioreg can exit non-zero while a USB device is detaching or re-enumerating (the tablet rebooting into
+    // 9008 is exactly that moment), so a failed read is retried a few times before it is reported.
+    private const int IoregAttempts = 5;
+    private static readonly TimeSpan IoregRetryDelay = TimeSpan.FromMilliseconds(500);
+
     [SupportedOSPlatform("macos")]
     public IReadOnlyList<EdlEndpoint> ReadPresent()
     {
@@ -33,7 +39,17 @@ public sealed class MacEdlEndpointDiscovery : IEdlEndpointDiscovery
             throw new PlatformNotSupportedException("IOKit endpoint discovery is only available on macOS.");
         }
 
-        return Parse(RunIoreg());
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return Parse(RunIoreg());
+            }
+            catch (InvalidOperationException) when (attempt < IoregAttempts)
+            {
+                Thread.Sleep(IoregRetryDelay);
+            }
+        }
     }
 
     /// <summary>
@@ -173,7 +189,7 @@ public sealed class MacEdlEndpointDiscovery : IEdlEndpointDiscovery
         using Process process = Process.Start(start)
             ?? throw new InvalidOperationException("ioreg could not be started.");
         var output = process.StandardOutput.ReadToEndAsync();
-        _ = process.StandardError.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
         if (!process.WaitForExit(IoregTimeout))
         {
             try
@@ -189,7 +205,9 @@ public sealed class MacEdlEndpointDiscovery : IEdlEndpointDiscovery
 
         if (process.ExitCode != 0)
         {
-            throw new InvalidOperationException("ioreg exited with code " + process.ExitCode + ".");
+            string detail = error.GetAwaiter().GetResult().Trim();
+            throw new InvalidOperationException(
+                "ioreg exited with code " + process.ExitCode + (detail.Length > 0 ? ": " + detail : "."));
         }
 
         return output.GetAwaiter().GetResult();
