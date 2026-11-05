@@ -290,7 +290,13 @@ public partial class MainWindow
                 PopulateDevices(devices, previousSerial);
                 if (devices.Count == 0)
                 {
-                    SetText(InternalInstallCheckStatusText, "Dynamic.InternalInstall.Check.NoDevices");
+                    // A tablet sitting in 9008 has no adb; say so instead of "no device". The check reads the
+                    // lock state and slot from Android, so it cannot run from 9008.
+                    var edl = Discovery.ReadPresent();
+                    SetText(
+                        InternalInstallCheckStatusText,
+                        edl.Count > 0 ? "Dynamic.Mac.Check.InEdl" : "Dynamic.InternalInstall.Check.NoDevices",
+                        edl.Count > 0 ? EdlSerialText(edl[0]) : string.Empty);
                     return;
                 }
 
@@ -611,20 +617,37 @@ public partial class MainWindow
                     return;
                 }
 
-                SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.Reproving");
                 var transport = Transport;
-                var freshIdentity = await transport.ReadAdbIdentityAsync(expected.Identity.Serial, token);
-                var fresh = await new MaintenanceEntry(transport.AdbPath, transport.FastbootPath, _runner)
-                    .ReadAndroidAsync(freshIdentity, token);
-                if (!SameAndroid(expected, fresh) || !profile.SupportsIdentity(fresh.Identity))
+                EdlEntryResult entered;
+                if (Discovery.ReadPresent().Count > 0)
                 {
-                    SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.IdentityMismatch");
-                    return;
+                    // The tablet is already in 9008 (for example after an earlier attempt failed once it had
+                    // rebooted). Android cannot be asked again, so the 9008 endpoint itself is the proof: its
+                    // USB serial must equal the SoC serial the device check read from Android. No command is
+                    // sent here; a different or ambiguous endpoint fails at once.
+                    SetText(InternalInstallBackupStatusText, "Dynamic.Mac.Backup.AlreadyInEdl", expected.SocSerial);
+                    InternalInstallBackupProgressBar.IsIndeterminate = true;
+                    entered = await new EdlEntry(transport.AdbPath, _runner, Discovery)
+                        .WaitForPresentAsync(expected, pendingTools.Profile, token);
+                    AppendLog(M("Dynamic.Mac.Backup.AlreadyInEdlLog", entered.BusSerialHex));
+                }
+                else
+                {
+                    SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.Reproving");
+                    var freshIdentity = await transport.ReadAdbIdentityAsync(expected.Identity.Serial, token);
+                    var fresh = await new MaintenanceEntry(transport.AdbPath, transport.FastbootPath, _runner)
+                        .ReadAndroidAsync(freshIdentity, token);
+                    if (!SameAndroid(expected, fresh) || !profile.SupportsIdentity(fresh.Identity))
+                    {
+                        SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.IdentityMismatch");
+                        return;
+                    }
+
+                    SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.EnteringEdl");
+                    InternalInstallBackupProgressBar.IsIndeterminate = true;
+                    entered = await new EdlEntry(transport.AdbPath, _runner, Discovery).EnterAsync(fresh, pendingTools.Profile, token);
                 }
 
-                SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.EnteringEdl");
-                InternalInstallBackupProgressBar.IsIndeterminate = true;
-                var entered = await new EdlEntry(transport.AdbPath, _runner, Discovery).EnterAsync(fresh, pendingTools.Profile, token);
                 _internalInstallTools = pendingTools;
                 pendingTools = null;
                 _internalInstallClient = new EdlClient(_internalInstallTools, entered, _runner, Discovery);
@@ -688,6 +711,13 @@ public partial class MainWindow
             report.TotalFiles,
             FormatBytes(report.CompletedBytes),
             FormatBytes(report.TotalBytes));
+    }
+
+    private static string EdlSerialText(EdlEndpoint endpoint)
+    {
+        var description = endpoint.BusReportedDeviceDescription ?? string.Empty;
+        var at = description.IndexOf("SN:", StringComparison.OrdinalIgnoreCase);
+        return at < 0 ? "?" : description.Substring(at + 3).Split(' ', '_')[0];
     }
 
     private static bool SameAndroid(AndroidMaintenanceIdentity expected, AndroidMaintenanceIdentity fresh) =>

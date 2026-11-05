@@ -16,5 +16,8 @@
   "Dynamic.Mac.Environment.Missing": "未找到",
   "Dynamic.Mac.Dialog.Yes": "是",
   "Dynamic.Mac.Dialog.No": "否",
-  "Dynamic.Mac.Dialog.Ok": "好"
+  "Dynamic.Mac.Dialog.Ok": "好",
+  "Dynamic.Mac.Check.InEdl": "平板现在在 9008 模式（SN:{0}），没有 adb。第 1 步要从 Android 读取锁定状态和槽位，请先让平板回到 Android（长按电源键约 15 秒重启），再点“检查平板”。如果第 1 步之前已经通过，可以直接到第 2 步继续备份。",
+  "Dynamic.Mac.Backup.AlreadyInEdl": "平板已在 9008，正在用 USB 序列号核对是否为第 1 步检查过的平板（SoC 序列号 {0}）…",
+  "Dynamic.Mac.Backup.AlreadyInEdlLog": "平板已在 9008，USB 序列号 {0} 与第 1 步读到的 SoC 序列号一致，直接备份。"
 }
