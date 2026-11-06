@@ -48,6 +48,7 @@ python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /w
 | GBL EFI | 从 miner7222/gbl_root_baldur 的 6.2.192-mod2 固定版本取得 PRC / ROW 文件；源码仓库与提交记录在清单中。 |
 | 四代、五代、TB710FU 加载器 | 原件分别在 `vendor/qualcomm/g4`、`vendor/qualcomm/g5`、`vendor/qualcomm/tb710fu`，各自独立打包。TB710FU 的加载器取自 ZUXOS 1.5.04.495 免解锁补充包的 `EDL/xbl_s_devprg_ns.melf`。 |
 | Qualcomm 驱动 | 2.1.5.2 AMD64 原始文件在 `vendor/qualcomm/driver`，保留签名和 `serial/amd64` 目录结构。 |
+| ADB / Fastboot 驱动 | Google USB Driver r13 与 OPLUS 11.0.0000.00000 的 AMD64 原件在 `vendor/android`，保留 INF、CAT 与配套 DLL。构建时按固定哈希校验并压缩嵌入，来源见该目录的 `NOTICE.txt`。 |
 | AOSP 测试素材 | 官方公开的 RSA4096 测试文件在 `vendor/aosp`，附官方出处、哈希和上游许可原文。 |
 
 厂商素材保持原始字节，Git 不转换其行尾；特别是五代加载 XML、驱动 INF 与签名目录文件。各开源组件保留自己的许可文件与原作者声明。
@@ -79,6 +80,7 @@ python3 -B maintenance/fetch_build_inputs.py --output-dir /work/downloads --veri
 python3 -B -m unittest discover -s maintenance/tests -p test_fetch_build_inputs.py
 python3 -B -m unittest discover -s maintenance/tests -p test_package_edl.py
 python3 -B -m unittest discover -s maintenance/tests -p test_build_installer.py
+python3 -B -m unittest discover -s maintenance/tests -p test_android_driver_packaging.py
 ```
 
 Core 的工具测试需要使用本次 `build-record.json` 中的工具和两个包，并传入同一份 `BundledBuildInputsProps`。涉及真实历史日志的测试仍需其声明的外部输入。编译与合成测试不代替平板安装、签名链和系统启动的真机验收。
