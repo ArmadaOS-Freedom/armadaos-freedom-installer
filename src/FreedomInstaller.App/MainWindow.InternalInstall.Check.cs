@@ -266,6 +266,12 @@ public partial class MainWindow
                     _internalInstallDeviceCheck = result;
                     RenderInternalInstallDeviceCheck(result);
 
+                    if (!result.Succeeded && !result.Cancelled)
+                    {
+                        AppendLocalizedLog(M("Dynamic.InternalInstall.Check.FailedStage", M(InternalInstallCheckStageKey(result.FailedStage))));
+                        AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", Placeholder(result.Error)));
+                    }
+
                     if (result.Succeeded && result.AndroidReturn == AndroidReturnState.Verified)
                     {
                         _internalInstallPower = await CaptureInternalInstallPowerAsync(
@@ -298,6 +304,7 @@ public partial class MainWindow
                         : exception.Message;
                     SetInternalInstallCheckProgress(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
                     SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
+                    AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
                 }
             });
         }

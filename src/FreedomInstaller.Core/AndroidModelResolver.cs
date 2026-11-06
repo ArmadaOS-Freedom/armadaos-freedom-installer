@@ -29,7 +29,9 @@ public static class AndroidModelResolver
         if (claims.Length == 0)
             return DeviceProbe.IdentifyModel(dump);
 
-        var models = claims.Select(p => CanonicalHint(p.Value)).Distinct().ToArray();
+        // Unknown preferred hints are neutral: they are not a competing model, and one supported
+        // canonical hint yields a candidate only. A candidate is evidence, never hardware proof.
+        var models = claims.Select(p => CanonicalHint(p.Value)).Where(m => m != null).Distinct().ToArray();
         return models.Length == 1 ? models[0] : null;
     }
 
@@ -37,8 +39,7 @@ public static class AndroidModelResolver
     {
         var claims = ReadClaims(dump).ToArray();
         var preferred = claims.Where(p => PreferredKeys.Contains(p.Key))
-            .Select(p => CanonicalHint(p.Value) ?? p.Value.ToUpperInvariant())
-            .Distinct().ToArray();
+            .Select(p => CanonicalHint(p.Value)).Where(m => m != null).Distinct().ToArray();
         var status = preferred.Length > 1 ? ConflictCode : Resolve(dump) ?? NotIdentifiedCode;
         return status + " keys[" + string.Join(", ", claims.Select(p => p.Key + "=" +
             new string(p.Value.Where(c => !char.IsControl(c)).Take(160).ToArray()))) + "]";
