@@ -379,7 +379,7 @@ public partial class MainWindow
             SetInternalInstallCapacityPackageStatus(
                 M(
                     "Dynamic.InternalInstall.Capacity.TestOnly",
-                    imported.DeviceModel,
+                    UiText.ModelName(imported.DeviceModel),
                     validation.PackageId,
                     validation.Version,
                     validation.ManifestFingerprint));
@@ -389,7 +389,7 @@ public partial class MainWindow
             SetInternalInstallCapacityPackageStatus(
                 M(
                     "Dynamic.InternalInstall.Capacity.Valid",
-                    imported.DeviceModel,
+                    UiText.ModelName(imported.DeviceModel),
                     validation.PackageId,
                     validation.Version,
                     validation.ManifestFingerprint));
@@ -806,7 +806,7 @@ public partial class MainWindow
         var validation = _internalInstallPackage?.Validation;
 
         // 型号与版本仍由工厂绑定的备份 / 系统包给出；其余字段取后端已经验证过的值。
-        var model = backup?.Model ?? UnknownValue;
+        object model = backup is null ? UnknownValue : UiText.ModelName(backup.Model);
         var serial = prepared.AndroidSerial;
         var build = prepared.AndroidBuild;
         object bootloader = prepared.FastbootLockState switch

@@ -590,7 +590,7 @@ public partial class MainWindow
         var identity = result.Android?.Identity;
         var firmware = identity?.Firmware;
 
-        SetText(InternalInstallModelText, "Dynamic.RawValue", Placeholder(identity?.Model));
+        SetText(InternalInstallModelText, UiText.ModelName(identity?.Model));
         SetText(
             InternalInstallSerialText,
             "Dynamic.RawValue",
@@ -638,7 +638,7 @@ public partial class MainWindow
         if (DeviceModelRoutes.IsWriteRoutePending(identity?.Model))
         {
             SetText(InternalInstallRouteText, "Dynamic.InternalInstall.Check.RouteUnavailable");
-            SetInternalInstallCheckStatus(M("Dynamic.Model.RoutePending", Placeholder(identity?.Model)));
+            SetInternalInstallCheckStatus(M("Dynamic.Model.RoutePending", UiText.ModelName(identity?.Model)));
             return;
         }
 

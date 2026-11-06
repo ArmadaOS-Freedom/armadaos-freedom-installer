@@ -156,7 +156,7 @@ namespace FreedomInstaller.App
 
             SetText(BootMaintenanceDeviceText, M(
                 "Dynamic.TfInstall.PreparedSummary",
-                boot.Model,
+                UiText.ModelName(boot.Model),
                 boot.AndroidSerial,
                 boot.CurrentSlot,
                 card.DevicePath,

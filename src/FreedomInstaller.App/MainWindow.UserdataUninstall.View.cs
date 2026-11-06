@@ -165,7 +165,7 @@ public partial class MainWindow
             BootMaintenanceDeviceText,
             M(
                 "Dynamic.UserdataUninstall.DeviceSummary",
-                inputs.Identity.Model,
+                UiText.ModelName(inputs.Identity.Model),
                 inputs.Identity.Serial,
                 backend.CurrentSlot));
 

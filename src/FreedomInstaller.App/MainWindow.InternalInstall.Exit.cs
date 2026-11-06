@@ -536,7 +536,7 @@ public partial class MainWindow
         SetInternalInstallExitStatus(
             M(
                 "Dynamic.InternalInstall.Exit.Verified",
-                Placeholder(fresh.Identity.Model),
+                UiText.ModelName(fresh.Identity.Model),
                 Placeholder(fresh.Identity.Serial),
                 Placeholder(fresh.Identity.Firmware?.DisplayId)));
 
@@ -563,7 +563,7 @@ public partial class MainWindow
         RenderInternalInstallCheckPlaceholders();
 
         // 已知的实际读数可以显示，但门槛保持关闭，绝不猜一个型号或固件。
-        SetText(InternalInstallModelText, "Dynamic.RawValue", Placeholder(fresh.Identity.Model));
+        SetText(InternalInstallModelText, UiText.ModelName(fresh.Identity.Model));
         SetText(InternalInstallSerialText, "Dynamic.RawValue", Placeholder(fresh.Identity.Serial));
         SetText(
             InternalInstallFirmwareText,

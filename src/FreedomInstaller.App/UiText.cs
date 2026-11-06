@@ -119,6 +119,23 @@ internal sealed class UiText
 
     internal void SetLanguage(string language) => _language = NormalizeLanguage(language);
 
+    /// <summary>Wraps a device model code so its visible name follows the catalog.</summary>
+    internal static UiMessage ModelName(string? code)
+    {
+        var normalized = (code ?? string.Empty).Trim();
+        var key = normalized.ToUpperInvariant() switch
+        {
+            "TB322FC" => "Static.ModelName.Tb322fc",
+            "TB323FU" => "Static.ModelName.Tb323fu",
+            "TB710FU" => "Static.ModelName.Tb710fu",
+            _ => null,
+        };
+
+        return key is null
+            ? new UiMessage(DynamicPrefix + "RawValue", string.IsNullOrWhiteSpace(normalized) ? "\u2014" : code)
+            : new UiMessage(key);
+    }
+
     /// <summary>
     /// Resolves <paramref name="key"/> and applies <paramref name="args"/> with invariant formatting.
     /// An unknown key returns the key; invalid placeholders return the unformatted catalog text.

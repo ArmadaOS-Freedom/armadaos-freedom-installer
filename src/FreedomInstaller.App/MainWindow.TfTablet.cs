@@ -548,7 +548,7 @@ namespace FreedomInstaller.App
             RenderInternalInstallPower();
             var body = T(
                 "Dynamic.TfTablet.TempConfirmBody",
-                prepared.Model,
+                UiText.ModelName(prepared.Model),
                 prepared.TemporaryBoot.AndroidSerial,
                 prepared.BackupDirectory,
                 prepared.EvidenceDirectory,
@@ -1290,7 +1290,7 @@ namespace FreedomInstaller.App
                     }
                     catch (Exception ex) when (DeviceModelRoutes.IsRouteRefusal(ex))
                     {
-                        TfTabletFail(M("Dynamic.Model.RoutePendingInEdl", DeviceModelRoutes.Tb710fuModel), null);
+                        TfTabletFail(M("Dynamic.Model.RoutePendingInEdl", UiText.ModelName(DeviceModelRoutes.Tb710fuModel)), null);
                     }
                     catch (Exception ex)
                     {
@@ -1541,7 +1541,7 @@ namespace FreedomInstaller.App
                 : T("Dynamic.TfTablet.Operation.RestorePrevious");
             var body = T(
                 "Dynamic.TfTablet.ReturnConfirmBody",
-                prepared.Model,
+                UiText.ModelName(prepared.Model),
                 prepared.AndroidSerial,
                 localizedOperation,
                 prepared.SourceBackupDirectory,

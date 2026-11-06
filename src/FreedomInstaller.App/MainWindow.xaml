@@ -3221,6 +3221,19 @@
                                 Margin="0,0,8,8" />
                     </WrapPanel>
 
+                    <!-- 连接前的准备：可折叠的连接图示与说明，默认展开；进入本页不会自动访问设备。 -->
+                    <Expander Style="{StaticResource SectionExpander}"
+                              IsExpanded="True"
+                              Margin="0,12,0,0"
+                              Header="{DynamicResource Static.Global.ConnectionGuideTitle}">
+                        <StackPanel Margin="0,6,0,0">
+                            <TextBlock Text="{DynamicResource Static.Global.ConnectionGuideLead}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap" />
+                            <local:ConnectionGuide Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Expander>
+
                     <!-- 连接：型号由连接时自动识别，页面没有手动选择；进入本页不会自动访问设备。 -->
                     <Border Style="{StaticResource CardBorder}" Margin="0,12,0,0">
                         <StackPanel>

@@ -477,7 +477,7 @@ public partial class MainWindow
         var detail = T(
             "Dynamic.BootMaintenance.Confirm.Body",
             ModeMessage(CurrentModeTag()),
-            prepared.Model ?? string.Empty,
+            UiText.ModelName(prepared.Model),
             prepared.AndroidSerial ?? string.Empty,
             prepared.CurrentSlot ?? string.Empty);
         detail += Environment.NewLine + T("Dynamic.BootMaintenance.Confirm.NoRepartition");
