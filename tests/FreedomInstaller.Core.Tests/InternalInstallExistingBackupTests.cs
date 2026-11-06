@@ -23,7 +23,7 @@ namespace FreedomInstaller.Core.Tests;
 /// real device, process, USB endpoint or actual 52 file backup is touched; the manager runs these tests remotely.
 /// </para>
 /// </summary>
-public sealed class InternalInstallExistingBackupTests : IClassFixture<EdlClientToolchainFixture>
+public sealed partial class InternalInstallExistingBackupTests : IClassFixture<EdlClientToolchainFixture>
 {
     private const string ManifestFileName = "backup-manifest.json";
     private const string SidecarSuffix = ".sha256";

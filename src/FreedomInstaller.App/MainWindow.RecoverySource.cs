@@ -185,9 +185,10 @@ public partial class MainWindow
                 AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", discoveredBackup.DirectoryPath));
                 return discoveredBackup;
             }
-            catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException)
+            catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException or InvalidDataException)
             {
                 _boardRecoveryDiscoveredDirectory = null;
+                _boardRecoveryAttemptManifest = null;
                 AppendLocalizedLog(M("Dynamic.RecoverySource.BoardInvalid", error.Message));
             }
         }
