@@ -65,7 +65,9 @@ public partial class MainWindow
                 return false;
             }
 
+            // 只开放识别与只读检查的型号（TB710FU）不构成进入备份页的证据：安装写入路线尚未开放。
             return !string.IsNullOrWhiteSpace(identity.Model)
+                && !DeviceModelRoutes.IsWriteRoutePending(identity.Model)
                 && !string.IsNullOrWhiteSpace(identity.Serial)
                 && !string.IsNullOrWhiteSpace(identity.Firmware?.DisplayId)
                 && !string.IsNullOrWhiteSpace(android.SocSerial);
@@ -209,11 +211,11 @@ public partial class MainWindow
 
                     SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Started", target.Serial));
 
-                    // 共享默认路线：非内部模式的默认检查只读安卓身份，不走 Fastboot 往返；
+                    // 卸载需要为保留项目引导取得当前锁状态；其他维护模式默认只读安卓身份。
                     // 「高级：核验Bootloader」按钮（SharedFastbootCheckButton）的 sender 保留原有完整检查。
                     var fromSharedAdvancedButton = sender is Button sharedButton
                         && string.Equals(sharedButton.Name, "SharedFastbootCheckButton", StringComparison.Ordinal);
-                    if (IsSharedNonInternalDeviceMode && !fromSharedAdvancedButton)
+                    if (IsSharedNonInternalDeviceMode && !IsModernUserdataUninstallMode && !fromSharedAdvancedButton)
                     {
                         await CheckSharedAndroidTargetAsync(target.Serial, token);
                         return;
@@ -614,6 +616,14 @@ public partial class MainWindow
         {
             SetText(InternalInstallRouteText, "Dynamic.InternalInstall.Check.RoutePassed");
             SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Passed"));
+            return;
+        }
+
+        // 检查本身通过，但该型号只开放识别与只读检查：如实说明，备份门槛保持关闭。
+        if (DeviceModelRoutes.IsWriteRoutePending(identity?.Model))
+        {
+            SetText(InternalInstallRouteText, "Dynamic.InternalInstall.Check.RouteUnavailable");
+            SetInternalInstallCheckStatus(M("Dynamic.Model.RoutePending", Placeholder(identity?.Model)));
             return;
         }
 

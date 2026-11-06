@@ -122,7 +122,7 @@ public static partial class PackageImporter
 
     private const int CopyBufferSize = 80 * 1024;
 
-    private static readonly string[] SupportedModels = { "TB322FC", "TB323FU" };
+    private static readonly string[] SupportedModels = { "TB322FC", "TB323FU", "TB710FU" };
 
     /// <summary>
     /// Imports <paramref name="sourcePath"/> for <paramref name="expectedModel"/> and
@@ -215,7 +215,7 @@ public static partial class PackageImporter
 
         if (!IsSupportedModel(expectedModel))
         {
-            reasons.Add($"期望型号 {expectedModel} 不在支持列表（TB322FC / TB323FU）内，拒绝使用。");
+            reasons.Add($"期望型号 {expectedModel} 不在支持列表（TB322FC / TB323FU / TB710FU）内，拒绝使用。");
             return Invalid(sourcePath, expectedModel, reasons);
         }
 
@@ -777,11 +777,23 @@ public static partial class PackageImporter
             }
 
             var model = modelElement.GetString()?.Trim() ?? string.Empty;
-            if (!IsSupportedModel(model))
+            if (model.Length == 0)
             {
-                reasons.Add($"合集声明的 deviceModel {model} 不在支持列表（TB322FC / TB323FU）内。");
+                reasons.Add($"{BundleFileName} 的 packages[].deviceModel 为空。");
                 return false;
             }
+
+            if (!IsSupportedModel(model)
+                && SupportedModels.Contains(model, StringComparer.OrdinalIgnoreCase))
+            {
+                reasons.Add($"{BundleFileName} 的 deviceModel {model} 与支持的型号只差大小写。");
+                return false;
+            }
+
+            // A bundle built for more models than this installer knows is still a
+            // valid bundle: entries for unknown models get the same shape checks but
+            // can never be selected (expectedModel is a supported model), so a newer
+            // package does not lock out the models this installer supports.
 
             if (!package.TryGetProperty("directory", out var directoryElement)
                 || directoryElement.ValueKind != JsonValueKind.String)
@@ -822,7 +834,7 @@ public static partial class PackageImporter
                 return false;
             }
 
-            if (!found && string.Equals(model, expectedModel, StringComparison.Ordinal))
+            if (!found && IsSupportedModel(model) && string.Equals(model, expectedModel, StringComparison.Ordinal))
             {
                 selectedDirectory = directory;
                 sharedMappings = mappings;

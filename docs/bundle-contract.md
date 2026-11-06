@@ -7,7 +7,7 @@
 - 根目录 `bundle.json`：`schemaVersion` 为 2，`bundleId` 为 `armadaos-freedom`，包含系统包版本和型号列表。
 - `common/boot/kernel.img`、`common/boot/initramfs.img`：共用内核和 initramfs。
 - `common/images/linux-boot.ext4.gz`、`common/images/linux-root.btrfs.gz`：共用压缩分区镜像。
-- `models/TB322FC/`、`models/TB323FU/`：各型号的 `package.json`、runtime 和 normal/diagnostic 启动文件。
+- `models/TB322FC/`、`models/TB323FU/`、`models/TB710FU/`：各型号的 `package.json`、runtime 和 normal/diagnostic 启动文件。
 
 `packages[]` 中每项以 `deviceModel` 指定型号，以 `directory` 指定型号目录；`sharedFiles[]` 将 `common/` 内的 `source` 映射到所选型号暂存目录的 `destination`。例如 `common/images/linux-root.btrfs.gz` 映射为 `images/linux-root.btrfs.gz`。
 
@@ -15,7 +15,7 @@
 
 ## 导入规则
 
-安装器按已经识别的目标型号选择包，不从文件名猜型号。型号、目录不得重复；清单的型号及版本必须与统一包声明一致。共用映射不得覆盖型号目录已有文件，也不能指向 `package.json`。
+安装器按已经识别的目标型号选择包，不从文件名猜型号。统一包里本安装器不认识的型号项同样要通过结构检查（型号非空、目录、共用映射格式、不重复），但不会被选中，也不会被提取，因此新版统一包加入新型号后仍可用于已支持的型号；请求的型号不在包内仍然报错。型号、目录不得重复；清单的型号及版本必须与统一包声明一致。共用映射不得覆盖型号目录已有文件，也不能指向 `package.json`。
 
 导入仅提取所选型号及其声明的共用文件，保留原始清单字节，然后检查长度、SHA-256、型号与安装目标。不同型号的启动组件不会因共用镜像而互换。
 
