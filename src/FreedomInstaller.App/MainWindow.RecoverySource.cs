@@ -133,7 +133,10 @@ public partial class MainWindow
             throw new InvalidDataException(T("Dynamic.RecoverySource.WrongDevice"));
         var savedEntry = await new EdlEntry(_transport!.AdbPath, _runner!, new WindowsEdlEndpointDiscovery())
             .WaitForPresentAsync(history.Identity, history.Profile, token);
-        var rebound = client.WithSavedIdentity(savedEntry);
+        var probeOutput = Path.Combine(TemporaryWorkRoot,
+            $"uninstall-recovery-{Guid.NewGuid():N}", "probe.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(probeOutput)!);
+        var rebound = await client.WithSavedIdentityAsync(savedEntry, probeOutput, token);
         using var verified = await InternalInstallBackup.OpenRecoveryAsync(rebound, source, token: token);
         _internalInstallEdlClient = rebound;
         _internalInstallEdlEntry = savedEntry;

@@ -217,6 +217,36 @@ public sealed class EdlClient
     }
 
     /// <summary>
+    /// Proves and rebinds an already attached offline candidate to a saved Android identity.
+    /// <para>
+    /// When the session has not yet been proven, exactly one initial read-only geometry probe is run at
+    /// <paramref name="probeOutputPath"/> before the strict <see cref="WithSavedIdentity"/> checks are applied.
+    /// An already proven session is not probed again; its proof is transferred only after the strict
+    /// mismatch checks pass.
+    /// </para>
+    /// </summary>
+    public async Task<EdlClient> WithSavedIdentityAsync(
+        EdlEntryResult savedBinding,
+        string probeOutputPath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(savedBinding);
+        ArgumentNullException.ThrowIfNull(probeOutputPath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (Binding.OfflineIdentity is null || savedBinding.OfflineIdentity is not null
+            || savedBinding.AndroidIdentity is null)
+            throw new InvalidOperationException("An offline session and a saved Android identity are required.");
+
+        if (!_initialProven)
+        {
+            await ProbeRawGeometryAsync(0, true, probeOutputPath, cancellationToken).ConfigureAwait(false);
+        }
+
+        return WithSavedIdentity(savedBinding);
+    }
+
+    /// <summary>
     /// Probes one LUN with <c>printgpt</c>.
     /// <para>
     /// <paramref name="initialLoader"/> is true only for the first probe, which must prove the initial Sahara

@@ -68,6 +68,88 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
     }
 
     [Fact]
+    public async Task WithSavedIdentityAsync_proves_offline_client_with_one_initial_probe_and_transfers_proof()
+    {
+        var discovery = ValidDiscovery();
+        var offline = GlobalEdlBinding.Attach(_fixture.Toolchain.Profile, discovery);
+        var runner = new E003FakeCommandRunner();
+        var client = new EdlClient(_fixture.Toolchain, offline, runner, discovery);
+        var identity = new AndroidMaintenanceIdentity(
+            new DeviceIdentity("SN0123456789", _fixture.Toolchain.Model, BootloaderState.Unknown)
+                { Firmware = new FirmwareSnapshot(_fixture.Toolchain.AndroidBuild, null, null, null, BootloaderState.Unknown) },
+            E003EdlTestData.SocSerialDecimal);
+        var saved = new EdlEntryResult(identity, E003EdlTestData.Endpoint(), E003EdlTestData.BusSerialHex);
+
+        var caseDir = _fixture.NewCaseDirectory(nameof(WithSavedIdentityAsync_proves_offline_client_with_one_initial_probe_and_transfers_proof));
+        var output = Path.Combine(caseDir, "probe.bin");
+        runner.Enqueue(RawLog(E003EdlTestData.BusSerialHex,
+            SaharaText(E003EdlTestData.BusSerialHex, _fixture.Toolchain.HardwareId, includeLoaderMarker: true),
+            RawGeometryLines(0, E003EdlTestData.InitialTotalSectors, E003EdlTestData.SectorSize),
+            PlanLine(0, 0, 1, E003EdlTestData.SectorSize, output), E003EdlTestData.SectorSize),
+            sideEffect: _ => File.WriteAllBytes(output, new byte[E003EdlTestData.SectorSize]));
+
+        var rebound = await client.WithSavedIdentityAsync(saved, output);
+        Assert.True(rebound.HasInitialSaharaProof);
+        Assert.Same(saved, rebound.Binding);
+        Assert.Equal(1, runner.CallCount);
+
+        var unused = Path.Combine(caseDir, "unused-probe.bin");
+        var rebound2 = await client.WithSavedIdentityAsync(saved, unused);
+        Assert.True(rebound2.HasInitialSaharaProof);
+        Assert.Same(saved, rebound2.Binding);
+        Assert.Equal(1, runner.CallCount);
+        Assert.False(File.Exists(unused));
+    }
+
+    [Fact]
+    public async Task WithSavedIdentityAsync_mismatched_sahara_hwid_throws_without_proof()
+    {
+        var discovery = ValidDiscovery();
+        var offline = GlobalEdlBinding.Attach(_fixture.Toolchain.Profile, discovery);
+        var runner = new E003FakeCommandRunner();
+        var client = new EdlClient(_fixture.Toolchain, offline, runner, discovery);
+        var identity = new AndroidMaintenanceIdentity(
+            new DeviceIdentity("SN0123456789", _fixture.Toolchain.Model, BootloaderState.Unknown)
+                { Firmware = new FirmwareSnapshot(_fixture.Toolchain.AndroidBuild, null, null, null, BootloaderState.Unknown) },
+            E003EdlTestData.SocSerialDecimal);
+        var saved = new EdlEntryResult(identity, E003EdlTestData.Endpoint(), E003EdlTestData.BusSerialHex);
+
+        var caseDir = _fixture.NewCaseDirectory(nameof(WithSavedIdentityAsync_mismatched_sahara_hwid_throws_without_proof));
+        var output = Path.Combine(caseDir, "probe.bin");
+        runner.Enqueue(RawLog(E003EdlTestData.BusSerialHex,
+            SaharaText(E003EdlTestData.BusSerialHex, "0028000000000000", includeLoaderMarker: true),
+            RawGeometryLines(0, E003EdlTestData.InitialTotalSectors, E003EdlTestData.SectorSize),
+            PlanLine(0, 0, 1, E003EdlTestData.SectorSize, output), E003EdlTestData.SectorSize),
+            sideEffect: _ => File.WriteAllBytes(output, new byte[E003EdlTestData.SectorSize]));
+
+        await Assert.ThrowsAnyAsync<Exception>(() => client.WithSavedIdentityAsync(saved, output));
+        Assert.False(client.HasInitialSaharaProof);
+        Assert.Equal(1, runner.CallCount);
+    }
+
+    [Fact]
+    public async Task WithSavedIdentityAsync_PreCancelled_token_makes_no_runner_call()
+    {
+        var discovery = ValidDiscovery();
+        var offline = GlobalEdlBinding.Attach(_fixture.Toolchain.Profile, discovery);
+        var runner = new E003FakeCommandRunner();
+        var client = new EdlClient(_fixture.Toolchain, offline, runner, discovery);
+        var identity = new AndroidMaintenanceIdentity(
+            new DeviceIdentity("SN0123456789", _fixture.Toolchain.Model, BootloaderState.Unknown)
+                { Firmware = new FirmwareSnapshot(_fixture.Toolchain.AndroidBuild, null, null, null, BootloaderState.Unknown) },
+            E003EdlTestData.SocSerialDecimal);
+        var saved = new EdlEntryResult(identity, E003EdlTestData.Endpoint(), E003EdlTestData.BusSerialHex);
+        var caseDir = _fixture.NewCaseDirectory(nameof(WithSavedIdentityAsync_PreCancelled_token_makes_no_runner_call));
+        var output = Path.Combine(caseDir, "probe.bin");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.WithSavedIdentityAsync(saved, output, cts.Token));
+        Assert.Equal(0, runner.CallCount);
+    }
+
+    [Fact]
     public void Attach_valid_known_profile_one_endpoint_is_offline_candidate_only()
     {
         E003ScriptedEndpointDiscovery discovery = ValidDiscovery();

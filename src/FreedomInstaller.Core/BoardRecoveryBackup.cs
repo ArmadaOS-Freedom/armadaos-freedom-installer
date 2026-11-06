@@ -128,7 +128,7 @@ public static class BoardRecoveryBackup
             if (now is null || now.Name != before.Name
                 || !string.Equals(now.PartUuid, before.PartUuid, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(now.TypeGuid, before.TypeGuid, StringComparison.OrdinalIgnoreCase)
-                || now.StartSector != before.StartSector || now.Attributes != before.Attributes
+                || now.StartSector != before.StartSector
                 || (before.Name != "userdata" && now.SectorCount != before.SectorCount)
                 || (before.Name == "userdata" && now.SectorCount > before.SectorCount))
                 throw new InvalidDataException("Recovery material does not match the current vendor partitions.");
