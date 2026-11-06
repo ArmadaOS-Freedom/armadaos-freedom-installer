@@ -980,7 +980,13 @@ public sealed class InternalInstallDeviceCheckTests
             state.Clock.Advance(InternalInstallDeviceCheck.FastbootTimeout + TimeSpan.FromSeconds(1));
             return Task.FromException<ProcessResult>(new TimeoutException("fastboot serialno timed out"));
         };
-        var check = CreateCheck(runner);
+        var driverQueries = 0;
+        var check = new InternalInstallDeviceCheck(AdbPath, FastbootPath, runner, runner.Clock,
+            fastbootDriverProbe: () =>
+            {
+                driverQueries++;
+                return new WindowsDriverCheckResult(WindowsDriverCheckState.Missing, null, null, null);
+            });
 
         var result = await check.CheckAsync(Serial);
 
@@ -988,6 +994,8 @@ public sealed class InternalInstallDeviceCheckTests
         Assert.Equal(AndroidReturnState.Unconfirmed, result.AndroidReturn);
         Assert.Equal(1, runner.AdbBootloaderReboots);
         Assert.Equal(0, runner.FastbootReboots);
+        Assert.Equal(1, driverQueries);
+        Assert.Contains("缺少匹配的 Fastboot 驱动", result.Error);
     }
 
     [Fact]

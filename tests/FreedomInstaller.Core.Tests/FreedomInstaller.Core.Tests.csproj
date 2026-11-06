@@ -41,6 +41,7 @@
          classification helpers are linked in so their behaviour can be tested without the WPF
          App project (which also owns the embedded driver archive resource). -->
     <Compile Include="..\..\src\FreedomInstaller.App\BundledQualcommDriver.cs" Link="BundledQualcommDriver.cs" />
+    <Compile Include="..\..\src\FreedomInstaller.App\BundledAndroidDriver.cs" Link="BundledAndroidDriver.cs" />
     <Compile Include="..\..\src\FreedomInstaller.App\WindowsDriverInstaller.cs" Link="WindowsDriverInstaller.cs" />
     <!-- Same reason: the localization text lookup and the preference file are plain BCL code,
          so they are compiled into this assembly instead of referencing the WPF App project. -->

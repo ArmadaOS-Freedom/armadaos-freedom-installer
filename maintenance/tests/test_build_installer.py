@@ -68,6 +68,11 @@ def _build_fixture_repo(root):
         "vendor/qualcomm/g4/firehose.melf": G4_MELF,
         "vendor/qualcomm/tb710fu/firehose.melf": TB710FU_MELF,
     }
+    for package in ("google", "oplus"):
+        for name in ("android_winusb.inf", "androidwinusba64.cat",
+                     "amd64/WdfCoInstaller01009.dll",
+                     "amd64/winusbcoinstaller2.dll" if package == "google" else "amd64/WinUSBCoInstaller2.dll"):
+            vendor[f"vendor/android/{package}/{name}"] = DRIVER_INF
     # fabricate G5 loader files (only existence validation needed by prepare)
     for name in (
         "multi_image_qti.mbn",
