@@ -738,7 +738,6 @@ public partial class MainWindow : Window
         "install-tf" => "Dynamic.Mode.InstallTf",
         "prepare" => "Dynamic.Mode.Prepare",
         "repair" => "Dynamic.Mode.Repair",
-        "restore" => "Dynamic.Mode.Restore",
         "uninstall" => "Dynamic.Mode.Uninstall",
         _ => null,
     };
@@ -749,7 +748,6 @@ public partial class MainWindow : Window
         "install-tf" => "Dynamic.ModeHint.InstallTf",
         "prepare" => "Dynamic.ModeHint.Prepare",
         "repair" => "Dynamic.ModeHint.Repair",
-        "restore" => "Dynamic.ModeHint.Restore",
         _ => "Dynamic.ModeHint.Uninstall",
     };
 
@@ -759,7 +757,6 @@ public partial class MainWindow : Window
         "install-tf" => "Dynamic.ConfirmTitle.InstallTf",
         "prepare" => "Dynamic.ConfirmTitle.Prepare",
         "repair" => "Dynamic.ConfirmTitle.Repair",
-        "restore" => "Dynamic.ConfirmTitle.Restore",
         _ => "Dynamic.ConfirmTitle.Uninstall",
     };
 
@@ -769,7 +766,6 @@ public partial class MainWindow : Window
         "install-tf" => "Dynamic.Action.InstallTf",
         "prepare" => "Dynamic.Action.Prepare",
         "repair" => "Dynamic.Action.Repair",
-        "restore" => "Dynamic.Action.Restore",
         _ => "Dynamic.Action.Uninstall",
     };
 

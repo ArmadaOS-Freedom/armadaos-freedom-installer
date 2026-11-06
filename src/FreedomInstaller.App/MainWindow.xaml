@@ -891,7 +891,7 @@
                                Style="{StaticResource CaptionText}"
                                Margin="8,4,0,8" />
 
-                    <!-- 原有三页步骤标签：TF 卡安装、更新前准备、更新后修复、恢复 boot 与卸载继续使用。 -->
+                    <!-- 原有三页步骤标签：TF 卡安装、更新前准备、更新后修复与卸载继续使用。 -->
                     <StackPanel x:Name="LegacyStepNav">
                         <RadioButton x:Name="NavConnect"
                                      GroupName="StepNav"
@@ -3600,39 +3600,6 @@
                                 </Grid>
                             </Button>
 
-                            <Button Tag="restore"
-                                    Click="OnSelectOperation"
-                                    Style="{StaticResource FunctionCard}"
-                                    Margin="0,0,12,12">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Border Grid.Column="0" Style="{StaticResource FunctionCardIcon}">
-                                        <Path Data="M 5 10 H 14 C 17 10 17 16 14 16 H 9 M 5 10 L 9 6 M 5 10 L 9 14"
-                                              Width="18"
-                                              Height="18"
-                                              Stretch="Uniform"
-                                              HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              Stroke="{DynamicResource AccentBrush}"
-                                              StrokeThickness="1.8" />
-                                    </Border>
-                                    <StackPanel Grid.Column="1">
-                                        <TextBlock Text="{DynamicResource Static.Function.Restore.Title}"
-                                                   FontSize="16"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="{DynamicResource InkBrush}"
-                                                   TextWrapping="Wrap" />
-                                        <TextBlock Text="{DynamicResource Static.Function.Restore.Desc}"
-                                                   FontSize="12"
-                                                   Foreground="{DynamicResource MutedBrush}"
-                                                   TextWrapping="Wrap"
-                                                   Margin="0,6,0,0" />
-                                    </StackPanel>
-                                </Grid>
-                            </Button>
 
                             <Button Tag="uninstall"
                                     Click="OnSelectOperation"
@@ -3670,7 +3637,7 @@
 
                             <!--
                                 9008 全局备份 / 恢复：两张独立卡片，只切到全局页对应视图，
-                                不写入五种功能的操作标签，也不进入任何安装向导。
+                                不写入四种功能的操作标签，也不进入任何安装向导。
                             -->
                             <Button Click="OnOpenGlobalBackupFromHome"
                                     Style="{StaticResource FunctionCard}"

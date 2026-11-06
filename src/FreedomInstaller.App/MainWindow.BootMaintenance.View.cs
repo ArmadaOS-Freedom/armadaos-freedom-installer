@@ -21,7 +21,7 @@ public partial class MainWindow
     private string? _bootMaintenancePackagePath;
 
     private bool IsBootMaintenanceMode =>
-        CurrentModeTag() is "prepare" or "repair" or "restore";
+        CurrentModeTag() is "prepare" or "repair";
 
     private bool UsesSharedDevicePreparationPages =>
         IsInternalInstallMode || IsBootMaintenanceMode || IsModernUserdataUninstallMode || IsModernTfInstallMode;
@@ -34,7 +34,6 @@ public partial class MainWindow
             {
                 "prepare" => MaintenanceMode.BeforeUpdate,
                 "repair" => MaintenanceMode.AfterUpdate,
-                "restore" => MaintenanceMode.RestoreStock,
                 _ => throw new InvalidOperationException(
                     $"Unknown boot maintenance mode '{CurrentModeTag()}'; no default fallback."),
             };
@@ -355,7 +354,6 @@ public partial class MainWindow
         {
             MaintenanceMode.BeforeUpdate => "Dynamic.BootMaintenance.Risk.BeforeUpdate",
             MaintenanceMode.AfterUpdate => "Dynamic.BootMaintenance.Risk.AfterUpdate",
-            MaintenanceMode.RestoreStock => "Dynamic.BootMaintenance.Risk.RestoreStock",
             _ => throw new InvalidOperationException($"Unknown maintenance mode '{mode}'."),
         };
     }
@@ -430,7 +428,7 @@ public partial class MainWindow
                 return false;
             }
 
-            // BeforeUpdate/RestoreStock 必须已选原厂恢复来源；AfterUpdate 允许项目/安装包为空（可能沿用模板）。
+            // BeforeUpdate 必须已选原厂恢复来源；AfterUpdate 允许项目/安装包为空（可能沿用模板）。
             if (CurrentBootMaintenanceMode != MaintenanceMode.AfterUpdate
                 && string.IsNullOrWhiteSpace(_bootMaintenanceOriginalDirectory))
             {
