@@ -22,6 +22,7 @@ public partial class MainWindow
 {
     /// <summary>当前四步向导所在的步骤，仅表示界面位置，不代表任何设备结论。</summary>
     private int _internalInstallStep;
+    private bool _internalInstallBoardBackupDetected;
 
     /// <summary>程序化勾选侧栏步骤时抑制 Checked 事件，避免导航处理递归调用。</summary>
     private bool _suppressInternalInstallNav;
@@ -387,7 +388,9 @@ public partial class MainWindow
             && _internalInstallStep < 3
             && (_internalInstallStep == 2
                 ? HasInternalInstallAllocationInputs
-                : CanEnterInternalInstallStep(_internalInstallStep + 1));
+                : CanEnterInternalInstallStep(_internalInstallStep + 1)
+                    || (_internalInstallStep == 1 && checkedDevice && _internalInstallBoardBackupDetected
+                        && !_internalInstallBackupUseExisting));
         ActionButton.Visibility = Visibility.Collapsed;
         ActionButton.IsEnabled = false;
 
@@ -406,6 +409,8 @@ public partial class MainWindow
             && checkedDevice;
 
         InternalInstallBackupBrowseButton.IsEnabled = backupEditable;
+        InternalInstallBoardBackupHint.Visibility = _internalInstallBoardBackupDetected
+            ? Visibility.Visible : Visibility.Collapsed;
         InternalInstallBackupUseExistingCheck.IsEnabled = backupEditable;
         InternalInstallBackupExistingBrowseButton.IsEnabled =
             backupEditable && useExistingBackup;

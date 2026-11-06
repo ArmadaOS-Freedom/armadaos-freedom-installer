@@ -5,7 +5,8 @@ namespace FreedomInstaller.Core;
 /// <summary>The explicit mutable tail of a v3 ARMADA_BACKUP image.
 /// UUID bytes are RFC 4122 order, matching kShimC after GPT UUID conversion.
 /// Recovery validates the immutable descriptor and reserved bytes. Both settings
-/// slots remain independent of recovery validation, including interrupted writes.</summary>
+/// slots and v2 diagnostic log slots remain independent of recovery validation,
+/// including interrupted writes.</summary>
 internal static class BootSettingsRegion
 {
     internal const int Bytes = 65536;
@@ -48,10 +49,20 @@ internal static class BootSettingsRegion
 
     internal static void VerifyRegion(byte[] region, Guid partition, Guid installation, string model, long payloadEnd)
     {
-        if (region.Length != Bytes ||
-            !region.AsSpan(0, SlotBytes).SequenceEqual(CreateDescriptor(partition, installation, model, payloadEnd)))
+        if (region.Length != Bytes)
             throw new InvalidDataException("The launcher settings descriptor does not match this archive.");
-        foreach (byte value in region.AsSpan(3 * SlotBytes))
+        uint version = BinaryPrimitives.ReadUInt32LittleEndian(region.AsSpan(8));
+        if (version is not (1 or 2))
+            throw new InvalidDataException("The launcher settings descriptor version is not supported.");
+        var expected = CreateDescriptor(partition, installation, model, payloadEnd);
+        BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(8), version);
+        BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(4092),
+            InternalInstallArtifacts.Crc32(expected.AsSpan(0, 4092)));
+        if (!region.AsSpan(0, SlotBytes).SequenceEqual(expected))
+            throw new InvalidDataException("The launcher settings descriptor does not match this archive.");
+        // kShimC v2 assigns 12288..28672 to two mutable 8 KiB diagnostic log slots.
+        int reservedFrom = version == 2 ? 28672 : 3 * SlotBytes;
+        foreach (byte value in region.AsSpan(reservedFrom))
             if (value != 0)
                 throw new InvalidDataException("The reserved launcher settings tail is not zero filled.");
     }

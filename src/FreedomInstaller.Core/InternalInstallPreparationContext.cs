@@ -386,6 +386,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
             ArtifactFacts artifactFacts = BindArtifacts(
                 artifactSet,
+                backup,
                 backupFacts,
                 identity,
                 firmware,
@@ -635,6 +636,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
             ArtifactFacts artifactFacts = BindArtifacts(
                 artifactSet,
+                backup,
                 backupFacts,
                 identity,
                 firmware,
@@ -2086,7 +2088,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
     private static BackupFacts BindBackup(
         InternalBackupSet backup,
         List<HeldClaim> claims,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireCurrentFirmware = true)
     {
         if (string.IsNullOrWhiteSpace(backup.DirectoryPath))
         {
@@ -2166,7 +2169,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         }
 
         JsonElement firmwareElement = RequireObject(identityElement, "firmware");
-        if (firmware is null
+        if (requireCurrentFirmware && (firmware is null
             || !string.Equals(RequireString(firmwareElement, "displayId"), firmware.DisplayId, StringComparison.Ordinal)
             || !string.Equals(
                 RequireString(firmwareElement, "buildFingerprint"),
@@ -2183,7 +2186,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             || !string.Equals(
                 RequireString(firmwareElement, "androidReportedBootloaderState"),
                 firmware.AndroidReportedBootloaderState.ToString(),
-                StringComparison.Ordinal))
+                StringComparison.Ordinal)))
         {
             throw new InvalidDataException("The backup manifest firmware does not agree with the backup binding.");
         }
@@ -2491,6 +2494,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     private static ArtifactFacts BindArtifacts(
         InternalArtifactSet artifacts,
+        InternalBackupSet currentBackup,
         BackupFacts backup,
         DeviceIdentity identity,
         FirmwareSnapshot firmware,
@@ -2609,15 +2613,25 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             held["board-summary"].Stream.Position = 0;
         }
 
+        var recoveryFacts = backup;
+        if (artifacts.RecoveryBackup is { } recoverySource)
+        {
+            BoardRecoveryBackup.ValidateSource(currentBackup, recoverySource);
+            recoveryFacts = BindBackup(recoverySource, claims, cancellationToken, requireCurrentFirmware: false);
+        }
+        else if (InternalPartitionPlanner.FindReusableBackup(original) is not null)
+        {
+            throw new InvalidDataException("The retained recovery partition has no verified original recovery source.");
+        }
         RequireRecoveryBindings(
             recovery,
             artifacts.InstallationId,
             artifacts.PlanSha256,
-            backup.ManifestSha256,
-            original.SourceFingerprint,
+            recoveryFacts.ManifestSha256,
+            recoveryFacts.Tables[0].SourceFingerprint,
             rewrite.PostTable.SourceFingerprint,
             PlannedOwnedUuids(rewrite),
-            TrustedRecoveryEntries(backup, held));
+            TrustedRecoveryEntries(recoveryFacts, held));
 
         return new ArtifactFacts
         {
@@ -3291,6 +3305,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         foreach (JsonElement entry in element.EnumerateArray())
         {
             NewPartition planned = rewrite.NewPartitions[index++];
+            var postPartition = rewrite.PostTable.Partitions.Single(p => p.Number == planned.Number);
             if (!string.Equals(RequireString(entry, "name"), planned.Name, StringComparison.Ordinal)
                 || RequireInt64(entry, "number") != planned.Number
                 || !string.Equals(
@@ -3298,7 +3313,9 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                     planned.PartUuid.ToString("D").ToUpperInvariant(),
                     StringComparison.Ordinal)
                 || RequireInt64(entry, "startSector") != planned.StartSector
-                || RequireInt64(entry, "sectorCount") != planned.SectorCount)
+                || RequireInt64(entry, "sectorCount") != planned.SectorCount
+                || RequireUInt64(entry, "attributes") != postPartition.Attributes
+                || !string.Equals(RequireString(entry, "typeGuid"), postPartition.TypeGuid, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidDataException("The installation record describes a different new partition.");
             }

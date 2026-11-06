@@ -247,7 +247,7 @@ def _new_layout(
 class UninstallTailBackupRegressionTests(unittest.TestCase):
     maxDiff = None
 
-    def test_aligned_tail_is_retained_by_real_gpt_bridge(self) -> None:
+    def test_aligned_tail_and_padding_are_reclaimed_by_real_gpt_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             # The 512-byte fixture ends nine sectors before a MiB boundary.
@@ -256,14 +256,14 @@ class UninstallTailBackupRegressionTests(unittest.TestCase):
             backup = next(e for e in disk.entries if e.name == "ARMADA_BACKUP")
             self.assertEqual(0, (backup.last_lba + 1) % 2048)
             plan = edl_gpt_cli.prepare_plan(request)
-            self.assertEqual(backup.first_lba, plan["userdataEndLbaExclusive"])
+            self.assertEqual(meta["userdataEndLbaExclusive"], plan["userdataEndLbaExclusive"])
             rebuilt = portable_gpt.read_gpt(portable_gpt.GptImageReader(
                 Path(plan["postPrimary"]["path"]).read_bytes(),
                 Path(plan["postBackup"]["path"]).read_bytes(), meta["diskBytes"]),
                 request["sectorSize"], meta["diskBytes"])
-            retained = next(e for e in rebuilt.entries if e.name == "ARMADA_BACKUP")
-            self.assertEqual(backup, retained)
-            self.assertFalse(any(e.name in ("ARMADA_BOOT", "ARMADA_ROOT") for e in rebuilt.entries))
+            self.assertFalse(any(e.name.startswith("ARMADA_") for e in rebuilt.entries))
+            userdata = next(e for e in rebuilt.entries if e.name == "userdata")
+            self.assertEqual(meta["userdataEndLbaExclusive"], userdata.last_lba + 1)
 
     def test_arbitrary_tail_padding_is_rejected(self) -> None:
         for padding in (1, 2038, 2040, 4087):
@@ -275,7 +275,7 @@ class UninstallTailBackupRegressionTests(unittest.TestCase):
 
     # ------------------------------------------------------------ accepted layouts
 
-    def test_new_layout_plan_preserves_backup_and_restores_boot_root_only(self) -> None:
+    def test_new_layout_plan_reclaims_all_three_partitions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             request, meta = _new_layout(tmp)
@@ -298,18 +298,16 @@ class UninstallTailBackupRegressionTests(unittest.TestCase):
 
             plan = edl_gpt_cli.prepare_plan(request)
 
-            # Exactly the two owned boot/root slots go; the backup is retained.
-            self.assertEqual(sorted(plan["removedPartitionNumbers"]), [17, 18])
+            self.assertEqual(sorted(plan["removedPartitionNumbers"]), [17, 18, 19])
             self.assertEqual(plan["userdataStartLba"], meta["userdataStartLba"])
             self.assertEqual(
                 plan["userdataEndLbaExclusive"],
-                meta["userdataEndLbaExclusive"] - TWO_GIB // sector,
+                meta["userdataEndLbaExclusive"],
             )
             self.assertEqual(
                 plan["restoredBytes"],
                 (
                     meta["userdataEndLbaExclusive"]
-                    - TWO_GIB // sector
                     - meta["userdataStartLba"]
                 )
                 * sector,
@@ -339,44 +337,24 @@ class UninstallTailBackupRegressionTests(unittest.TestCase):
                 meta["diskBytes"],
             )
 
-            # Exactly the three retained partitions remain: proinfo, the enlarged userdata and
-            # the untouched backup.
+            # Factory vendor partitions survive and userdata spans the complete original extent.
             self.assertEqual(
                 sorted(entry.name for entry in rebuilt.entries),
-                ["ARMADA_BACKUP", "proinfo", "userdata"],
+                ["proinfo", "userdata"],
             )
             self.assertEqual(
-                sorted(entry.number for entry in rebuilt.entries), [15, 16, 19]
+                sorted(entry.number for entry in rebuilt.entries), [15, 16]
             )
 
-            pre_backup = [
-                entry
-                for entry in disk.entries
-                if entry.name == "ARMADA_BACKUP"
-            ]
-            self.assertEqual(len(pre_backup), 1)
-            pre_entry = pre_backup[0]
-
             post_names = [entry.name for entry in rebuilt.entries]
-            self.assertEqual(post_names.count("ARMADA_BACKUP"), 1)
-            post_entry = [
-                entry
-                for entry in rebuilt.entries
-                if entry.name == "ARMADA_BACKUP"
-            ][0]
-            self.assertEqual(post_entry.number, 19)
-            self.assertEqual(post_entry.type_guid, pre_entry.type_guid)
-            self.assertEqual(post_entry.part_uuid, pre_entry.part_uuid)
-            self.assertEqual(post_entry.first_lba, pre_entry.first_lba)
-            self.assertEqual(post_entry.last_lba, pre_entry.last_lba)
-            self.assertEqual(post_entry.raw, pre_entry.raw)
+            self.assertNotIn("ARMADA_BACKUP", post_names)
 
             userdata = [
                 entry for entry in rebuilt.entries if entry.name == "userdata"
             ]
             self.assertEqual(len(userdata), 1)
             self.assertEqual(
-                userdata[0].last_lba, pre_entry.first_lba - 1
+                userdata[0].last_lba, meta["userdataEndLbaExclusive"] - 1
             )
 
     def test_legacy_two_tail_request_still_plans_only_boot_and_root(self) -> None:
@@ -406,6 +384,22 @@ class UninstallTailBackupRegressionTests(unittest.TestCase):
                 (meta["userdataEndLbaExclusive"] - meta["userdataStartLba"])
                 * request["sectorSize"],
             )
+
+    def test_explicit_keep_backup_preserves_entry_and_stops_userdata_before_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            request, meta = _new_layout(Path(temporary), tail_padding_sectors=2039)
+            request["reclaimBoardBackup"] = False
+            before = _read_gpt(request, meta)
+            backup = next(e for e in before.entries if e.name == "ARMADA_BACKUP")
+            plan = edl_gpt_cli.prepare_plan(request)
+            after = portable_gpt.read_gpt(portable_gpt.GptImageReader(
+                Path(plan["postPrimary"]["path"]).read_bytes(),
+                Path(plan["postBackup"]["path"]).read_bytes(), meta["diskBytes"]),
+                request["sectorSize"], meta["diskBytes"])
+            self.assertNotIn(backup.number, plan["removedPartitionNumbers"])
+            self.assertEqual(backup, next(e for e in after.entries if e.name == "ARMADA_BACKUP"))
+            self.assertEqual(backup.first_lba, plan["userdataEndLbaExclusive"])
+            self.assertEqual(backup.first_lba - 1, next(e for e in after.entries if e.name == "userdata").last_lba)
 
     # ------------------------------------------------------------ rejected layouts
 

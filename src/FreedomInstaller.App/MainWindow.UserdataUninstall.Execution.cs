@@ -147,7 +147,7 @@ public partial class MainWindow
         var powerLine = InternalInstallPowerText.Text;
 
         var retained = inputs.Record.BoardBackupPartUuid is not null
-            ? T("Dynamic.UserdataUninstall.RetainedBackup") + "\n"
+            ? T(_userdataUninstallReclaimBackup ? "Dynamic.UserdataUninstall.RetainedBackup" : "Dynamic.UserdataUninstall.KeepBackup") + "\n"
             : string.Empty;
         var bootBehaviorLine = capturedRestoreStock
             ? T("Dynamic.UserdataUninstall.Runtime.ConfirmBody.BootBehavior.RestoreStock")

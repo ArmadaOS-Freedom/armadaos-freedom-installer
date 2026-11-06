@@ -2174,6 +2174,10 @@
                                            TextWrapping="Wrap"
                                            FontSize="13" />
                             </CheckBox>
+                            <TextBlock x:Name="InternalInstallBoardBackupHint"
+                                       Visibility="Collapsed" Margin="0,10,0,0"
+                                       Text="{DynamicResource Dynamic.InternalInstall.Backup.BoardAvailable}"
+                                       Style="{StaticResource CaptionText}" />
 
                             <StackPanel x:Name="InternalInstallBackupExistingRow"
                                         Visibility="Collapsed"
@@ -2742,6 +2746,15 @@
                                                Margin="0,6,0,0" />
 
                                     <!-- 卸载专用：恢复原厂安卓引导（默认不勾选，其他模式隐藏）。 -->
+                                    <Button x:Name="UninstallUseBoardBackupButton" Visibility="Collapsed"
+                                            HorizontalAlignment="Left" Margin="0,8,0,0"
+                                            Content="{DynamicResource Dynamic.UserdataUninstall.UseBoardBackup}"
+                                            Click="OnUseBoardUninstallBackup" />
+                                    <CheckBox x:Name="UninstallReclaimBackupCheck" Visibility="Collapsed"
+                                              Style="{StaticResource RiskCheckBox}" Margin="0,10,0,0" IsChecked="True"
+                                              Content="{DynamicResource Dynamic.UserdataUninstall.ReclaimBackup}"
+                                              Checked="OnUserdataUninstallReclaimBackupChanged"
+                                              Unchecked="OnUserdataUninstallReclaimBackupChanged" />
                                     <CheckBox x:Name="BootMaintenanceRestoreStockCheck"
                                               Style="{StaticResource RiskCheckBox}"
                                               Visibility="Collapsed"

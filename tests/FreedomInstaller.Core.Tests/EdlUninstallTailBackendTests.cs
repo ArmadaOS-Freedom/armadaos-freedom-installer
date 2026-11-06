@@ -39,11 +39,11 @@ public sealed class EdlUninstallTailBackendTests : IClassFixture<EdlClientToolch
             CancellationToken.None);
 
         Assert.Equal(TailBackupConstants.BoardBackupPartUuid, backend.Inputs.Record.BoardBackupPartUuid, ignoreCase: true);
-        Assert.Equal(TailBackupConstants.BackupStartSector, backend.Inputs.Plan.UserdataEndSectorExclusive);
+        Assert.Equal(TailBackupConstants.FactoryEndSector, backend.Inputs.Plan.UserdataEndSectorExclusive);
         Assert.Equal(
-            480765116416L,
+            TailBackupConstants.ExpectedRestoredBytes,
             backend.Inputs.Plan.RestoredAndroidBytes);
-        Assert.Equal(new long[] { 4L, 5L }, backend.Inputs.Plan.RemovedPartitionNumbers);
+        Assert.Equal(new long[] { 4L, 5L, 6L }, backend.Inputs.Plan.RemovedPartitionNumbers);
 
         JsonElement request = Assert.Single(context.Wrapper.CapturedGptRequests);
         Assert.Equal(
@@ -110,16 +110,13 @@ public sealed class EdlUninstallTailBackendTests : IClassFixture<EdlClientToolch
     }
 
     [Fact]
-    public async Task CreatePreparedAsync_CounterfeitKeepClaimButPostDropsBackup_ThrowsRetentionGuard()
+    public async Task CreatePreparedAsync_CounterfeitReclaimClaimButPostKeepsBackup_IsRejected()
     {
         TailCaseContext context = CreateCase(
-            nameof(CreatePreparedAsync_CounterfeitKeepClaimButPostDropsBackup_ThrowsRetentionGuard),
+            nameof(CreatePreparedAsync_CounterfeitReclaimClaimButPostKeepsBackup_IsRejected),
             counterfeitScalars: true);
 
-        // The response keeps real region/post files and their hashes (geometry, range,
-        // hash, overlay and CRC proofs all pass); only the claimed scalars pretend the
-        // backup was retained while the actual post images were built from the plain
-        // factory table, which has no backup partition.
+        // Actual post bytes retain BACKUP, while response scalars claim full reclaim.
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => EdlUninstallBackend.CreatePreparedAsync(
                 context.Client,
@@ -130,7 +127,7 @@ public sealed class EdlUninstallTailBackendTests : IClassFixture<EdlClientToolch
                 context.Wrapper,
                 CancellationToken.None));
 
-        Assert.Contains("board backup partition", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("partitions instead of", error.Message, StringComparison.OrdinalIgnoreCase);
 
         JsonElement request = Assert.Single(context.Wrapper.CapturedGptRequests);
         Assert.Equal(
@@ -142,7 +139,27 @@ public sealed class EdlUninstallTailBackendTests : IClassFixture<EdlClientToolch
         Assert.Equal(0, context.Inner.DeviceResetCount);
     }
 
-    private TailCaseContext CreateCase(string testName, bool counterfeitScalars)
+    [Fact]
+    public async Task KeepBackupOptionAcceptsMatchingPostTableAndIsBoundToRequest()
+    {
+        var context = CreateCase(nameof(KeepBackupOptionAcceptsMatchingPostTableAndIsBoundToRequest), false, keepBackup: true);
+        var factory = typeof(EdlUninstallBackend).GetMethod("CreatePreparedCoreAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        using var backend = await (Task<EdlUninstallBackend>)factory.Invoke(null, new object?[] {
+            context.Client, context.Client.Toolchain, context.Client.Binding,
+            new UninstallGptAssets(context.OriginalPrimaryPath, context.OriginalBackupPath),
+            context.CaseDirectory, context.Wrapper, null, null, null, null,
+            CancellationToken.None, null, false })!;
+        var request = Assert.Single(context.Wrapper.CapturedGptRequests);
+        Assert.False(request.GetProperty("reclaimBoardBackup").GetBoolean());
+        Assert.Equal(new long[] { 4, 5 }, backend.Inputs.Plan.RemovedPartitionNumbers);
+        var backup = backend.Inputs.CurrentTable.Partitions.Single(p => p.Name == "ARMADA_BACKUP");
+        Assert.Equal(backup.StartSector, backend.Inputs.Plan.UserdataEndSectorExclusive);
+        Assert.Equal(0, context.Inner.DeviceWriteCount);
+        Assert.Equal(0, context.Inner.DeviceResetCount);
+    }
+
+    private TailCaseContext CreateCase(string testName, bool counterfeitScalars, bool keepBackup = false)
     {
         EdlToolchain tools = _fixture.Toolchain;
         string caseDirectory = _fixture.NewCaseDirectory(testName);
@@ -171,7 +188,7 @@ public sealed class EdlUninstallTailBackendTests : IClassFixture<EdlClientToolch
 
         // Known expected post layout: factory proinfo/misc, userdata restored to
         // originalStart..(originalEnd - 2GiB), retained backup entry, no BOOT/ROOT.
-        GptImage expectedPostImage = TailBackupConstants.BuildExpectedPostImage();
+        GptImage expectedPostImage = TailBackupConstants.BuildExpectedPostImage(counterfeitScalars || keepBackup);
         byte[] expectedPostPrimaryFragment = expectedPostImage.BuildPrimaryFragment();
         byte[] expectedPostBackupFragment = expectedPostImage.BuildBackupFragment();
         string expectedPostPrimaryPath = Path.Combine(caseDirectory, "expected-post-primary.bin");
@@ -224,7 +241,9 @@ internal static class TailBackupConstants
     public const ulong BoardBackupAttributes = 1UL << 60;
 
     public const long ExpectedRestoredBytes =
-        (EbFixture.OriginalUserdataCount - TwoGiBSectors - TailPaddingSectors) * EbFixture.SectorSize;
+        EbFixture.OriginalUserdataCount * EbFixture.SectorSize;
+
+    public const long FactoryEndSector = EbFixture.UserdataStart + EbFixture.OriginalUserdataCount;
 
     public static GptImage BuildCurrentImage() => new(
         EbFixture.SectorSize,
@@ -242,7 +261,7 @@ internal static class TailBackupConstants
             new GptPartitionSpec(6, "ARMADA_BACKUP", EbFixture.LinuxType, BoardBackupPartUuid, BackupStartSector, TwoGiBSectors, BoardBackupAttributes),
         });
 
-    public static GptImage BuildExpectedPostImage() => new(
+    public static GptImage BuildExpectedPostImage(bool keepBackup = false) => new(
         EbFixture.SectorSize,
         EbFixture.Lun0DiskBytes,
         EbFixture.DiskGuid,
@@ -252,9 +271,10 @@ internal static class TailBackupConstants
         {
             new GptPartitionSpec(1, "proinfo", EbFixture.ProinfoType, EbFixture.ProinfoUuid, EbFixture.ProinfoStart, EbFixture.ProinfoCount, 0UL),
             new GptPartitionSpec(2, "misc", EbFixture.ProinfoType, EbFixture.MiscUuid, EbFixture.OriginalMiscStart, EbFixture.MiscCount, 0UL),
-            new GptPartitionSpec(3, "userdata", EbFixture.UserdataType, EbFixture.UserdataUuid, EbFixture.UserdataStart, EbFixture.OriginalUserdataCount - TwoGiBSectors - TailPaddingSectors, 0UL),
-            new GptPartitionSpec(6, "ARMADA_BACKUP", EbFixture.LinuxType, BoardBackupPartUuid, BackupStartSector, TwoGiBSectors, BoardBackupAttributes),
-        });
+            new GptPartitionSpec(3, "userdata", EbFixture.UserdataType, EbFixture.UserdataUuid, EbFixture.UserdataStart,
+                keepBackup ? EbFixture.OriginalUserdataCount - TwoGiBSectors - TailPaddingSectors : EbFixture.OriginalUserdataCount, 0UL),
+        }.Concat(keepBackup ? new[] { new GptPartitionSpec(6, "ARMADA_BACKUP", EbFixture.LinuxType,
+            BoardBackupPartUuid, BackupStartSector, TwoGiBSectors, BoardBackupAttributes) } : Array.Empty<GptPartitionSpec>()).ToArray());
 }
 
 internal sealed record TailCaseContext(
@@ -330,14 +350,6 @@ internal sealed class TailGptInterceptRunner : ICommandRunner
             CapturedGptRequests.Add(document.RootElement.Clone());
         }
 
-        if (_counterfeitScalars)
-        {
-            // Forward the backend's original request untouched: the fake builds the post
-            // images from the plain factory table, so the actual post drops the backup.
-            ProcessResult raw = await _inner.RunAsync(command, cancellationToken);
-            return CounterfeitResponse(raw);
-        }
-
         // Positive variant: clone the request into a test-owned file and swap only the
         // originalPrimary/originalBackup references to the known expected post fixture.
         string clonePath = Path.Combine(_caseDirectory, $"gpt-request-expected-{_cloneCounter++}.json");
@@ -348,7 +360,8 @@ internal sealed class TailGptInterceptRunner : ICommandRunner
 
         var arguments = command.Arguments.ToList();
         arguments[^1] = clonePath;
-        return await _inner.RunAsync(command with { Arguments = arguments }, cancellationToken);
+        var result = await _inner.RunAsync(command with { Arguments = arguments }, cancellationToken);
+        return _counterfeitScalars ? CounterfeitResponse(result) : result;
     }
 
     private static void ApplyExpectedPost(JsonNode request, string primaryPath, string backupPath)
@@ -372,9 +385,9 @@ internal sealed class TailGptInterceptRunner : ICommandRunner
             ?? throw new InvalidOperationException("tail005: response missing plan");
 
         // Only the claimed scalars lie; region/post files and their hashes stay real.
-        plan["userdataEndLbaExclusive"] = TailBackupConstants.BackupStartSector;
+        plan["userdataEndLbaExclusive"] = TailBackupConstants.FactoryEndSector;
         plan["restoredBytes"] = TailBackupConstants.ExpectedRestoredBytes;
-        plan["removedPartitionNumbers"] = new JsonArray(4, 5);
+        plan["removedPartitionNumbers"] = new JsonArray(4, 5, 6);
 
         return new ProcessResult(raw.ExitCode, response.ToJsonString(), raw.StandardError);
     }

@@ -371,7 +371,8 @@ public static class UninstallEvidenceValidator
         DeviceIdentity identity,
         GptTable original,
         GptTable current,
-        string currentTableFingerprint)
+        string currentTableFingerprint,
+        bool reclaimBoardBackup = true)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(original);
@@ -662,7 +663,7 @@ public static class UninstallEvidenceValidator
                 partition.PartUuid));
         }
 
-        var plan = UninstallPlanner.Plan(new DiskLayout(currentDeviceId, current.SectorSize, diskPartitions), record);
+        var plan = UninstallPlanner.Plan(new DiskLayout(currentDeviceId, current.SectorSize, diskPartitions), record, reclaimBoardBackup);
 
         var evidenceFingerprint = ComputeEvidenceFingerprint(
             identity, original, current, currentTableFingerprint, record, plan);
@@ -734,7 +735,8 @@ public static class UninstallEvidenceValidator
         DeviceIdentity identity,
         GptTable original,
         GptTable currentRaw,
-        int lun)
+        int lun,
+        bool reclaimBoardBackup = true)
     {
         const string EdlDeviceId = "edl:ufs:lun:0";
 
@@ -777,7 +779,7 @@ public static class UninstallEvidenceValidator
             currentRaw.SourceFingerprint);
 
         // The raw fingerprint stays the evidence fingerprint: the snapshot is a relabelling, not new evidence.
-        return Validate(identity, original, attachedCurrent, currentRaw.SourceFingerprint);
+        return Validate(identity, original, attachedCurrent, currentRaw.SourceFingerprint, reclaimBoardBackup);
     }
 
     /// <summary>Reads the partition number out of the reported node, never out of the list position.</summary>

@@ -23,7 +23,7 @@ namespace FreedomInstaller.Core.Tests;
 /// real device, process, USB endpoint or actual 52 file backup is touched; the manager runs these tests remotely.
 /// </para>
 /// </summary>
-public sealed class InternalInstallExistingBackupTests : IClassFixture<EdlClientToolchainFixture>
+public sealed partial class InternalInstallExistingBackupTests : IClassFixture<EdlClientToolchainFixture>
 {
     private const string ManifestFileName = "backup-manifest.json";
     private const string SidecarSuffix = ".sha256";
@@ -45,6 +45,227 @@ public sealed class InternalInstallExistingBackupTests : IClassFixture<EdlClient
     public InternalInstallExistingBackupTests(EdlClientToolchainFixture fixture)
     {
         _fixture = fixture;
+    }
+
+    [Fact]
+    public async Task BoardRecovery_RoundTripsFactoryBackupAcrossFirmwareUpdateAndRejectsOtherDevice()
+    {
+        var parent = _fixture.NewCaseDirectory(nameof(BoardRecovery_RoundTripsFactoryBackupAcrossFirmwareUpdateAndRejectsOtherDevice));
+        var device = IB001SyntheticDevice.Create(archiveLayout: true);
+        var oldClient = NewClient(new IB001FakeEdlRunner(device), NewBinding(firmware: Actual120Firmware()));
+        using var original = await InternalInstallBackup.CreateAsync(oldClient, parent);
+        using var artifacts = await InternalInstallArtifacts.PrepareAsync(original, 32,
+            new PackageStorage(1L << 30, 8L << 30, 4L << 30, 1L << 30), parent);
+        var extractor = typeof(BoardRecoveryBackup).GetMethod("ExtractAsync",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        Task<string> Extract(string uuid) => (Task<string>)extractor.Invoke(null, new object[] {
+            artifacts.BoardSummary.FilePath, original.Model, uuid, parent, CancellationToken.None })!;
+
+        var before = Directory.GetDirectories(parent).Length;
+        await Assert.ThrowsAsync<InvalidDataException>(() => Extract(Guid.NewGuid().ToString()));
+        Assert.Equal(before, Directory.GetDirectories(parent).Length);
+
+        var directory = await Extract(artifacts.BackupPartition.PartUuid);
+        var runner = new IB001FakeEdlRunner(device);
+        var updatedClient = NewClient(runner, NewBinding());
+        using var recovered = await InternalInstallBackup.OpenRecoveryAsync(updatedClient, directory);
+        Assert.Equal(original.AndroidBuild, recovered.AndroidBuild);
+        Assert.NotEqual(updatedClient.Binding.AndroidIdentity!.Identity.Firmware!.DisplayId, recovered.AndroidBuild);
+        Assert.Equal(original.ManifestSha256, recovered.ManifestSha256);
+        Assert.Equal(original.Files.Count, recovered.Files.Count);
+        foreach (var capture in original.Files.Values)
+        {
+            Assert.Equal(capture.Sha256, HashFile(recovered.Files[capture.Role].FilePath), ignoreCase: true);
+            Assert.DoesNotContain(capture.Role, new[] { "userdata", "rawdump", "metadata" });
+        }
+        Assert.Empty(runner.Writes);
+        Assert.Equal(0, runner.ResetCount);
+        using var current = await InternalInstallBackup.CreateAsync(updatedClient, parent);
+        BoardRecoveryBackup.ValidateSourceForReuse(current, recovered);
+        var wrongClient = NewClient(new IB001FakeEdlRunner(device), NewBinding(serial: "OTHER_DEVICE"));
+        await Assert.ThrowsAnyAsync<Exception>(() => InternalInstallBackup.OpenRecoveryAsync(wrongClient, directory));
+        await Assert.ThrowsAnyAsync<Exception>(() => InternalInstallBackup.OpenExistingAsync(updatedClient, directory));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ValidateSourceForReuse_PreservesCurrentAttributesAndRejectsChangedUserdataIdentity(
+        bool changeUserdataIdentity)
+    {
+        var parent = _fixture.NewCaseDirectory(
+            nameof(ValidateSourceForReuse_PreservesCurrentAttributesAndRejectsChangedUserdataIdentity) +
+            (changeUserdataIdentity ? "_uuid" : "_attribute"));
+        var device = IB001SyntheticDevice.Create(archiveLayout: true);
+        var runner = new IB001FakeEdlRunner(device);
+        var client = NewClient(runner, NewBinding());
+        using var original = await InternalInstallBackup.CreateAsync(client, parent);
+        var originalFactory = original.Tables[0];
+        var originalPersist = originalFactory.Partitions.Single(p => p.Name == "persist");
+        var originalUserdata = originalFactory.Partitions.Single(p => p.Name == "userdata");
+        var changedUuid = changeUserdataIdentity ? Guid.NewGuid().ToString() : originalUserdata.PartUuid;
+        var specs = originalFactory.Partitions.Select(p => new GptPartitionSpec(p.Number, p.Name, p.TypeGuid,
+            p.Name == "userdata" ? changedUuid : p.PartUuid, p.StartSector, p.SectorCount,
+            p.Name == "persist" ? p.Attributes ^ (1UL << 60) : p.Attributes)).ToArray();
+        var changedImage = new GptImage(originalFactory.SectorSize, originalFactory.DiskBytes,
+            originalFactory.DiskGuid, originalFactory.FirstUsableSector, originalFactory.LastUsableSector, specs);
+        var captureBytes = 64 * originalFactory.SectorSize;
+        var primary = new byte[captureBytes];
+        var secondary = new byte[captureBytes];
+        var head = changedImage.BuildPrimaryFragment();
+        var tail = changedImage.BuildBackupFragment();
+        Array.Copy(head, 0, primary, 0, head.Length);
+        Array.Copy(tail, 0, secondary, secondary.Length - tail.Length, tail.Length);
+        runner.PayloadOverride = read =>
+            read.Lun == 0 && read.StartSector == 0 && read.SectorCount == 64 ? primary :
+            read.Lun == 0 && read.StartSector == device.TotalSectors(0) - 64 && read.SectorCount == 64 ? secondary :
+            null;
+
+        using var current = await InternalInstallBackup.CreateAsync(client, parent);
+        var currentPersist = current.Tables[0].Partitions.Single(p => p.Name == "persist");
+        var currentUserdata = current.Tables[0].Partitions.Single(p => p.Name == "userdata");
+
+        Assert.NotEqual(originalPersist.Attributes, currentPersist.Attributes);
+        if (changeUserdataIdentity)
+        {
+            Assert.NotEqual(originalUserdata.PartUuid, currentUserdata.PartUuid, StringComparer.OrdinalIgnoreCase);
+            Assert.Throws<InvalidDataException>(() => BoardRecoveryBackup.ValidateSourceForReuse(current, original));
+        }
+        else
+        {
+            BoardRecoveryBackup.ValidateSourceForReuse(current, original);
+        }
+
+        Assert.Equal(currentPersist.Attributes, current.Tables[0].Partitions.Single(p => p.Name == "persist").Attributes);
+        Assert.Equal(originalPersist.Attributes, original.Tables[0].Partitions.Single(p => p.Name == "persist").Attributes);
+        Assert.Empty(runner.Writes);
+        Assert.Equal(0, runner.ResetCount);
+    }
+
+    [Fact]
+    public async Task LegacyPreparation_RefusesRetainedBackupBeforePreparingOrWriting()
+    {
+        var parent = _fixture.NewCaseDirectory(nameof(LegacyPreparation_RefusesRetainedBackupBeforePreparingOrWriting));
+        var device = IB001SyntheticDevice.Create(archiveLayout: true);
+        var runner = new IB001FakeEdlRunner(device);
+        var captureClient = NewClient(runner, NewBinding());
+        using var backup = await InternalInstallBackup.CreateAsync(captureClient, parent);
+
+        var factory = backup.Tables[0];
+        var userdata = factory.Partitions.Single(p => p.Name == "userdata");
+        var alignment = (1L << 20) / factory.SectorSize;
+        var retainedEnd = (factory.LastUsableSector + 1) / alignment * alignment;
+        var retainedStart = retainedEnd - BoardArchiveBytes / factory.SectorSize;
+        var backupUuid = Guid.NewGuid().ToString();
+        var specs = factory.Partitions.Select(p => new GptPartitionSpec(p.Number, p.Name, p.TypeGuid,
+            p.PartUuid, p.StartSector, p.Name == "userdata" ? retainedStart - p.StartSector : p.SectorCount,
+            p.Attributes)).Append(new GptPartitionSpec(factory.Partitions.Max(p => p.Number) + 1,
+                "ARMADA_BACKUP", "0FC63DAF-8483-4772-8E79-3D69D8477DE4", backupUuid,
+                retainedStart, BoardArchiveBytes / factory.SectorSize, 1UL << 60)).ToArray();
+        var retainedImage = new GptImage(factory.SectorSize, factory.DiskBytes, factory.DiskGuid,
+            factory.FirstUsableSector, factory.LastUsableSector, specs);
+        var captureBytes = 64 * factory.SectorSize;
+        var primary = new byte[captureBytes];
+        var secondary = new byte[captureBytes];
+        var head = retainedImage.BuildPrimaryFragment();
+        var tail = retainedImage.BuildBackupFragment();
+        Array.Copy(head, 0, primary, 0, head.Length);
+        Array.Copy(tail, 0, secondary, secondary.Length - tail.Length, tail.Length);
+        runner.PayloadOverride = read =>
+            read.Lun == 0 && read.StartSector == 0 && read.SectorCount == 64 ? primary :
+            read.Lun == 0 && read.StartSector == device.TotalSectors(0) - 64 && read.SectorCount == 64 ? secondary :
+            null;
+
+        using var current = await InternalInstallBackup.CreateAsync(captureClient, parent);
+        var currentBackups = current.Tables[0].Partitions.Where(p => p.Name == "ARMADA_BACKUP").ToArray();
+        Assert.Single(currentBackups);
+        Assert.Equal(BoardArchiveBytes / current.Tables[0].SectorSize, currentBackups[0].SectorCount);
+
+        var readsBefore = runner.Reads.Count;
+        var constructor = typeof(InternalDeviceCheckResult).GetConstructor(
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            new[]
+            {
+                typeof(AndroidMaintenanceIdentity),
+                typeof(string),
+                typeof(string),
+                typeof(BootloaderState),
+                typeof(OtaUpdateState),
+                typeof(AndroidReturnState),
+                typeof(bool),
+                typeof(InternalDeviceCheckStage?),
+                typeof(string),
+                typeof(string),
+            },
+            modifiers: null)
+            ?? throw new InvalidOperationException(
+                "InternalDeviceCheckResult no longer exposes the ten-parameter internal constructor.");
+        var step1 = (InternalDeviceCheckResult)constructor.Invoke(new object?[]
+        {
+            captureClient.Binding.AndroidIdentity!,
+            captureClient.Binding.AndroidIdentity!.Identity.Serial,
+            "elden_prc_wifi",
+            BootloaderState.Unlocked,
+            OtaUpdateState.Completed,
+            AndroidReturnState.Verified,
+            false,
+            null,
+            null,
+            "a",
+        });
+
+        static T Uninitialized<T>() where T : class =>
+            System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(T)) as T
+            ?? throw new InvalidOperationException(typeof(T).Name + " is not a class.");
+
+        var missingEvidence = Path.Combine(parent, "missing-evidence-" + Guid.NewGuid().ToString("N"));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            InternalInstallBackend.CreatePreparedAsync(
+                step1,
+                captureClient,
+                current,
+                Uninitialized<InternalArtifactSet>(),
+                Uninitialized<ImportedPackage>(),
+                Uninitialized<InternalInstallAssets>(),
+                Uninitialized<InternalInstallServices>(),
+                missingEvidence));
+        Assert.StartsWith("retained-backup-requires-direct-install", error.Message);
+        Assert.Equal(readsBefore, runner.Reads.Count);
+        Assert.Empty(runner.Writes);
+        Assert.Equal(0, runner.ResetCount);
+        Assert.False(Directory.Exists(missingEvidence));
+    }
+
+    [Fact]
+    public async Task PreparationSnapshotReusesRecoveryMaterialAndReadsCurrentBootAndGpt()
+    {
+        var parent = _fixture.NewCaseDirectory(nameof(PreparationSnapshotReusesRecoveryMaterialAndReadsCurrentBootAndGpt));
+        var device = IB001SyntheticDevice.Create(archiveLayout: true);
+        var creator = NewClient(new IB001FakeEdlRunner(device), NewBinding());
+        using var original = await InternalInstallBackup.CreateAsync(creator, parent);
+        var runner = new IB001FakeEdlRunner(device);
+        var client = NewClient(runner, NewBinding());
+        using var source = await InternalInstallBackup.OpenRecoveryAsync(client, original.DirectoryPath);
+        var before = runner.Reads.Count;
+        using var snapshot = await InternalInstallBackup.CreatePreparationSnapshotAsync(client, source, parent);
+        foreach (var role in new[] { "persist", "modemst1", "modemst2", "fsg", "fsc", "ssd", "keystore", "frp", "cdt" })
+        {
+            if (!source.Files.TryGetValue(role, out var saved)) continue;
+            Assert.DoesNotContain(runner.Reads.Skip(before), read => read.Lun == saved.Lun && read.StartSector == saved.StartSector);
+            Assert.Equal(saved.Sha256, snapshot.Files[role].Sha256);
+            Assert.NotEqual(saved.FilePath, snapshot.Files[role].FilePath);
+        }
+        foreach (var role in new[] { "boot_a", "boot_b", "misc", "gpt_lun0_primary", "gpt_lun0_backup" })
+        {
+            var current = snapshot.Files[role];
+            Assert.Contains(runner.Reads.Skip(before), read => read.Lun == current.Lun && read.StartSector == current.StartSector);
+        }
+        Assert.Equal(original.ManifestSha256, HashFile(original.ManifestPath), ignoreCase: true);
+        Assert.Empty(runner.Writes);
+        Assert.Equal(0, runner.ResetCount);
+        await Assert.ThrowsAsync<InvalidDataException>(() => InternalInstallBackup.CreatePreparationSnapshotAsync(
+            NewClient(new IB001FakeEdlRunner(device), NewBinding(serial: "OTHER_DEVICE")), source, parent));
     }
 
     [Fact]
@@ -240,6 +461,84 @@ public sealed class InternalInstallExistingBackupTests : IClassFixture<EdlClient
             loaded.ManifestSha256, archive["pc-backup-manifest.json"].Sha256, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(IB001SyntheticDevice.BootPartitionBytes, archive["boot_a.bin"].Length);
         Assert.Equal(IB001SyntheticDevice.BootPartitionBytes, archive["boot_b.bin"].Length);
+
+        // Simulate the old uninstaller's retained backup, then reinstall using that factory source.
+        var factory = loaded.Tables[0];
+        var userdata = factory.Partitions.Single(p => p.Name == "userdata");
+        var retainedEnd = (factory.LastUsableSector + 1) / 256 * 256;
+        var retainedStart = retainedEnd - BoardArchiveBytes / factory.SectorSize;
+        var backupUuid = artifacts.BackupPartition.PartUuid;
+        var specs = factory.Partitions.Select(p => new GptPartitionSpec(p.Number, p.Name, p.TypeGuid,
+            p.PartUuid, p.StartSector, p.Name == "userdata" ? retainedStart - p.StartSector : p.SectorCount,
+            p.Attributes)).Append(new GptPartitionSpec(factory.Partitions.Max(p => p.Number) + 1,
+                "ARMADA_BACKUP", "0FC63DAF-8483-4772-8E79-3D69D8477DE4", backupUuid,
+                retainedStart, BoardArchiveBytes / factory.SectorSize, 1UL << 60)).ToArray();
+        var retainedImage = new GptImage(factory.SectorSize, factory.DiskBytes, factory.DiskGuid,
+            factory.FirstUsableSector, factory.LastUsableSector, specs);
+        var captureBytes = 64 * factory.SectorSize;
+        var primary = new byte[captureBytes];
+        var secondary = new byte[captureBytes];
+        var head = retainedImage.BuildPrimaryFragment();
+        var tail = retainedImage.BuildBackupFragment();
+        Array.Copy(head, 0, primary, 0, head.Length);
+        Array.Copy(tail, 0, secondary, secondary.Length - tail.Length, tail.Length);
+        var primaryPath = Path.Combine(artifactsParent, "retained-primary.bin");
+        var secondaryPath = Path.Combine(artifactsParent, "retained-secondary.bin");
+        File.WriteAllBytes(primaryPath, primary);
+        File.WriteAllBytes(secondaryPath, secondary);
+        device.AddWriteOverlay(0, 0, 64, primaryPath);
+        device.AddWriteOverlay(0, device.TotalSectors(0) - 64, 64, secondaryPath);
+        device.AddWriteOverlay(0, retainedStart, BoardArchiveBytes / factory.SectorSize, artifacts.BoardSummary.FilePath);
+        var changedBoot = Path.Combine(artifactsParent, "changed-boot.bin");
+        WritePattern(changedBoot, loaded.Files["boot_a"].Length, 0xDA);
+        device.AddWriteOverlay(loaded.Files["boot_a"].Lun, loaded.Files["boot_a"].StartSector,
+            loaded.Files["boot_a"].SectorCount, changedBoot);
+
+        using var current = await InternalInstallBackup.CreateAsync(openClient, backupParent);
+        Assert.NotEqual(loaded.Files["boot_a"].Sha256, current.Files["boot_a"].Sha256);
+        var scratch = Path.Combine(artifactsParent, "scratch");
+        Directory.CreateDirectory(scratch);
+        using var recovery = await BoardRecoveryBackup.ReadAsync(openClient, current, backupParent, scratch);
+        Assert.NotNull(recovery);
+        Assert.Empty(Directory.GetFileSystemEntries(scratch));
+        Assert.Equal(loaded.ManifestSha256, recovery.ManifestSha256);
+        Assert.Equal(loaded.Files["boot_a"].Sha256, recovery.Files["boot_a"].Sha256);
+        using var reinstalled = await InternalInstallArtifacts.PrepareAsync(current, 48,
+            new PackageStorage(1L << 30, 8L << 30, 4L << 30, 1L << 30), artifactsParent,
+            recoveryBackup: recovery);
+        Assert.Equal(backupUuid, reinstalled.BackupPartition.PartUuid);
+        Assert.Equal(retainedStart, reinstalled.BackupPartition.StartSector);
+        var installRecord = JsonNode.Parse(File.ReadAllText(reinstalled.InstallationRecordPath))!;
+        var backupRecord = installRecord["newPartitions"]!.AsArray().Single(p => (string?)p!["name"] == "ARMADA_BACKUP")!;
+        Assert.Equal(1UL << 60, backupRecord["attributes"]!.GetValue<ulong>());
+        var rearchived = ReadBoardArchive(reinstalled.BoardSummary.FilePath);
+        Assert.Equal(loaded.Files["boot_a"].Sha256, rearchived["boot_a.bin"].Sha256);
+        Assert.Equal(loaded.Files["boot_b"].Sha256, rearchived["boot_b.bin"].Sha256);
+        Assert.Equal(loaded.Files["gpt_lun0_primary"].Sha256, rearchived["gpt_lun0_primary.bin"].Sha256);
+        Assert.Equal(loaded.ManifestSha256, rearchived["pc-backup-manifest.json"].Sha256);
+
+        // Exercise the same artifact/backup binding gate used before confirmation.
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+        var context = typeof(InternalInstallArtifacts).Assembly.GetType("FreedomInstaller.Core.InternalInstallPreparationContext")!;
+        var claimType = context.GetNestedType("HeldClaim", System.Reflection.BindingFlags.NonPublic)!;
+        var claims = (System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(claimType))!;
+        try
+        {
+            var facts = context.GetMethod("BindBackup", flags)!.Invoke(null,
+                new object[] { current, claims, CancellationToken.None, true })!;
+            var identity = current.Binding.AndroidIdentity!.Identity;
+            var bound = context.GetMethod("BindArtifacts", flags)!.Invoke(null, new object[] {
+                reinstalled, current, facts, identity, identity.Firmware!,
+                new PackageStorage(1L << 30, 8L << 30, 4L << 30, 1L << 30),
+                CancellationToken.None, claims });
+            Assert.NotNull(bound);
+        }
+        finally
+        {
+            foreach (var claim in claims)
+                ((FileStream)claimType.GetProperty("Stream", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .GetValue(claim)!).Dispose();
+        }
     }
 
     [Fact]

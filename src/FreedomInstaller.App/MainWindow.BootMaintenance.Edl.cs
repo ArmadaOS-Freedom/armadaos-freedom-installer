@@ -46,7 +46,8 @@ public partial class MainWindow
             || HasAnyPreparedModernTfInstall
             || (IsBootMaintenanceMode && ProtectedBootMaintenanceState)
             || (IsModernUserdataUninstallMode && ProtectedModernUserdataUninstallState)
-            || HasInternalInstallLiveEdlState)
+            || (HasInternalInstallLiveEdlState
+                && !(IsModernUserdataUninstallMode && _internalInstallEdlClient?.Binding.OfflineIdentity is not null)))
         {
             return;
         }
@@ -60,19 +61,8 @@ public partial class MainWindow
 
         if (IsModernUserdataUninstallMode)
         {
-            if (!await ResolveUninstallBackupDirectoryFromSelectionAsync())
-            {
-                return;
-            }
-
-            if (_closed
-                || !IsModernUserdataUninstallMode
-                || _busy
-                || !_bootMaintenanceAlreadyEdl
-                || HasInternalInstallLiveEdlState)
-            {
-                return;
-            }
+            await CheckUninstallBoardRecoveryEdlAsync();
+            return;
         }
 
         // 历史目录来自用户已选的原厂来源；必须有真实存在的目录作为候选历史，不在此断言载荷资格。
@@ -338,17 +328,6 @@ public partial class MainWindow
                 try
                 {
                     SetInternalInstallBackupStatus(M("Dynamic.InternalInstall.Backup.Reading"));
-
-                    // 卸载模式：真实 EDL 会话与首次 Sahara 证明已建立之后、正式读取之前，
-                    // 先用只读租约核对所选原始备份与实时设备一致；不一致则在 CreateAsync 之前拒绝。
-                    if (IsModernUserdataUninstallMode)
-                    {
-                        using var validation = await InternalInstallBackup.OpenOriginalGptForUninstallAsync(
-                            activeClient,
-                            _bootMaintenanceOriginalDirectory!,
-                            progress: null,
-                            token);
-                    }
 
                     var progress = new Progress<InternalBackupProgress>(report =>
                     {

@@ -40,7 +40,7 @@ public sealed class EdlUninstallCurrentMenuTests
     }
 
     [Fact]
-    public async Task MenuUninstallSuccess_ExactWriteOrder_Readback_AndBackupRetentionAsync()
+    public async Task MenuUninstallSuccess_ExactWriteOrder_Readback_AndFullSpaceReclaimAsync()
     {
         using Harness h = await PrepareAsync();
 
@@ -472,14 +472,12 @@ public sealed class EdlUninstallCurrentMenuTests
                 maxNumber + 3, "ARMADA_BACKUP", LinuxTypeGuid, backupUuid, backupStart, 2 * GibSectors, 1UL << 60);
             currentTable.Add(backupSpec);
 
-            // ---- expected post-uninstall table: vendors + shrunk userdata + the EXACT same BACKUP;
-            //      no ARMADA_BOOT, no ARMADA_ROOT. Built and padded separately from the current image. ----
+            // Expected factory geometry: remove all three project partitions and reclaim their space.
             var expectedPostPartitions = new List<GptPartitionSpec>(currentPartitions);
             expectedPostPartitions.Add(new GptPartitionSpec(
                 originalUserdata.Number, originalUserdata.Name, originalUserdata.TypeGuid,
                 originalUserdata.PartUuid, originalUserdata.StartSector,
-                originalUserdata.SectorCount - 2 * GibSectors, originalUserdata.Attributes));
-            expectedPostPartitions.Add(backupSpec);
+                originalUserdata.SectorCount, originalUserdata.Attributes));
 
             GptImage currentImage = new(
                 originalTable.SectorSize,
@@ -767,25 +765,13 @@ public sealed class EdlUninstallCurrentMenuTests
             Assert.Equal(vendor.Attributes, actual.Attributes);
         }
 
-        Assert.Equal(0, post.Count(s => s.Name is "ARMADA_BOOT" or "ARMADA_ROOT"));
+        Assert.DoesNotContain(post, s => s.Name.StartsWith("ARMADA_", StringComparison.Ordinal));
 
         GptPartition postUserdata = post.Single(s => s.Name == "userdata");
-        GptPartition postBackup = post.Single(s => s.Name == "ARMADA_BACKUP");
-
-        // userdata shrinks by exactly the 2 GiB ARMADA_BACKUP and ends where BACKUP starts.
         GptPartition originalUserdata = h.OriginalTable.Partitions.Single(p => p.Name == "userdata");
         Assert.Equal(originalUserdata.StartSector, postUserdata.StartSector);
-        Assert.Equal(originalUserdata.SectorCount - 2 * GibSectors, postUserdata.SectorCount);
-        Assert.Equal(postUserdata.StartSector + postUserdata.SectorCount, postBackup.StartSector);
-
-        // ARMADA_BACKUP: all seven facts unchanged.
-        Assert.Equal(h.BackupSpec.Number, postBackup.Number);
-        Assert.Equal("ARMADA_BACKUP", postBackup.Name);
-        Assert.Equal(Guid.Parse(h.BackupSpec.TypeGuid), Guid.Parse(postBackup.TypeGuid));
-        Assert.Equal(Guid.Parse(h.BackupSpec.PartUuid), Guid.Parse(postBackup.PartUuid));
-        Assert.Equal(h.BackupSpec.StartSector, postBackup.StartSector);
-        Assert.Equal(h.BackupSpec.SectorCount, postBackup.SectorCount);
-        Assert.Equal(h.BackupSpec.Attributes, postBackup.Attributes);
+        Assert.Equal(originalUserdata.SectorCount, postUserdata.SectorCount);
+        Assert.Equal(h.OriginalTable.Partitions.Count, post.Count);
     }
 
     private static string ShaFile(string path)

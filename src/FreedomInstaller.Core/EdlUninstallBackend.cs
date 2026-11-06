@@ -194,7 +194,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         string workRoot,
         ICommandRunner runner,
         IProgress<EdlUninstallProgress>? progress = null,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        bool reclaimBoardBackup = true)
     {
         ArgumentNullException.ThrowIfNull(currentBackup);
         ArgumentNullException.ThrowIfNull(menuPlan);
@@ -210,14 +211,15 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         return CreatePreparedCoreAsync(
             client, tools, binding, assets, workRoot, runner,
             currentBackup, menuPlan, actualCurrentSlot,
-            progress, token);
+            progress, token, reclaimBoardBackup: reclaimBoardBackup);
     }
 
     public static Task<EdlUninstallBackend> CreatePreparedForStockRestoreAsync(
         EdlClient client, EdlToolchain tools, EdlEntryResult binding,
         UninstallGptAssets assets, InternalBackupSet currentBackup,
         BootMaintenancePrepared stockRestore, string workRoot, ICommandRunner runner,
-        IProgress<EdlUninstallProgress>? progress = null, CancellationToken token = default)
+        IProgress<EdlUninstallProgress>? progress = null, CancellationToken token = default,
+        bool reclaimBoardBackup = true)
     {
         ArgumentNullException.ThrowIfNull(currentBackup);
         ArgumentNullException.ThrowIfNull(stockRestore);
@@ -228,7 +230,7 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             || !SamePath(stockRestore.BackupDirectory, currentBackup.DirectoryPath))
             throw new InvalidOperationException("The stock restoration plan does not match the current uninstall device and backup.");
         return CreatePreparedCoreAsync(client, tools, binding, assets, workRoot, runner,
-            currentBackup, null, stockRestore.CurrentSlot, progress, token, stockRestore);
+            currentBackup, null, stockRestore.CurrentSlot, progress, token, stockRestore, reclaimBoardBackup);
     }
 
     private static async Task<EdlUninstallBackend> CreatePreparedCoreAsync(
@@ -243,7 +245,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         string? actualCurrentSlot,
         IProgress<EdlUninstallProgress>? progress,
         CancellationToken token,
-        BootMaintenancePrepared? stockRestore = null)
+        BootMaintenancePrepared? stockRestore = null,
+        bool reclaimBoardBackup = true)
     {
         if (client is null)
         {
@@ -472,7 +475,7 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             }
 
             ValidatedUninstallInputs? inputs = UninstallEvidenceValidator.ValidateEdl(
-                identity, originalTable, capture.Lun0Table, 0);
+                identity, originalTable, capture.Lun0Table, 0, reclaimBoardBackup);
 
             if (inputs is null)
             {
@@ -518,6 +521,7 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
                 writer.WriteNumber("schemaVersion", ManifestSchemaVersion);
                 writer.WriteNumber("sectorSize", lun0.SectorSize);
                 writer.WriteNumber("diskBytes", diskBytes);
+                writer.WriteBoolean("reclaimBoardBackup", reclaimBoardBackup);
                 WriteFileReference(writer, "currentPrimary", capture.Regions["gpt_lun0_primary"]);
                 WriteFileReference(writer, "currentBackup", capture.Regions["gpt_lun0_backup"]);
                 WriteStagedReference(writer, "originalPrimary", stagedPrimary);
@@ -1602,110 +1606,197 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
                 "The GPT plan expected read-back pair could not be parsed.");
         }
 
-        static void EnsureBoardBackupPartitionRetained(
-            string boardBackupPartUuid,
+        static void EnsurePostTableMatchesValidatedPlan(
             GptTable currentTable,
-            GptTable postTable)
+            GptTable postTable,
+            AndroidRestorePlan expected,
+            string? boardBackupPartUuid)
         {
-            if (!Guid.TryParse(boardBackupPartUuid, out Guid backupPartGuid))
+            // Positive validation of the entire post table: exactly the expected number of
+            // partitions survive, the removed partitions (by number and UUID) are gone, the
+            // userdata partition keeps its identity/type/attrs/start with end == expected, and
+            // every other current partition is byte-identical in geometry/identity/attrs.
+            int expectedCount = currentTable.Partitions.Count - expected.RemovedPartitionNumbers.Count;
+            if (postTable.Partitions.Count != expectedCount)
             {
                 throw new InvalidOperationException(
-                    "The board backup partition UUID in the device record is not a valid GUID.");
+                    "The GPT plan expected read-back has " + postTable.Partitions.Count
+                    + " partitions instead of " + expectedCount + ".");
             }
 
-            string expectedUuid = backupPartGuid.ToString();
-            string? postName = null;
-            string? postNumber = null;
-            string? postTypeGuid = null;
-            string? postStartSector = null;
-            string? postSectorCount = null;
-            string? postAttributes = null;
-            int postMatches = 0;
+            var removedSet = new HashSet<long>(expected.RemovedPartitionNumbers);
+            var removedUuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            GptPartition? currentUserdata = null;
+            GptPartition? currentBackup = null;
 
-            foreach (var partition in postTable.Partitions)
+            Guid? backupGuid = null;
+            if (!string.IsNullOrWhiteSpace(boardBackupPartUuid))
             {
-                if (!string.Equals(
-                        partition.PartUuid.ToString(),
-                        expectedUuid,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                postMatches++;
-                postName = partition.Name;
-                postNumber = partition.Number.ToString();
-                postTypeGuid = partition.TypeGuid.ToString();
-                postStartSector = partition.StartSector.ToString();
-                postSectorCount = partition.SectorCount.ToString();
-                postAttributes = partition.Attributes.ToString();
-            }
-
-            if (postMatches != 1)
-            {
-                throw new InvalidOperationException(
-                    "The GPT plan expected read-back must contain exactly one board backup partition "
-                    + "with UUID " + boardBackupPartUuid + ".");
-            }
-
-            if (!string.Equals(postName, "ARMADA_BACKUP", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "The GPT plan expected read-back board backup partition must stay named ARMADA_BACKUP.");
-            }
-
-            int currentMatches = 0;
-            foreach (var partition in currentTable.Partitions)
-            {
-                if (!string.Equals(
-                        partition.PartUuid.ToString(),
-                        expectedUuid,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                currentMatches++;
-                if (!string.Equals(partition.Name, postName, StringComparison.Ordinal)
-                    || !string.Equals(partition.Number.ToString(), postNumber, StringComparison.Ordinal)
-                    || !string.Equals(
-                        partition.TypeGuid.ToString(),
-                        postTypeGuid,
-                        StringComparison.OrdinalIgnoreCase)
-                    || !string.Equals(
-                        partition.StartSector.ToString(),
-                        postStartSector,
-                        StringComparison.Ordinal)
-                    || !string.Equals(
-                        partition.SectorCount.ToString(),
-                        postSectorCount,
-                        StringComparison.Ordinal)
-                    || !string.Equals(
-                        partition.Attributes.ToString(),
-                        postAttributes,
-                        StringComparison.Ordinal))
+                if (!Guid.TryParse(boardBackupPartUuid, out Guid parsedBackupGuid))
                 {
                     throw new InvalidOperationException(
-                        "The GPT plan must retain the board backup partition unchanged "
-                        + "(number, name, type GUID, placement, size, and attributes).");
+                        "The board backup partition UUID in the device record is not a valid GUID.");
+                }
+
+                backupGuid = parsedBackupGuid;
+            }
+
+            foreach (var partition in currentTable.Partitions)
+            {
+                if (removedSet.Contains(partition.Number))
+                {
+                    removedUuids.Add(partition.PartUuid.ToString());
+                }
+
+                if (string.Equals(partition.Name, "userdata", StringComparison.Ordinal))
+                {
+                    currentUserdata = partition;
+                }
+
+                if (backupGuid is not null
+                    && string.Equals(
+                        partition.PartUuid.ToString(),
+                        backupGuid.Value.ToString(),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    currentBackup = partition;
                 }
             }
 
-            if (currentMatches != 1)
+            // A retained recovery partition must remain beyond the restored userdata end.
+            if (backupGuid is not null)
+            {
+                if (currentBackup is null)
+                {
+                    throw new InvalidOperationException(
+                        "The current GPT table must contain exactly one board backup partition with UUID "
+                        + boardBackupPartUuid + ".");
+                }
+
+                if (!removedSet.Contains(currentBackup.Number)
+                    && expected.UserdataEndSectorExclusive != currentBackup.StartSector)
+                    throw new InvalidOperationException("The retained backup must begin exactly at the restored userdata end.");
+            }
+
+            if (currentUserdata is null)
             {
                 throw new InvalidOperationException(
-                    "The current GPT table must contain exactly one board backup partition "
-                    + "with UUID " + boardBackupPartUuid + ".");
+                    "The current GPT table is missing the userdata partition.");
+            }
+
+            // The removed partition numbers and their UUIDs must be completely absent from post.
+            var postByNumber = new Dictionary<long, GptPartition>();
+            var postByUuid = new Dictionary<string, GptPartition>(StringComparer.OrdinalIgnoreCase);
+            foreach (var partition in postTable.Partitions)
+            {
+                if (!postByNumber.TryAdd(partition.Number, partition))
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back contains a duplicate partition number.");
+                }
+
+                if (!postByUuid.TryAdd(partition.PartUuid.ToString(), partition))
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back contains a duplicate partition UUID.");
+                }
+
+                if (removedSet.Contains(partition.Number))
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back still contains a removed partition number.");
+                }
+
+                if (removedUuids.Contains(partition.PartUuid.ToString()))
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back still contains a removed partition UUID.");
+                }
+            }
+
+            // Every current partition that survives (i.e. is not removed) must be present in post
+            // with identical number, name, type GUID, UUID, start, size and attributes. The userdata
+            // partition additionally must have its end pinned to the validated expected end.
+            foreach (var partition in currentTable.Partitions)
+            {
+                if (removedSet.Contains(partition.Number))
+                {
+                    continue;
+                }
+
+                if (!postByNumber.TryGetValue(partition.Number, out GptPartition? post))
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back is missing a retained partition (number "
+                        + partition.Number + ").");
+                }
+
+                if (!string.Equals(post.PartUuid.ToString(), partition.PartUuid.ToString(), StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back changed a retained partition UUID.");
+                }
+
+                if (!string.Equals(post.Name, partition.Name, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back renamed a retained partition.");
+                }
+
+                if (!string.Equals(post.TypeGuid.ToString(), partition.TypeGuid.ToString(), StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back changed a retained partition type GUID.");
+                }
+
+                if (post.Attributes != partition.Attributes)
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back changed a retained partition's attributes.");
+                }
+
+                if (post.StartSector != partition.StartSector)
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back moved a retained partition's start sector.");
+                }
+
+                if (ReferenceEquals(partition, currentUserdata))
+                {
+                    if (partition.StartSector != expected.UserdataStartSector)
+                    {
+                        throw new InvalidOperationException(
+                            "The userdata partition start sector disagrees with the validated plan.");
+                    }
+
+                    if (post.StartSector != expected.UserdataStartSector)
+                    {
+                        throw new InvalidOperationException(
+                            "The GPT plan expected read-back moved the userdata start sector.");
+                    }
+
+                    if (post.StartSector + post.SectorCount != expected.UserdataEndSectorExclusive)
+                    {
+                        throw new InvalidOperationException(
+                            "The GPT plan expected read-back did not restore the userdata partition to the validated factory end.");
+                    }
+
+                    continue;
+                }
+
+                if (post.SectorCount != partition.SectorCount)
+                {
+                    throw new InvalidOperationException(
+                        "The GPT plan expected read-back resized a retained partition.");
+                }
             }
         }
 
-        if (inputs.Record.BoardBackupPartUuid is not null)
-        {
-            EnsureBoardBackupPartitionRetained(
-                inputs.Record.BoardBackupPartUuid,
-                inputs.CurrentTable,
-                postTable);
-        }
+        EnsurePostTableMatchesValidatedPlan(
+            inputs.CurrentTable,
+            postTable,
+            expectedPlan,
+            inputs.Record.BoardBackupPartUuid);
 
         return new GptPlanEvidence(
             userdataStart,

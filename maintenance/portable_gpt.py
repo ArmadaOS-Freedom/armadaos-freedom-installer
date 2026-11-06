@@ -455,6 +455,7 @@ def plan_restore(
     boot_uuid: str,
     root_uuid: str,
     board_backup_uuid: str | None = None,
+    reclaim_board_backup: bool = True,
 ) -> GptRestorePlan:
     """Plan the GPT portion of a factory reset.
 
@@ -473,11 +474,14 @@ def plan_restore(
     When ``board_backup_uuid`` is supplied, the current GPT must also hold
     exactly one ``ARMADA_BACKUP`` Linux filesystem partition with that
     UUID: exactly 2 GiB, contiguous after root, ending at the original
-    userdata end. That slot is preserved byte-for-byte and never deleted,
-    and the restored userdata then ends at root's end instead of the
-    original userdata end.
+    userdata end (or its install-aligned form). By default its GPT entry
+    is removed together with boot and root, restoring userdata to its
+    true factory end. With ``reclaim_board_backup=False``, the backup
+    entry is preserved and userdata ends immediately before it.
     """
 
+    if not isinstance(reclaim_board_backup, bool):
+        raise GptError("reclaim_board_backup must be a boolean")
     if not isinstance(current, GptDisk) or not isinstance(original, GptDisk):
         raise GptError("plan_restore requires parsed GptDisk inputs")
 
@@ -594,7 +598,7 @@ def plan_restore(
         )
         if entry.part_uuid.upper() in rejected_uuids:
             raise GptError("original GPT still has an ArmadaOS partition UUID")
-        if entry.name in ("ARMADA_BOOT", "ARMADA_ROOT"):
+        if entry.name in ("ARMADA_BOOT", "ARMADA_ROOT", "ARMADA_BACKUP"):
             raise GptError("original GPT still has an ArmadaOS partition label")
         if entry.name.upper().startswith("ARMADA_"):
             raise GptError("original GPT still has an ArmadaOS partition label")
@@ -693,11 +697,20 @@ def plan_restore(
             or len(current.primary_entries) < array_bytes):
         raise GptError("current entry arrays have inconsistent lengths")
 
+    removed_numbers = (boot.number, root.number)
+    if backup is not None and reclaim_board_backup:
+        removed_numbers = (boot.number, root.number, backup.number)
+
+    restored_last = (backup.first_lba - 1
+                     if backup is not None and not reclaim_board_backup
+                     else original_userdata.last_lba)
+
     new_entries = bytearray(current.primary_entries)
     userdata_offset = (userdata.number - 1) * entry_size
+    # Remove only the reclaimed entries; a retained backup stays outside userdata.
     struct.pack_into("<Q", new_entries, userdata_offset + 40,
-                     root.last_lba)
-    for number in (boot.number, root.number):
+                     restored_last)
+    for number in removed_numbers:
         offset = (number - 1) * entry_size
         new_entries[offset:offset + entry_size] = b"\x00" * entry_size
     entries_crc = zlib.crc32(bytes(new_entries[:array_bytes])) & 0xFFFFFFFF
@@ -718,11 +731,11 @@ def plan_restore(
             WriteRegion(sector, primary_header),
         ),
         userdata_start_lba=userdata.first_lba,
-        userdata_end_lba_exclusive=root.last_lba + 1,
+        userdata_end_lba_exclusive=restored_last + 1,
         restored_userdata_bytes=(
-            root.last_lba + 1 - userdata.first_lba
+            restored_last + 1 - userdata.first_lba
         ) * sector,
-        removed_partition_numbers=(boot.number, root.number),
+        removed_partition_numbers=removed_numbers,
     )
 
 

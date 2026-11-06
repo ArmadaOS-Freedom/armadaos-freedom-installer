@@ -100,11 +100,23 @@ public static partial class InternalInstallBackup
     /// <exception cref="InvalidDataException">The backup is inconsistent with the manifest, its own bytes or this device.</exception>
     /// <exception cref="InvalidOperationException">The profile or current binding is not the trusted, complete and matching one.</exception>
     /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
-    public static async Task<InternalBackupSet> OpenExistingAsync(
+    public static Task<InternalBackupSet> OpenExistingAsync(
         EdlClient client,
         string backupDirectory,
         IProgress<InternalBackupProgress>? progress = null,
         CancellationToken token = default)
+        => OpenSavedAsync(client, backupDirectory, progress, token, requireCurrentFirmware: true);
+
+    public static Task<InternalBackupSet> OpenRecoveryAsync(
+        EdlClient client,
+        string backupDirectory,
+        IProgress<InternalBackupProgress>? progress = null,
+        CancellationToken token = default)
+        => OpenSavedAsync(client, backupDirectory, progress, token, requireCurrentFirmware: false);
+
+    private static async Task<InternalBackupSet> OpenSavedAsync(
+        EdlClient client, string backupDirectory, IProgress<InternalBackupProgress>? progress,
+        CancellationToken token, bool requireCurrentFirmware)
     {
         token.ThrowIfCancellationRequested();
 
@@ -154,7 +166,7 @@ public static partial class InternalInstallBackup
         token.ThrowIfCancellationRequested();
 
         ExistingState state = await Task
-            .Run(() => ExistingLoadAsync(client, directory, progress, token), token)
+            .Run(() => ExistingLoadAsync(client, directory, progress, token, requireCurrentFirmware), token)
             .ConfigureAwait(false);
 
         try
@@ -190,14 +202,15 @@ public static partial class InternalInstallBackup
                 geometries.Add(lun, actual);
             }
 
+            if (!requireCurrentFirmware) RequireOriginalFactoryLun0Table(state.Tables[0]);
             InternalBackupSet set = new(
                 client.Binding,
                 directory,
                 state.ManifestPath,
                 state.ManifestSha256,
-                client.Toolchain.ProfileId,
+                state.SavedProfileId,
                 client.Toolchain.Model,
-                client.Binding.AndroidIdentity.Identity.Firmware!.DisplayId!,
+                state.SavedAndroidBuild,
                 client.Toolchain.HardwareId,
                 CopyGeometries(geometries),
                 CopyTables(state.Tables),
@@ -278,6 +291,8 @@ public static partial class InternalInstallBackup
             byte[] manifestBytes = ExistingReadHeld(manifestStream, manifestStream.Length, token);
             using JsonDocument document = ExistingParseJson(manifestBytes);
             ExistingManifest manifest = ExistingParseManifest(document.RootElement, roles, token);
+            state.SavedProfileId = manifest.ProfileId;
+            state.SavedAndroidBuild = manifest.AndroidBuild;
 
             // The parsed manifest's whole role set selects the exact contract (baseline, or baseline plus the
             // optional efisp), so every later lease, target, region and progress check uses the selected roles.
@@ -1418,6 +1433,8 @@ public static partial class InternalInstallBackup
 
     private sealed class ExistingState
     {
+        internal string SavedProfileId = string.Empty;
+        internal string SavedAndroidBuild = string.Empty;
         internal readonly Dictionary<int, EdlGeometry> Geometries = new();
 
         internal readonly Dictionary<int, GptTable> Tables = new();

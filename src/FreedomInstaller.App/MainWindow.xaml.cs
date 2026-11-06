@@ -474,6 +474,12 @@ public partial class MainWindow : Window
         if (IsInternalInstallMode)
         {
             // 第 3 步（分配空间）的「下一步」需要先完成一次真实主机侧准备；其余内部步骤仍是纯导航。
+            if (_internalInstallStep == 1 && _internalInstallBackup is null
+                && _internalInstallBoardBackupDetected && !_internalInstallBackupUseExisting)
+            {
+                await BackupInternalInstallCoreAsync(useBoardBackup: true);
+                if (_internalInstallBackup is null) return;
+            }
             if (_internalInstallStep == 2)
             {
                 await PrepareInternalInstallConfirmationAsync();

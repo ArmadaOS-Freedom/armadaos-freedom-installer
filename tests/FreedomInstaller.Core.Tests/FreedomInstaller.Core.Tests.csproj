@@ -46,6 +46,9 @@
          so they are compiled into this assembly instead of referencing the WPF App project. -->
     <Compile Include="..\..\src\FreedomInstaller.App\UiText.cs" Link="UiText.cs" />
     <Compile Include="..\..\src\FreedomInstaller.App\UserPreferences.cs" Link="UserPreferences.cs" />
+    <!-- Same reason: the board-first recovery selection source is plain C# (no WPF types);
+         linking it lets the regression exercise the real production method headlessly. -->
+    <Compile Include="..\..\src\FreedomInstaller.App\MainWindow.RecoverySource.cs" Link="MainWindow.RecoverySource.cs" />
   </ItemGroup>
 
   <ItemGroup>

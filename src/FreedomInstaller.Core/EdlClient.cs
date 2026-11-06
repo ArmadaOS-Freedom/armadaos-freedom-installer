@@ -199,6 +199,53 @@ public sealed class EdlClient
     /// </summary>
     public bool HasInitialSaharaProof => _initialProven;
 
+    public EdlClient WithSavedIdentity(EdlEntryResult savedBinding)
+    {
+        ArgumentNullException.ThrowIfNull(savedBinding);
+        if (!_initialProven || Binding.OfflineIdentity is null
+            || savedBinding.OfflineIdentity is not null || savedBinding.AndroidIdentity is null)
+            throw new InvalidOperationException("A proven offline session and a saved Android identity are required.");
+        var serial = EnsureCurrentEndpointIdentity();
+        var rebound = new EdlClient(Toolchain, savedBinding, _runner, _discovery);
+        if (!string.Equals(serial, rebound.EnsureCurrentEndpointIdentity(), StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(serial, _provenSaharaSerialHex, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The saved identity belongs to a different physical device.");
+        rebound._initialProven = true;
+        rebound._provenSaharaSerialHex = _provenSaharaSerialHex;
+        foreach (var pair in _geometryByLun) rebound._geometryByLun.Add(pair.Key, pair.Value);
+        return rebound;
+    }
+
+    /// <summary>
+    /// Proves and rebinds an already attached offline candidate to a saved Android identity.
+    /// <para>
+    /// When the session has not yet been proven, exactly one initial read-only geometry probe is run at
+    /// <paramref name="probeOutputPath"/> before the strict <see cref="WithSavedIdentity"/> checks are applied.
+    /// An already proven session is not probed again; its proof is transferred only after the strict
+    /// mismatch checks pass.
+    /// </para>
+    /// </summary>
+    public async Task<EdlClient> WithSavedIdentityAsync(
+        EdlEntryResult savedBinding,
+        string probeOutputPath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(savedBinding);
+        ArgumentNullException.ThrowIfNull(probeOutputPath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (Binding.OfflineIdentity is null || savedBinding.OfflineIdentity is not null
+            || savedBinding.AndroidIdentity is null)
+            throw new InvalidOperationException("An offline session and a saved Android identity are required.");
+
+        if (!_initialProven)
+        {
+            await ProbeRawGeometryAsync(0, true, probeOutputPath, cancellationToken).ConfigureAwait(false);
+        }
+
+        return WithSavedIdentity(savedBinding);
+    }
+
     /// <summary>
     /// Probes one LUN with <c>printgpt</c>.
     /// <para>
