@@ -540,7 +540,7 @@ public partial class MainWindow
 
         return T(
             "Dynamic.InternalInstall.Execution.Dialog.Body",
-            _internalInstallBackup!.Model,
+            UiText.ModelName(_internalInstallBackup!.Model),
             prepared.AndroidSerial,
             FormatInternalInstallExecutionBytes(prepared.AndroidGiB * 1024L * 1024L * 1024L),
             FormatInternalInstallExecutionBytes(linuxTotalBytes),

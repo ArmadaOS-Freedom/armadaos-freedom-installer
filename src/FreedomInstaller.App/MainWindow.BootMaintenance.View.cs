@@ -258,7 +258,7 @@ public partial class MainWindow
         }
 
         SetText(BootMaintenancePrepareStatusText, M("Dynamic.BootMaintenance.PreparedSummary",
-            prepared.Model ?? string.Empty,
+            UiText.ModelName(prepared.Model),
             prepared.AndroidSerial ?? string.Empty,
             prepared.CurrentSlot ?? string.Empty));
     }
@@ -285,7 +285,7 @@ public partial class MainWindow
 
         // 设备摘要：只陈述真实准备的型号/序列号/当前槽位，不断言系统可启动性或 A/B 双槽完整。
         SetText(BootMaintenanceDeviceText, M("Dynamic.BootMaintenance.DeviceSummary",
-            prepared.Model ?? string.Empty,
+            UiText.ModelName(prepared.Model),
             prepared.AndroidSerial ?? string.Empty,
             prepared.SocSerial ?? string.Empty,
             prepared.CurrentSlot ?? string.Empty));

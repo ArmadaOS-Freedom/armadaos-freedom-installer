@@ -549,7 +549,7 @@ public partial class MainWindow
             this,
             T(
                 "Dynamic.UninstallFlow.EdlRestore.Confirm.Body",
-                inputs.Identity.Model,
+                UiText.ModelName(inputs.Identity.Model),
                 inputs.Identity.Serial,
                 inputs.CurrentTable.DeviceId ?? UnknownValue,
                 FormatBytesOrPlaceholder(CurrentUserdataBytes(inputs)),
@@ -868,7 +868,7 @@ public partial class MainWindow
             SummaryText,
             "Dynamic.UninstallFlow.EdlRestore.Summary",
             ModeMessage("uninstall"),
-            $"{inputs.Identity.Model} · {inputs.Identity.Serial}",
+            T("Dynamic.DeviceEntry", UiText.ModelName(inputs.Identity.Model), inputs.Identity.Serial),
             inputs.CurrentTable.DeviceId ?? UnknownValue,
             FormatBytesOrPlaceholder(CurrentUserdataBytes(inputs)),
             FormatBytes(inputs.Plan.RestoredAndroidBytes),

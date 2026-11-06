@@ -26,9 +26,9 @@
   "Static.BootBackupTooltip": "This backup step is not connected in the current mode; the uninstall flow saves the current A/B and misc automatically before writing.",
   "Static.BootBackupUnavailable": "The current mode does not connect the boot A/B backup step; uninstall backs up the current A/B and misc before writing.",
   "Static.BootCompatAndroidNote": "The Android report is used for route pre-checks; the existing Fastboot flow still needs separate confirmation.",
-  "Static.BootCompatTb322Fc": "TB322FC: some firmware can boot without unlocking; read the current firmware first, then check the applicable conditions.",
-  "Static.BootCompatTb323Fu": "Gen-5 TB323FU: the write flow has not been verified. Do not use the gen-4 loader or restore plan.",
-  "Static.BootCompatTb710Fu": "TB710FU (Xiaoxin Pad Pro GT): only identification, its 9008 tools and the read-only global backup are open; install, maintenance, uninstall and restore writes are not open yet.",
+  "Static.BootCompatTb322Fc": "Lenovo Legion Y700 Gen 4 (TB322FC): some firmware can boot without unlocking; read the current firmware first, then check the applicable conditions.",
+  "Static.BootCompatTb323Fu": "Lenovo Legion Y700 Gen 5 (TB323FU): the write flow has not been verified. Do not use the gen-4 loader or restore plan.",
+  "Static.BootCompatTb710Fu": "Lenovo Xiaoxin Pad Pro GT (TB710FU): only identification, its 9008 tools and the read-only global backup are open; install, maintenance, uninstall and restore writes are not open yet.",
   "Static.BootCompatTitle": "Boot compatibility",
   "Static.BootPending": "Unconfirmed",
   "Static.BrandSubtitle": "SteamOS-like Linux for ARM tablets · Steam Gaming Mode, KDE Plasma and kShimC multi-boot",
@@ -129,7 +129,7 @@
   "Static.Guide.SevenTimes": "×7",
   "Static.Guide.Step1Caption": "In “About tablet”, tap “Build number” 7 times.",
   "Static.Guide.Step2Caption": "Open “Developer options” and turn on “USB debugging”.",
-  "Static.Guide.Step3Caption": "Connect your Y700 tablet to the computer using its long-edge USB-C port, then allow USB debugging on the tablet.",
+  "Static.Guide.Step3Caption": "Use the long-edge USB-C port on Y700, or the USB-C data port on Xiaoxin Pad Pro GT. Connect to the computer, then allow USB debugging on the tablet. The illustration shows a Y700.",
   "Static.Guide.UsbDebugRow": "USB debugging",
   "Static.HelpStepAuthorize": "3 · Connect and allow: plug in a USB cable that can transfer data, unlock the tablet, choose “Allow” on the “Allow USB debugging?” prompt, then click “Detect tablet” below.",
   "Static.HelpStepDeveloperOptions": "1 · Turn on developer options: open Settings → About tablet, find “Build number” (shown as “Software version” on some builds), tap it 7 times, enter your lock screen password when asked, until the tablet says developer mode is on.",
@@ -256,5 +256,10 @@
   "Static.UninstallLead": "Delete the Linux partitions, return the space to Android, and initialize Android while preserving the existing boot setup. All personal files in Android and Linux will be erased. Back them up first.",
   "Static.UninstallTitle": "Restore Android storage",
   "Static.UserdataCapacity": "Allocatable space (former Android userdata partition)",
-  "Static.ValidatePackage": "Validate package"
+  "Static.ValidatePackage": "Validate package",
+  "Static.ModelName.Tb322fc": "Lenovo Legion Y700 Gen 4 (TB322FC)",
+  "Static.ModelName.Tb323fu": "Lenovo Legion Y700 Gen 5 (TB323FU)",
+  "Static.ModelName.Tb710fu": "Lenovo Xiaoxin Pad Pro GT (TB710FU)",
+  "Static.Global.ConnectionGuideTitle": "Before connecting your tablet",
+  "Static.Global.ConnectionGuideLead": "Android connection: follow the illustration to enable Developer options and USB debugging, then allow this computer on the tablet. For the Y700, use the long-edge USB-C port. If the tablet is already in 9008, you can skip the illustration and click “Connect tablet” directly."
 }

@@ -220,7 +220,7 @@ public partial class MainWindow
                         SetInternalInstallCheckStatus(
                             M(
                                 "Dynamic.BootMaintenance.Edl.HistoricalBound",
-                                history.Model,
+                                UiText.ModelName(history.Model),
                                 history.AndroidSerial,
                                 history.HistoricalFirmware.DisplayId));
                     }
@@ -238,7 +238,7 @@ public partial class MainWindow
                 catch (Exception ex) when (DeviceModelRoutes.IsRouteRefusal(ex))
                 {
                     // A historical backup of a model whose write routes are not open: refused before any firehose command.
-                    SetInternalInstallCheckStatus(M("Dynamic.Model.RoutePendingInEdl", DeviceModelRoutes.Tb710fuModel));
+                    SetInternalInstallCheckStatus(M("Dynamic.Model.RoutePendingInEdl", UiText.ModelName(DeviceModelRoutes.Tb710fuModel)));
                 }
                 catch (Exception ex)
                 {

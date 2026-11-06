@@ -42,7 +42,7 @@ public partial class MainWindow
                         using var detector = await LoadGlobalToolsAsync(EdlDeviceProfiles.FindByModel("TB322FC")!, token);
                         var profile = await GlobalEdlDetection.DetectAsync(detector.ClientPath, _runner!, discovery, null, token);
                         if (DeviceModelRoutes.IsWriteRoutePending(profile.Model))
-                            throw new InvalidOperationException(T("Dynamic.Model.RoutePendingInEdl", profile.Model));
+                            throw new InvalidOperationException(T("Dynamic.Model.RoutePendingInEdl", UiText.ModelName(profile.Model)));
                         var tools = await LoadGlobalToolsAsync(profile, token);
                         try
                         {
@@ -141,7 +141,7 @@ public partial class MainWindow
         _internalInstallEdlClient = rebound;
         _internalInstallEdlEntry = savedEntry;
         _bootMaintenanceHistoricalIdentity = history;
-        SetInternalInstallCheckStatus(M("Dynamic.RecoverySource.Connected", history.Model));
+        SetInternalInstallCheckStatus(M("Dynamic.RecoverySource.Connected", UiText.ModelName(history.Model)));
     }
 
     private async Task<InternalBackupSet> GetBoardFirstRecoverySourceAsync(

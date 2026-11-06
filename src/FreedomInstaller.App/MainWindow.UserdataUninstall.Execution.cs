@@ -155,7 +155,7 @@ public partial class MainWindow
 
         var body = T(
             "Dynamic.UserdataUninstall.Runtime.ConfirmBody",
-            inputs.Identity.Model,
+            UiText.ModelName(inputs.Identity.Model),
             inputs.Identity.Serial,
             FormatBytesOrPlaceholder(CurrentUserdataBytes(inputs)),
             FormatBytes(inputs.Plan.RestoredAndroidBytes),

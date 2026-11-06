@@ -1031,12 +1031,12 @@ public partial class MainWindow : Window
 
         _identity = identity;
         SetText(ConnectionStatusText, "Dynamic.DeviceStatus.Authorized");
-        ModelText.Text = identity.Model;
+        SetText(ModelText, UiText.ModelName(identity.Model));
         SerialText.Text = identity.Serial;
         SetBootState(M("Dynamic.BootState.AwaitingFastboot"));
         SetText(DeviceHintText, "Dynamic.DeviceHint.IdentityConfirmed");
         SetText(ProgressStatusText, "Dynamic.Progress.IdentityDone");
-        AppendLocalizedLog(M("Dynamic.Log.IdentityConfirmed", identity.Model, identity.Serial));
+        AppendLocalizedLog(M("Dynamic.Log.IdentityConfirmed", UiText.ModelName(identity.Model), identity.Serial));
 
         // 卸载模式还要绑定这台设备的 SoC 序列号；这里已经在 RunBusyAsync 内，不能嵌套。
         if (CurrentModeTag() == "uninstall")
@@ -1877,7 +1877,7 @@ public partial class MainWindow : Window
         {
             // 也走 SetText 登记：直接写 Text 会把先前「未知」的登记留在注册表里，
             // 切语言时被旧消息覆盖回 Unknown。
-            SetText(DeviceStripText, "Dynamic.DeviceEntry", _identity.Model, _identity.Serial);
+            SetText(DeviceStripText, "Dynamic.DeviceEntry", UiText.ModelName(_identity.Model), _identity.Serial);
             return;
         }
 
@@ -1918,7 +1918,7 @@ public partial class MainWindow : Window
 
         var device = _identity is null
             ? UnknownValue
-            : $"{_identity.Model} · {_identity.Serial}";
+            : T("Dynamic.DeviceEntry", UiText.ModelName(_identity.Model), _identity.Serial);
         var bootloader = _bootStateMessage ?? M("Dynamic.BootState.Pending");
 
         if (mode is "install" or "install-tf")
@@ -2224,7 +2224,7 @@ public partial class MainWindow : Window
         ResetInternalInstallUiState();
 
         SetText(ConnectionStatusText, "Dynamic.DeviceStatus.None");
-        ModelText.Text = UnknownValue;
+        SetText(ModelText, "Dynamic.RawValue", UnknownValue);
         SerialText.Text = UnknownValue;
         SetBootState(M("Dynamic.BootState.Pending"));
         SetText(DeviceHintText, "Dynamic.DeviceHint.Initial");

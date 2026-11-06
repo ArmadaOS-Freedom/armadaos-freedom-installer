@@ -502,7 +502,7 @@ public partial class MainWindow
         if (IsCurrentModeRoutePending(selectedIdentity.Model))
         {
             SetInternalInstallBackupStatus(
-                M("Dynamic.Model.RoutePending", Placeholder(selectedIdentity.Model)));
+                M("Dynamic.Model.RoutePending", UiText.ModelName(selectedIdentity.Model)));
             return;
         }
 
@@ -515,7 +515,7 @@ public partial class MainWindow
             SetInternalInstallBackupStatus(
                 M(
                     "Dynamic.InternalInstall.Backup.ProfileUnavailable",
-                    Placeholder(selectedIdentity.Model),
+                    UiText.ModelName(selectedIdentity.Model),
                     Placeholder(selectedIdentity.Firmware?.DisplayId)));
             return;
         }
@@ -587,7 +587,7 @@ public partial class MainWindow
                         if (!ReferenceEquals(loaded.Profile, profile)
                             || !profile.SupportsIdentity(expected.Identity))
                         {
-                            var loadedModel = loaded.Model;
+                            var loadedModel = UiText.ModelName(loaded.Model);
                             var loadedBuild = loaded.AndroidBuild;
 
                             // 尚未切换到任何模式：释放这份刚加载、没有被使用的工具链。

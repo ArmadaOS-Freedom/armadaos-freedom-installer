@@ -717,7 +717,7 @@ public sealed class DeviceTransport
         {
             // Missing model, unsupported model and two contradictory model properties all land here.
             throw new InvalidOperationException(
-                $"无法从设备 {serial} 的 getprop 输出确认受支持的型号（只接受 TB322FC / TB323FU / TB710FU），拒绝继续。");
+                $"无法从设备 {serial} 的 getprop 输出确认受支持的型号（只接受 联想拯救者 Y700 四代（TB322FC）/ 联想拯救者 Y700 五代（TB323FU）/ 联想小新 Pad Pro GT（TB710FU）），拒绝继续。");
         }
 
         // getprop runs inside Android, so it says nothing about fastboot accepting writes: always Unknown.

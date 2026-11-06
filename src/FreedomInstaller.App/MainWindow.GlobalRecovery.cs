@@ -623,7 +623,7 @@ public partial class MainWindow
         if (DeviceModelRoutes.IsWriteRoutePending(identity.Model))
         {
             throw new InvalidOperationException(
-                T("Dynamic.Global.Error.RestoreRoutePending", identity.Model));
+                T("Dynamic.Global.Error.RestoreRoutePending", UiText.ModelName(identity.Model)));
         }
 
         EdlDeviceProfile? profile = EdlDeviceProfiles.FindById(identity.ProfileId);
@@ -632,7 +632,7 @@ public partial class MainWindow
             || !string.Equals(profile.ProfileId, identity.ProfileId, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                T("Dynamic.Global.Error.RestoreProfileUnsupported", identity.Model));
+                T("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(identity.Model)));
         }
     }
 
@@ -665,7 +665,7 @@ public partial class MainWindow
         string bus = _globalEdlEntry?.BusSerialHex ?? UnknownValue;
 
         // 只说「维护连接已核实」，绝不说备份完成或整机就绪。
-        SetText(GlobalConnectionText, "Dynamic.Global.Connection.Verified", model, bus);
+        SetText(GlobalConnectionText, "Dynamic.Global.Connection.Verified", UiText.ModelName(model), bus);
     }
 
     private void RenderGlobalPower()
