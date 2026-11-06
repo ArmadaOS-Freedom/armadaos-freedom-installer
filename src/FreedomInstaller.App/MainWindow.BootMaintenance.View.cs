@@ -138,6 +138,10 @@ public partial class MainWindow
         // 原厂引导恢复复选框及其提示：仅在卸载模式显示，其他模式一律折叠复位。
         var stockVisibility = uninstall ? Visibility.Visible : Visibility.Collapsed;
         BootMaintenanceRestoreStockCheck.Visibility = stockVisibility;
+        UninstallUseBoardBackupButton.Visibility = stockVisibility;
+        UninstallReclaimBackupCheck.Visibility = stockVisibility;
+        InternalInstallBoardBackupHint.Visibility = IsInternalInstallMode && _internalInstallBoardBackupDetected
+            ? Visibility.Visible : Visibility.Collapsed;
         BootMaintenanceConfirmRestoreStockCheck.Visibility = stockVisibility;
         if (!uninstall)
         {
@@ -219,7 +223,7 @@ public partial class MainWindow
             InternalInstallCheckButton.SetResourceReference(ContentControl.ContentProperty, "Static.InternalInstall.Check.Button");
         }
 
-        var hideOriginalEntry = IsModernUserdataUninstallMode && !_bootMaintenanceAlreadyEdl;
+        var hideOriginalEntry = IsModernUserdataUninstallMode;
         SharedEdlEntryHintText.Visibility = hideOriginalEntry ? Visibility.Collapsed : Visibility.Visible;
         SharedEdlOriginalEntryLabel.Visibility = hideOriginalEntry ? Visibility.Collapsed : Visibility.Visible;
         BootMaintenanceEntryOriginalRow.Visibility = hideOriginalEntry ? Visibility.Collapsed : Visibility.Visible;

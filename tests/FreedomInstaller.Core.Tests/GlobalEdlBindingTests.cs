@@ -33,6 +33,41 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
     // ------------------------------------------------------------------ offline binding candidate
 
     [Fact]
+    public async Task SavedIdentityRequiresPhysicalProofAndTransfersItWithoutReloading()
+    {
+        var discovery = ValidDiscovery();
+        var offline = GlobalEdlBinding.Attach(_fixture.Toolchain.Profile, discovery);
+        var runner = new E003FakeCommandRunner();
+        var client = new EdlClient(_fixture.Toolchain, offline, runner, discovery);
+        var identity = new AndroidMaintenanceIdentity(
+            new DeviceIdentity("SN0123456789", _fixture.Toolchain.Model, BootloaderState.Unknown)
+                { Firmware = new FirmwareSnapshot(_fixture.Toolchain.AndroidBuild, null, null, null, BootloaderState.Unknown) },
+            E003EdlTestData.SocSerialDecimal);
+        var saved = new EdlEntryResult(identity, E003EdlTestData.Endpoint(), E003EdlTestData.BusSerialHex);
+        Assert.Throws<InvalidOperationException>(() => client.WithSavedIdentity(saved));
+        Assert.Equal(0, runner.CallCount);
+
+        var output = Path.Combine(_fixture.NewCaseDirectory(nameof(SavedIdentityRequiresPhysicalProofAndTransfersItWithoutReloading)), "probe.bin");
+        runner.Enqueue(RawLog(E003EdlTestData.BusSerialHex,
+            SaharaText(E003EdlTestData.BusSerialHex, _fixture.Toolchain.HardwareId, includeLoaderMarker: true),
+            RawGeometryLines(0, E003EdlTestData.InitialTotalSectors, E003EdlTestData.SectorSize),
+            PlanLine(0, 0, 1, E003EdlTestData.SectorSize, output), E003EdlTestData.SectorSize),
+            sideEffect: _ => File.WriteAllBytes(output, new byte[E003EdlTestData.SectorSize]));
+        await client.ProbeRawGeometryAsync(0, true, output);
+        var rebound = client.WithSavedIdentity(saved);
+        Assert.True(rebound.HasInitialSaharaProof);
+        Assert.Same(saved, rebound.Binding);
+        Assert.Equal(1, runner.CallCount);
+
+        var wrong = new EdlEntryResult(new AndroidMaintenanceIdentity(identity.Identity, "1"),
+            E003EdlTestData.Endpoint(), "00000001");
+        Assert.Throws<InvalidOperationException>(() => client.WithSavedIdentity(wrong));
+        discovery.Endpoints = new[] { E003EdlTestData.Endpoint(description: "QUSB_BULK_CID:045A_SN:DEADBEEF") };
+        Assert.Throws<InvalidOperationException>(() => client.WithSavedIdentity(saved));
+        Assert.Equal(1, runner.CallCount);
+    }
+
+    [Fact]
     public void Attach_valid_known_profile_one_endpoint_is_offline_candidate_only()
     {
         E003ScriptedEndpointDiscovery discovery = ValidDiscovery();

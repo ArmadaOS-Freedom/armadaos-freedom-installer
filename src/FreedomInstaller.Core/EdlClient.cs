@@ -199,6 +199,23 @@ public sealed class EdlClient
     /// </summary>
     public bool HasInitialSaharaProof => _initialProven;
 
+    public EdlClient WithSavedIdentity(EdlEntryResult savedBinding)
+    {
+        ArgumentNullException.ThrowIfNull(savedBinding);
+        if (!_initialProven || Binding.OfflineIdentity is null
+            || savedBinding.OfflineIdentity is not null || savedBinding.AndroidIdentity is null)
+            throw new InvalidOperationException("A proven offline session and a saved Android identity are required.");
+        var serial = EnsureCurrentEndpointIdentity();
+        var rebound = new EdlClient(Toolchain, savedBinding, _runner, _discovery);
+        if (!string.Equals(serial, rebound.EnsureCurrentEndpointIdentity(), StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(serial, _provenSaharaSerialHex, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The saved identity belongs to a different physical device.");
+        rebound._initialProven = true;
+        rebound._provenSaharaSerialHex = _provenSaharaSerialHex;
+        foreach (var pair in _geometryByLun) rebound._geometryByLun.Add(pair.Key, pair.Value);
+        return rebound;
+    }
+
     /// <summary>
     /// Probes one LUN with <c>printgpt</c>.
     /// <para>

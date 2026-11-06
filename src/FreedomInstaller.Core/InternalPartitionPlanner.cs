@@ -134,6 +134,7 @@ public static class InternalPartitionPlanner
 
         ValidatePartitions(original.Partitions, sectorSize, firstUsable, lastUsable);
         GptPartition userdata = FindUserdata(original.Partitions);
+        GptPartition? retainedBackup = FindReusableBackup(original);
 
         ValidatePackageStorage(storage, out long bootBytes, out long systemBytes, out long requiredRootBytes);
 
@@ -159,7 +160,10 @@ public static class InternalPartitionPlanner
 
         // The backup tail sits at the last whole MiB boundary of the original userdata window; the slack
         // beyond it is reported as tail loss instead of being handed to any extent.
-        long backupEndSector = originalEnd / alignmentSectors * alignmentSectors;
+        long availableEnd = retainedBackup is null ? originalEnd : checked(lastUsable + 1);
+        long backupEndSector = retainedBackup is null
+            ? originalEnd / alignmentSectors * alignmentSectors
+            : checked(retainedBackup.StartSector + retainedBackup.SectorCount);
         long backupSectorCount = BackupTailBytes / sectorSize;
         long backupStartSector = backupEndSector - backupSectorCount;
 
@@ -187,8 +191,8 @@ public static class InternalPartitionPlanner
         }
 
         long alignmentGapSectors = bootStartSector - androidEndSector;
-        long tailSectors = originalEnd - backupEndSector;
-        if (alignmentGapSectors < 0 || tailSectors < 0 || bootStartSector < originalStart || backupEndSector > originalEnd)
+        long tailSectors = availableEnd - backupEndSector;
+        if (alignmentGapSectors < 0 || tailSectors < 0 || bootStartSector < originalStart || backupEndSector > availableEnd)
         {
             throw new ArgumentException("The planned extents leave the original userdata window.", nameof(storage));
         }
@@ -248,6 +252,34 @@ public static class InternalPartitionPlanner
             alignmentGapSectors,
             tailSectors,
             alignmentLossBytes);
+    }
+
+    internal static GptPartition? FindReusableBackup(GptTable original)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        if (original.SectorSize is not (512 or 4096))
+            throw new InvalidOperationException("Unsupported GPT sector size.");
+        var owned = original.Partitions.Where(p =>
+            p.Name.Trim().StartsWith("ARMADA_", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (owned.Length == 0) return null;
+        if (owned.Length != 1 || owned[0].Name != "ARMADA_BACKUP")
+            throw new InvalidOperationException("Only a single retained ARMADA_BACKUP can be reused; uninstall Linux first.");
+        var backup = owned[0];
+        var userdata = FindUserdata(original.Partitions);
+        var end = checked(backup.StartSector + backup.SectorCount);
+        var diskEnd = checked(original.LastUsableSector + 1);
+        var alignment = MiB / original.SectorSize;
+        if (!string.Equals(backup.TypeGuid, "0FC63DAF-8483-4772-8E79-3D69D8477DE4", StringComparison.OrdinalIgnoreCase)
+            || !Guid.TryParse(backup.PartUuid, out var uuid) || uuid == Guid.Empty
+            || backup.SectorCount != BackupTailBytes / original.SectorSize
+            || backup.StartSector != checked(userdata.StartSector + userdata.SectorCount)
+            || (end != diskEnd && end != diskEnd / alignment * alignment))
+            throw new InvalidOperationException("The retained ARMADA_BACKUP has invalid identity, size or placement.");
+        foreach (var partition in original.Partitions)
+            if (partition.Number != userdata.Number && partition.Number != backup.Number
+                && checked(partition.StartSector + partition.SectorCount) > userdata.StartSector)
+                throw new InvalidOperationException("An unrelated partition occupies the userdata recovery window.");
+        return backup;
     }
 
     private static void ValidatePartitions(

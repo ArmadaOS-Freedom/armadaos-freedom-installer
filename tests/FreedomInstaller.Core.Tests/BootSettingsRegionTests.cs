@@ -92,6 +92,64 @@ public sealed class BootSettingsRegionTests
         Assert.Throws<InvalidDataException>(() => Verify(new byte[4096]));
     }
 
+    private static void RewriteDescriptorCrc(byte[] region)
+    {
+        uint crc = uint.MaxValue;
+        foreach (byte b in region.AsSpan(0, 4092)) {
+            crc ^= b;
+            for (int i = 0; i < 8; i++) crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xedb88320u : 0);
+        }
+        BinaryPrimitives.WriteUInt32LittleEndian(region.AsSpan(4092), ~crc);
+    }
+
+    [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    public void Version2_settings_and_diagnostic_log_writes_do_not_invalidate_recovery(string model)
+    {
+        var region = new byte[65536];
+        Descriptor(model).CopyTo(region, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(region.AsSpan(8), 2);
+        RewriteDescriptorCrc(region);
+        Verify(region, model);
+        // Two settings slots followed by two 8 KiB log slots may be partially written.
+        Array.Fill(region, (byte)0xa5, 4096, 28672 - 4096);
+        Verify(region, model);
+        region[28672] = 1;
+        Assert.Throws<InvalidDataException>(() => Verify(region, model));
+    }
+
+    [Theory]
+    [InlineData(8, 1)]
+    [InlineData(12, 1)]
+    [InlineData(24, 1)]
+    [InlineData(32, 1)]
+    [InlineData(48, 1)]
+    [InlineData(64, 1)]
+    [InlineData(80, 1)]
+    [InlineData(88, 1)]
+    [InlineData(92, 1)]
+    public void Version2_rejects_unknown_format_and_descriptor_changes_even_with_valid_crc(int offset, byte value)
+    {
+        var region = new byte[65536];
+        Descriptor().CopyTo(region, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(region.AsSpan(8), 2);
+        RewriteDescriptorCrc(region);
+        Verify(region);
+        region[offset] ^= value;
+        RewriteDescriptorCrc(region);
+        Assert.Throws<InvalidDataException>(() => Verify(region));
+    }
+
+    [Fact]
+    public void Version2_still_requires_a_valid_descriptor_crc()
+    {
+        var region = new byte[65536];
+        Descriptor().CopyTo(region, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(region.AsSpan(8), 2);
+        Assert.Throws<InvalidDataException>(() => Verify(region));
+    }
+
     [Fact]
     public void Only_supported_boards_and_nonoverlapping_payloads_can_be_provisioned()
     {

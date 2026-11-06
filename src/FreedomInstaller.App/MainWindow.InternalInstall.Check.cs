@@ -21,6 +21,19 @@ namespace FreedomInstaller.App;
 /// </summary>
 public partial class MainWindow
 {
+    private async Task<bool> DetectInternalBoardBackupAsync(string adbPath, string serial, CancellationToken token)
+    {
+        try
+        {
+            var result = await _runner.RunAsync(new ProcessCommand(adbPath,
+                new[] { "-s", serial, "shell", "test -e /dev/block/by-name/ARMADA_BACKUP && echo ARMADA_BACKUP" },
+                TimeSpan.FromSeconds(10)), token);
+            return result.ExitCode == 0 && result.StandardOutput.Trim() == "ARMADA_BACKUP";
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { return false; }
+    }
+
     /// <summary>最近一次真实检查结果；null 表示还没有可用的检查结论。</summary>
     private InternalDeviceCheckResult? _internalInstallDeviceCheck;
 
@@ -249,6 +262,8 @@ public partial class MainWindow
                             transport.AdbPath,
                             result.Android!.Identity.Serial,
                             token);
+                        _internalInstallBoardBackupDetected = await DetectInternalBoardBackupAsync(
+                            transport.AdbPath, result.Android.Identity.Serial, token);
                     }
 
                     RenderInternalInstallPower();
@@ -686,6 +701,7 @@ public partial class MainWindow
         }
 
         _internalInstallDeviceCheck = null;
+        _internalInstallBoardBackupDetected = false;
         _internalInstallPower = null;
         // 检查结论作废时，共享安卓读取事实一起作废；真实 9008 历史绑定不受影响。
         ClearSharedAndroidIdentity();

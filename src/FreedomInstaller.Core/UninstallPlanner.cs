@@ -7,7 +7,7 @@ namespace FreedomInstaller.Core;
 /// The installation record the uninstall path is allowed to trust. It names, by PARTUUID, the exact
 /// three partitions the installer created (<c>userdata</c> plus <c>ARMADA_BOOT</c> and
 /// <c>ARMADA_ROOT</c>) and records where the original Android userdata ended before it was split.
-/// Records for the modern layout additionally name, by PARTUUID, the retained <c>ARMADA_BACKUP</c>
+/// Records for the modern layout additionally name, by PARTUUID, the <c>ARMADA_BACKUP</c>
 /// partition (see <see cref="BoardBackupPartUuid"/>).
 /// <para>
 /// Ownership is proven by PARTUUID, never by a partition's name alone: a partition that merely looks
@@ -25,7 +25,7 @@ public sealed record LinuxInstallationLayout(
     /// The optional board backup partition (<c>ARMADA_BACKUP</c>), named by PARTUUID. <c>null</c> means the
     /// legacy layout without a backup; a non-null value must be a well-formed, non-empty GUID distinct from
     /// the three positional ones. When present, the backup is validated (label, type, exact 2 GiB size and
-    /// geometry) and preserved: the restored userdata ends at its start, and it is never reclaimed.
+    /// geometry). The caller chooses whether to reclaim it or retain its original extent and files.
     /// </summary>
     public string? BoardBackupPartUuid { get; init; }
 }
@@ -33,8 +33,7 @@ public sealed record LinuxInstallationLayout(
 /// <summary>
 /// Result of <see cref="UninstallPlanner.Plan"/>. The Android userdata extent is restored to
 /// [<see cref="UserdataStartSector"/>, <see cref="UserdataEndSectorExclusive"/>): the reclaimed Linux
-/// boot and root partitions, plus the original sub-MiB padding - and, when a board backup is retained,
-/// stopping exactly at the backup's start so the backup survives untouched. <see cref="RemovedPartitionNumbers"/>
+/// boot, root and optional backup partitions, plus the original sub-MiB padding. <see cref="RemovedPartitionNumbers"/>
 /// are the GPT numbers of the partitions to drop; every other partition is left where it is.
 /// </summary>
 public sealed record AndroidRestorePlan(
@@ -45,10 +44,11 @@ public sealed record AndroidRestorePlan(
 
 /// <summary>
 /// Decides which partitions may be reclaimed to restore Android, given the live partition table and the
-/// installation record. The contract (frozen; pinned by tests/FreedomInstaller.Core.Tests/UninstallPlannerTests.cs):
+/// installation record:
 /// <list type="bullet">
 /// <item>Only the two partitions immediately following the recorded <c>userdata</c> - exactly
-/// <c>ARMADA_BOOT</c> (1 GiB) and <c>ARMADA_ROOT</c> (&gt;= 32 GiB) - are reclaimed.</item>
+/// <c>ARMADA_BOOT</c> (1 GiB) and <c>ARMADA_ROOT</c> (&gt;= 32 GiB), followed by the optional
+/// recorded <c>ARMADA_BACKUP</c> (2 GiB), are reclaimed.</item>
 /// <item>The three labels must correspond strictly to the recorded PARTUUIDs; every recorded UUID must
 /// be well formed and the three must be distinct.</item>
 /// <item>The reported partition table must be uniquely the three partitions on 512 or 4096 byte sectors
@@ -58,10 +58,10 @@ public sealed record AndroidRestorePlan(
 /// <c>ARMADA_BOOT</c> must begin.</item>
 /// <item><c>ARMADA_ROOT</c> must start exactly where <c>ARMADA_BOOT</c> ends. When the record names no
 /// board backup (legacy layout), <c>ARMADA_ROOT</c>'s end must equal the recorded
-/// <see cref="LinuxInstallationLayout.OriginalUserdataEndSector"/>; when it does, the retained
+/// <see cref="LinuxInstallationLayout.OriginalUserdataEndSector"/>; when it does, the
 /// <c>ARMADA_BACKUP</c> (found only by that PARTUUID, labelled exactly, Linux filesystem type, exactly
-/// 2 GiB) must start exactly at <c>ARMADA_ROOT</c>'s end and end at the recorded original end. In both
-/// cases the restored userdata tail ends at <c>ARMADA_ROOT</c>'s end and the backup is never reclaimed.</item>
+/// 2 GiB) must start exactly at <c>ARMADA_ROOT</c>'s end and end at the original end or its MiB-aligned
+/// floor. Userdata ends at the backup start when retained, otherwise at its complete factory end.</item>
 /// </list>
 /// A table or record that cannot be trusted is rejected rather than guessed; the inputs are never mutated.
 /// The check is pure: no device access, no IO. A business rejection surfaces as
@@ -97,7 +97,7 @@ public static class UninstallPlanner
     private static readonly Guid LinuxFilesystemTypeGuid =
         new("0FC63DAF-8483-4772-8E79-3D69D8477DE4");
 
-    public static AndroidRestorePlan Plan(DiskLayout layout, LinuxInstallationLayout installation)
+    public static AndroidRestorePlan Plan(DiskLayout layout, LinuxInstallationLayout installation, bool reclaimBoardBackup = true)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(installation);
@@ -269,8 +269,7 @@ public static class UninstallPlanner
         RequireLinuxType(boot);
         RequireLinuxType(root);
 
-        // A modern record names a backup, so its partition must be present and named exactly too. The
-        // backup is retained - never reclaimed - so its geometry is validated against the record here.
+        // Validate ownership and geometry before reclaiming the backup partition.
         if (backupUuid is not null)
         {
             RequireLabel(backup!, LinuxBackupName);
@@ -367,7 +366,7 @@ public static class UninstallPlanner
         }
 
         // The tail may be longer than boot+root in the modern layout: the original userdata end may sit
-        // beyond root's end because the exact-2-GiB ARMADA_BACKUP occupies that remainder and is retained.
+        // beyond root's end because the exact-2-GiB ARMADA_BACKUP occupies that remainder.
         // Legacy layouts (no backup) keep the original pin of root's end to the recorded original end.
         if (backupUuid is null)
         {
@@ -435,10 +434,12 @@ public static class UninstallPlanner
 
         // ---- restored extent ------------------------------------------------------------
 
+        var restoredEnd = backup is not null && !reclaimBoardBackup
+            ? backup.StartSector : installation.OriginalUserdataEndSector;
         long restoredBytes;
         try
         {
-            restoredBytes = checked((rootEnd - userdata.StartSector) * sectorSize);
+            restoredBytes = checked((restoredEnd - userdata.StartSector) * sectorSize);
         }
         catch (OverflowException exception)
         {
@@ -453,13 +454,12 @@ public static class UninstallPlanner
             throw new InvalidOperationException("要恢复的 userdata 区段不是正长度，分区表不可信。");
         }
 
-        // Only boot and root are ever reclaimed; the retained ARMADA_BACKUP (when present) stays put and
-        // the restored userdata tail stops exactly at its start.
+        // Recovery material must be saved on the PC before this plan is executed.
         return new AndroidRestorePlan(
             userdata.StartSector,
-            rootEnd,
+            restoredEnd,
             restoredBytes,
-            new[] { boot.Number, root.Number });
+            backup is null || !reclaimBoardBackup ? new[] { boot.Number, root.Number } : new[] { boot.Number, root.Number, backup.Number });
     }
 
     private static int RequireSectorSize(int sectorSize)

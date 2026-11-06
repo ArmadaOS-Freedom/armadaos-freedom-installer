@@ -20,6 +20,7 @@ public partial class MainWindow
 
     /// <summary>用户是否勾选“恢复原厂安卓引导”；默认不勾选，保持项目菜单默认安卓行为。</summary>
     private bool _userdataUninstallRestoreStockBoot;
+    private bool _userdataUninstallReclaimBackup = true;
 
     /// <summary>已提交的原厂引导恢复方案；仅在勾选恢复引导且准备成功时非 null。</summary>
     private BootMaintenancePrepared? _userdataUninstallStockPlan;
@@ -162,6 +163,7 @@ public partial class MainWindow
         if (!HasInternalInstallLiveEdlState)
         {
             _userdataUninstallRestoreStockBoot = false;
+            _userdataUninstallReclaimBackup = true;
             _userdataUninstallStockPlan = null;
             _userdataUninstallStockRestoreResult = null;
             SyncUserdataUninstallRestoreStockCheckboxes();
@@ -189,123 +191,6 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>
-    /// 解析用户已选的卸载来源目录（可能是唯一备份文件夹或其父目录），
-    /// 通过 BootMaintenanceBackend.ReadHistoricalIdentityAsync 校验清单与旁车。
-    /// 仅在卸载模式、空闲、未关闭、未受保护且步骤 0 或 2 时执行。
-    /// 成功后提交 _bootMaintenanceOriginalDirectory 与原始目录文本框；
-    /// 路径变化时作废旧准备并释放旧备份对象。绝不改动 EDL 连接/工具/设备证明。
-    /// </summary>
-    private async System.Threading.Tasks.Task<bool> ResolveUninstallBackupDirectoryFromSelectionAsync()
-    {
-        if (!_ready
-            || !IsModernUserdataUninstallMode
-            || _busy
-            || _closed
-            || _userdataUninstallOperationActive
-            || ProtectedModernUserdataUninstallState)
-        {
-            return false;
-        }
-
-        var selected = _bootMaintenanceOriginalDirectory;
-        var step = _internalInstallStep;
-        if ((step != 0 && step != 2) || string.IsNullOrWhiteSpace(selected))
-        {
-            return false;
-        }
-
-        var accepted = false;
-        ShowUninstallBackupSourceStatus(M("Dynamic.UserdataUninstall.Status.SourceChecking"));
-        await RunBusyAsync(async token =>
-        {
-            UninstallBackupDirectorySelection.Result resolved;
-            try
-            {
-                resolved = UninstallBackupDirectorySelection.Resolve(selected!);
-            }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException)
-            {
-                ShowUninstallBackupSourceStatus(M("Dynamic.UserdataUninstall.Status.SourceInvalid", selected!, ex.Message));
-                return;
-            }
-
-            if (resolved.Kind == UninstallBackupDirectorySelection.SelectionKind.Missing)
-            {
-                ShowUninstallBackupSourceStatus(M("Dynamic.UserdataUninstall.Status.SourceMissing"));
-                return;
-            }
-
-            if (resolved.Kind == UninstallBackupDirectorySelection.SelectionKind.Multiple)
-            {
-                var listed = string.Join(Environment.NewLine, resolved.Candidates);
-                ShowUninstallBackupSourceStatus(M("Dynamic.UserdataUninstall.Status.SourceMultiple", listed));
-                return;
-            }
-
-            var resolvedDirectory = resolved.DirectoryPath!;
-
-            BootMaintenanceHistoricalIdentity history;
-            try
-            {
-                history = await BootMaintenanceBackend.ReadHistoricalIdentityAsync(resolvedDirectory, token);
-            }
-            catch (OperationCanceledException)
-            {
-                ShowUninstallBackupSourceStatus(M("Dynamic.UserdataUninstall.Status.SourceCancelled"));
-                return;
-            }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException)
-            {
-                ShowUninstallBackupSourceStatus(M("Dynamic.UserdataUninstall.Status.SourceInvalid", resolvedDirectory, ex.Message));
-                return;
-            }
-
-            if (!_closed
-                && IsModernUserdataUninstallMode
-                && _internalInstallStep == step
-                && string.Equals(_bootMaintenanceOriginalDirectory, selected, StringComparison.Ordinal)
-                && !ProtectedModernUserdataUninstallState)
-            {
-                var normalizedNew = Path.TrimEndingDirectorySeparator(Path.GetFullPath(history.DirectoryPath));
-                var previous = _bootMaintenanceOriginalDirectory;
-                var pathChanged = string.IsNullOrWhiteSpace(previous)
-                    || !string.Equals(
-                        Path.TrimEndingDirectorySeparator(Path.GetFullPath(previous)),
-                        normalizedNew,
-                        StringComparison.OrdinalIgnoreCase);
-
-                _bootMaintenanceOriginalDirectory = history.DirectoryPath;
-                BootMaintenanceEntryOriginalBox.Text = history.DirectoryPath;
-                BootMaintenanceOriginalBox.Text = history.DirectoryPath;
-
-                if (pathChanged)
-                {
-                    InvalidateModernUserdataUninstallPreparation();
-                    ReleaseInternalInstallBackupObject();
-                    ClearInternalInstallRetainedBackupEvidence();
-                    RenderInternalInstallBackupDetail();
-                }
-
-                ShowUninstallBackupSourceStatus(M("Dynamic.UserdataUninstall.Status.SourceSelected", history.DirectoryPath));
-                RefreshModernUserdataUninstallActions();
-                accepted = true;
-            }
-        });
-
-        return accepted
-            && !_closed
-            && IsModernUserdataUninstallMode
-            && _internalInstallStep == step;
-    }
-
-    private void ShowUninstallBackupSourceStatus(UiMessage message)
-    {
-        SetText(BootMaintenancePrepareStatusText, message);
-        SetInternalInstallCheckStatus(message);
-        AppendLocalizedLog(message);
-    }
-
     // ---------- 真实只读准备 ----------
 
     /// <summary>
@@ -329,61 +214,20 @@ public partial class MainWindow
             return;
         }
 
-        if (!await ResolveUninstallBackupDirectoryFromSelectionAsync())
-        {
-            return;
-        }
-
-        if (_closed
-            || !IsModernUserdataUninstallMode
-            || _internalInstallStep != 2
-            || _busy
-            || ProtectedModernUserdataUninstallState
-            || !HasBootMaintenanceBackupPrerequisite)
-        {
-            return;
-        }
-
-        var originalDirectory = _bootMaintenanceOriginalDirectory;
-        if (string.IsNullOrWhiteSpace(originalDirectory) || !Directory.Exists(originalDirectory))
-        {
-            SetText(BootMaintenancePrepareStatusText, M("Dynamic.UserdataUninstall.Status.PrepareNeedOriginal"));
-            return;
-        }
-
         var runner = _runner;
         var capturedStep = _internalInstallStep;
         var capturedRestoreStock = _userdataUninstallRestoreStockBoot;
-
-        // 工作父目录只从所选备份目录的父目录推导（GetFullPath 之后取 Parent）：
-        // 必须是真实存在的目录，且绝不在所选原始备份内部，也绝不能覆盖它。
-        string workParent;
-        try
+        var capturedReclaimBackup = _userdataUninstallReclaimBackup;
+        var selectedOriginal = _bootMaintenanceOriginalDirectory;
+        var workParent = _internalInstallBackupParent;
+        if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
         {
-            var fullOriginal = Path.GetFullPath(originalDirectory);
-            var derived = Directory.GetParent(fullOriginal)?.FullName;
-            if (string.IsNullOrWhiteSpace(derived)
-                || !Directory.Exists(derived)
-                || !IsInternalInstallBackupParentOutsideExisting(derived, originalDirectory))
-            {
-                SetText(
-                    BootMaintenancePrepareStatusText,
-                    M("Dynamic.UserdataUninstall.Status.PrepareWorkParentUnavailable", originalDirectory));
-                return;
-            }
-
-            workParent = derived;
+            if (!string.IsNullOrWhiteSpace(selectedOriginal) && Directory.Exists(selectedOriginal))
+                workParent = Directory.GetParent(Path.GetFullPath(selectedOriginal))?.FullName;
+            if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
+                workParent = DefaultRecoveryOutputDirectory();
+            if (string.IsNullOrWhiteSpace(workParent)) return;
         }
-        catch (Exception exception) when (exception is ArgumentException
-            or NotSupportedException
-            or IOException)
-        {
-            SetText(
-                BootMaintenancePrepareStatusText,
-                M("Dynamic.UserdataUninstall.Status.PrepareWorkParentUnavailable", originalDirectory));
-            return;
-        }
-
         // 先作废上一次未写入的只读准备；再写入推导出的真实工作父目录（路径不同才写）。
         InvalidateModernUserdataUninstallPreparation();
         if (!string.Equals(_internalInstallBackupParent, workParent, StringComparison.Ordinal))
@@ -401,8 +245,9 @@ public partial class MainWindow
             if (!IsModernUserdataUninstallMode
                 || _closed
                 || _internalInstallStep != capturedStep
-                || !string.Equals(_bootMaintenanceOriginalDirectory, originalDirectory, StringComparison.Ordinal)
-                || _userdataUninstallRestoreStockBoot != capturedRestoreStock)
+                || !string.Equals(_bootMaintenanceOriginalDirectory, selectedOriginal, StringComparison.Ordinal)
+                || _userdataUninstallRestoreStockBoot != capturedRestoreStock
+                || _userdataUninstallReclaimBackup != capturedReclaimBackup)
             {
                 return;
             }
@@ -412,8 +257,9 @@ public partial class MainWindow
         if (!IsModernUserdataUninstallMode
             || _closed
             || _internalInstallStep != capturedStep
-            || !string.Equals(_bootMaintenanceOriginalDirectory, originalDirectory, StringComparison.Ordinal)
+            || !string.Equals(_bootMaintenanceOriginalDirectory, selectedOriginal, StringComparison.Ordinal)
             || _userdataUninstallRestoreStockBoot != capturedRestoreStock
+            || _userdataUninstallReclaimBackup != capturedReclaimBackup
             || !HasBootMaintenanceDeviceProof
             || _internalInstallEdlClient is null
             || _internalInstallEdlTools is null
@@ -450,6 +296,8 @@ public partial class MainWindow
                 {
                     SetText(BootMaintenancePrepareStatusText, M("Dynamic.UserdataUninstall.Status.OpeningOriginal"));
 
+                    var recoverySource = await GetBoardFirstRecoverySourceAsync(fresh, parent, token);
+                    var originalDirectory = recoverySource.DirectoryPath;
                     // 1) 只读打开原始预安装 GPT 备份。
                     original = await InternalInstallBackup.OpenOriginalGptForUninstallAsync(
                         client,
@@ -498,7 +346,7 @@ public partial class MainWindow
                     {
                         backend = await EdlUninstallBackend.CreatePreparedForStockRestoreAsync(
                             client, tools, entry, assets, fresh, stockPrepared!, TemporaryWorkRoot,
-                            runner, backendProgress, token);
+                            runner, backendProgress, token, capturedReclaimBackup);
                     }
                     else
                     {
@@ -513,7 +361,7 @@ public partial class MainWindow
                             actualTools, runner, TemporaryWorkRoot, token);
                         backend = await EdlUninstallBackend.CreatePreparedAsync(
                             client, tools, entry, assets, fresh, menu, facts.CurrentSlot,
-                            TemporaryWorkRoot, runner, backendProgress, token);
+                            TemporaryWorkRoot, runner, backendProgress, token, capturedReclaimBackup);
                     }
 
                     // 全部真实返回后再核对捕获；一致才提交三个自有字段。
@@ -524,8 +372,9 @@ public partial class MainWindow
                         || !ReferenceEquals(_internalInstallEdlEntry, entry)
                         || !ReferenceEquals(_internalInstallBackup, fresh)
                         || !string.Equals(_internalInstallBackupParent, parent, StringComparison.Ordinal)
-                        || !string.Equals(_bootMaintenanceOriginalDirectory, originalDirectory, StringComparison.Ordinal)
+                        || !string.Equals(_bootMaintenanceOriginalDirectory, selectedOriginal, StringComparison.Ordinal)
                         || _userdataUninstallRestoreStockBoot != capturedRestoreStock
+                        || _userdataUninstallReclaimBackup != capturedReclaimBackup
                         || _internalInstallStep != capturedStep
                         || _userdataUninstallBackend is not null
                         || _userdataUninstallMenu is not null

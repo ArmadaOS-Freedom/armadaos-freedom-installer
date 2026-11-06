@@ -14,7 +14,7 @@ public sealed class UninstallInstallationLayoutTests
     [InlineData("TB323FU", 4096)]
     [InlineData("TB322FC", 512)]
     [InlineData("TB323FU", 512)]
-    public void InstalledPlannerOutput_CanBeUninstalledWithoutMovingBackup(string model, int sector)
+    public void InstalledPlannerOutput_ReclaimsBackupAndAlignmentPadding(string model, int sector)
     {
         var (original, current, plan) = Build(sector, 0);
         var inputs = UninstallEvidenceValidator.ValidateEdl(
@@ -22,10 +22,10 @@ public sealed class UninstallInstallationLayoutTests
 
         Assert.True(plan.TailUnallocatedSectors > 0);
         Assert.Equal(123870976L * 4096 / sector, plan.BackupEndSectorExclusive);
-        Assert.Equal(plan.BackupStartSector, inputs.Plan.UserdataEndSectorExclusive);
-        Assert.Equal((plan.BackupStartSector - plan.OriginalUserdata.StartSector) * sector,
+        Assert.Equal(plan.OriginalUserdataEndSectorExclusive, inputs.Plan.UserdataEndSectorExclusive);
+        Assert.Equal((plan.OriginalUserdataEndSectorExclusive - plan.OriginalUserdata.StartSector) * sector,
             inputs.Plan.RestoredAndroidBytes);
-        Assert.Equal(new long[] { 3, 4 }, inputs.Plan.RemovedPartitionNumbers);
+        Assert.Equal(new long[] { 3, 4, 5 }, inputs.Plan.RemovedPartitionNumbers);
         var backup = current.Partitions.Single(p => p.Name == "ARMADA_BACKUP");
         Assert.Equal(2L << 30, backup.SectorCount * sector);
         Assert.Equal(1UL << 60, backup.Attributes);

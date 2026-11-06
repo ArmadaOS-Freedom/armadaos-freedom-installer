@@ -523,7 +523,8 @@ public partial class MainWindow
             long totalBytes;
             try
             {
-                totalBytes = checked(plan.OriginalUserdata.SectorCount * (long)plan.SectorSize);
+                totalBytes = checked((Math.Max(plan.OriginalUserdataEndSectorExclusive, plan.BackupEndSectorExclusive)
+                    - plan.OriginalUserdata.StartSector) * (long)plan.SectorSize);
             }
             catch (OverflowException)
             {
@@ -677,12 +678,16 @@ public partial class MainWindow
                         SetInternalInstallConfirmProgressIndeterminate(true);
                         SetInternalInstallConfirmStatus(
                             M("Dynamic.InternalInstall.Prepared.PreparingArtifacts"));
+                        InternalBackupSet? recoverySource = null;
+                        if (backup.Tables[0].Partitions.Any(p => p.Name == "ARMADA_BACKUP"))
+                            recoverySource = await GetBoardFirstRecoverySourceAsync(backup, parentPath, token);
                         var preparedArtifacts = await InternalInstallArtifacts.PrepareAsync(
                             backup,
                             androidGiB,
                             storage,
                             TemporaryWorkRoot,
-                            token);
+                            token,
+                            recoverySource);
 
                         if (_closeRequested || _closed)
                         {
@@ -842,7 +847,7 @@ public partial class MainWindow
         SetText(
             InternalInstallConfirmBackupPathText,
             "Dynamic.InternalInstall.Confirm.Value",
-            prepared.BackupDirectory);
+            _internalInstallRecoverySource?.DirectoryPath ?? prepared.BackupDirectory);
         SetText(
             InternalInstallConfirmPowerText,
             "Dynamic.InternalInstall.Confirm.PowerRecord",
@@ -905,8 +910,8 @@ public partial class MainWindow
             build,
             bootloader,
             InternalInstallPowerMessage(),
-            prepared.BackupDirectory,
-            prepared.BackupManifestSha256,
+            _internalInstallRecoverySource?.DirectoryPath ?? prepared.BackupDirectory,
+            _internalInstallRecoverySource?.ManifestSha256 ?? prepared.BackupManifestSha256,
             validation?.PackageId ?? UnknownValue,
             validation?.Version ?? UnknownValue,
             prepared.PackageFingerprint,

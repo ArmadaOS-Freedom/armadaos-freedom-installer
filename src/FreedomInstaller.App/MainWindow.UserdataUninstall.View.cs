@@ -86,7 +86,7 @@ public partial class MainWindow
             _internalInstallStep == 0 ? Visibility.Visible : Visibility.Collapsed;
         BootMaintenanceRepairSourcesRow.Visibility = Visibility.Collapsed;
 
-        // 全新备份是唯一路线：复用已有备份的两行一律隐藏并禁用。
+        // 卸载使用独立的恢复资料页面，不显示安装备份控件。
         InternalInstallBackupUseExistingCheck.Visibility = Visibility.Collapsed;
         InternalInstallBackupUseExistingCheck.IsEnabled = false;
         InternalInstallBackupExistingRow.Visibility = Visibility.Collapsed;
@@ -106,6 +106,8 @@ public partial class MainWindow
         var stockCheckVisible = IsModernUserdataUninstallMode;
         var stockCheckVisibility = stockCheckVisible ? Visibility.Visible : Visibility.Collapsed;
         BootMaintenanceRestoreStockCheck.Visibility = stockCheckVisibility;
+        UninstallReclaimBackupCheck.Visibility = stockCheckVisibility;
+        UninstallUseBoardBackupButton.Visibility = stockCheckVisibility;
         BootMaintenanceConfirmRestoreStockCheck.Visibility = stockCheckVisibility;
         if (stockCheckVisible)
         {
@@ -135,7 +137,7 @@ public partial class MainWindow
 
     /// <summary>
     /// 确认页（第 3 步）：只按真实准备结果显示设备身份、当前与恢复后的容量、槽位方案与删除范围；
-    /// 保留备份说明只在 Core 校验的 2 GiB 保留备份真实存在时出现。执行按钮由准备结果和风险勾选共同控制。
+    /// 尾部空间回收说明只在 Core 校验的备份分区真实存在时出现。执行按钮由准备结果和风险勾选共同控制。
     /// </summary>
     private void RenderModernUserdataUninstallConfirmPage()
     {
@@ -180,7 +182,7 @@ public partial class MainWindow
                 DeletedPartitionExtents(inputs),
                 bootBehavior));
 
-        // 现代尾部 2 GiB 恢复备份区：只在 Core 校验的真实保留备份存在时说明，绝不按名字猜。
+        // 根据当前方案说明尾部备份区的保留或回收行为。
         if (inputs.Record.BoardBackupPartUuid is not null)
         {
             var retained = new TextBlock
@@ -189,7 +191,8 @@ public partial class MainWindow
                 Margin = new Thickness(0, 4, 0, 0),
                 TextWrapping = TextWrapping.Wrap,
             };
-            SetText(retained, M("Dynamic.UserdataUninstall.RetainedBackup"));
+            SetText(retained, M(_userdataUninstallReclaimBackup
+                ? "Dynamic.UserdataUninstall.RetainedBackup" : "Dynamic.UserdataUninstall.KeepBackup"));
             BootMaintenanceSlotsPanel.Children.Add(retained);
         }
 
@@ -274,7 +277,7 @@ public partial class MainWindow
     // ---------- 可用性 ----------
 
     /// <summary>
-    /// 卸载向导的底栏与控件可用性。第 2 步「下一步」需要真实设备入口前提与有效的原始来源目录；
+    /// 卸载向导的底栏与控件可用性。第 2 步「下一步」需要真实设备入口前提，来源在准备时校验；
     /// 内部第 3 步的执行按钮由执行条件与风险勾选共同控制。
     /// </summary>
     private void RefreshModernUserdataUninstallActions()
@@ -304,9 +307,7 @@ public partial class MainWindow
             && _internalInstallStep < 3
             && (_internalInstallStep < 2
                 ? CanEnterModernUserdataUninstallStep(NextModernUserdataUninstallStep(_internalInstallStep))
-                : HasBootMaintenanceBackupPrerequisite
-                    && !string.IsNullOrWhiteSpace(_bootMaintenanceOriginalDirectory)
-                    && Directory.Exists(_bootMaintenanceOriginalDirectory));
+                : HasBootMaintenanceBackupPrerequisite);
 
         UpdateUserdataUninstallRestoreStockCheckboxEnabled();
 
@@ -355,7 +356,8 @@ public partial class MainWindow
             && idle
             && !protectedState
             && _transport is not null
-            && !HasInternalInstallLiveEdlState;
+            && (!HasInternalInstallLiveEdlState
+                || _internalInstallEdlClient?.Binding.OfflineIdentity is not null);
 
         BootMaintenanceEntryOriginalBrowseButton.IsEnabled = idle && !protectedState;
         BootMaintenanceOriginalBrowseButton.IsEnabled = idle && !protectedState;
