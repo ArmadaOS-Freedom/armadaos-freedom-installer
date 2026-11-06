@@ -6,6 +6,21 @@ using System.Threading.Tasks;
 
 namespace FreedomInstaller.Core;
 
+/// <summary>A live Sahara identity, before loading Firehose or reading any partition.</summary>
+public sealed class EdlHardwareIdentity
+{
+    internal EdlHardwareIdentity(EdlDeviceProfile profile, string serial, string instanceId)
+    {
+        Profile = profile;
+        BusSerialHex = serial;
+        DeviceInstanceId = instanceId;
+    }
+
+    public EdlDeviceProfile Profile { get; }
+    public string BusSerialHex { get; }
+    public string DeviceInstanceId { get; }
+}
+
 /// <summary>
 /// Automatic EDL profile detection over the offline 9008 route: one reviewed client command reports the
 /// hardware id of the present device, and that id selects exactly one complete built-in profile.
@@ -85,6 +100,15 @@ public static class GlobalEdlDetection
         ICommandRunner runner,
         IEdlEndpointDiscovery discovery,
         string? expectedBusSerialHex = null,
+        CancellationToken cancellationToken = default) =>
+        (await DetectIdentityAsync(clientPath, runner, discovery, expectedBusSerialHex, cancellationToken)
+            .ConfigureAwait(false)).Profile;
+
+    public static async Task<EdlHardwareIdentity> DetectIdentityAsync(
+        string clientPath,
+        ICommandRunner runner,
+        IEdlEndpointDiscovery discovery,
+        string? expectedBusSerialHex = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(clientPath))
@@ -158,7 +182,7 @@ public static class GlobalEdlDetection
                 $"{afterSerial}.");
         }
 
-        return ResolveProfile(hardwareIdHex);
+        return new EdlHardwareIdentity(ResolveProfile(hardwareIdHex), serialHex, after.DeviceInstanceId);
     }
 
     /// <summary>

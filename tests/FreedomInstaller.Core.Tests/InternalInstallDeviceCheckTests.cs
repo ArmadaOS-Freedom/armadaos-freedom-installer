@@ -442,7 +442,7 @@ internal sealed class DeviceCheckRunner : ICommandRunner
         var display = after ? ReturnDisplayId : _displayId;
         var serial = after ? ReturnSerial : ActualSerial;
 
-        return string.Join(
+        var dump = string.Join(
             '\n',
             new[]
             {
@@ -458,7 +458,10 @@ internal sealed class DeviceCheckRunner : ICommandRunner
                 "[ro.boot.flash.locked]: [1]",
                 "[ro.boot.vbmeta.device_state]: [locked]",
             });
+        return GetpropTransform?.Invoke(dump) ?? dump;
     }
+
+    public Func<string, string>? GetpropTransform { get; set; }
 
     private string BootCompleted()
     {
@@ -503,6 +506,29 @@ public sealed class InternalInstallDeviceCheckTests
     private const string Soc = "3251823604";
     private const string DisplayId = "TB322FC.2026.06.01";
     private const string G4Product = "elden_prc_wifi";
+
+    [Theory]
+    [InlineData("TB322FC", "elden_prc_wifi")]
+    [InlineData("TB323FU", "fixture-unmapped-board")]
+    [InlineData("TB710FU", "topaz_prc_wifi")]
+    public async Task Check_PortRomKeepsCanonicalModelAcrossFastbootReturn(string model, string product)
+    {
+        var runner = new DeviceCheckRunner(Serial, new DeviceCheckClock(), model: model, displayId: "ported-ROM")
+        {
+            FastbootProductValue = product,
+            SnapshotStatus = "none",
+            GetpropTransform = dump => dump
+                .Replace("[ro.product.model]: [" + model + "]", "[ro.product.model]: [25091RP04C]")
+                .Replace("[ro.product.vendor.model]: [" + model + "]", "[ro.product.vendor.model]: [Xiaomi for arm64]")
+                .Replace("[ro.product.name]: [" + model + "]", "[ro.product.name]: [piano]")
+                + "\n[ro.product.bootimage.model]: [" + model + "]",
+        };
+        var result = await CreateCheck(runner).CheckAsync(Serial);
+        Assert.True(result.Succeeded);
+        Assert.Equal(model, result.Android!.Identity.Model);
+        Assert.Equal(AndroidReturnState.Verified, result.AndroidReturn);
+        Assert.Equal(1, runner.FastbootReboots);
+    }
 
     [Theory]
     [InlineData(BootloaderState.Locked, "no")]

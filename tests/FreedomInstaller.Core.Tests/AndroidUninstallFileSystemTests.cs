@@ -133,7 +133,7 @@ public sealed class AndroidUninstallFileSystemTests
         const long ExpectedFilesystemBytes = DataKBlocks * 1024L;
 
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(Adb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(Adb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(Adb("shell", "getprop", "ro.serialno"), Serial + "\n")
             .Answer(Adb("shell", "getprop", "sys.boot_completed"), "1\n")
             .Answer(Adb("shell", "cat", "/sys/class/block/sda2/size"), RestoredSysfsUnits + "\n")

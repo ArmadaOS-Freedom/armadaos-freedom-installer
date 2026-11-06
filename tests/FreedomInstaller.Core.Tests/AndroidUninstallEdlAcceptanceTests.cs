@@ -297,7 +297,7 @@ public sealed class AndroidUninstallEdlAcceptanceTests
     {
         var plan = GptFixture.RestoredAndroidBytes;
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(EdlAdb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(EdlAdb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(EdlAdb("shell", "getprop", "ro.serialno"), Serial + "\n")
             .Answer(EdlAdb("shell", "getprop", "sys.boot_completed"), "1\n")
             .Answer(EdlAdb("shell", "cat", "/sys/class/block/sda2/size"), RestoredSysfsUnits + "\n")
@@ -327,7 +327,7 @@ public sealed class AndroidUninstallEdlAcceptanceTests
     {
         var plan = GptFixture.RestoredAndroidBytes;
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(EdlAdb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(EdlAdb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(EdlAdb("shell", "getprop", "ro.serialno"), Serial + "\n")
             .Answer(EdlAdb("shell", "getprop", "sys.boot_completed"), "1\n")
             .Answer(EdlAdb("shell", "cat", "/sys/class/block/sda2/size"), RestoredSysfsUnits + "\n")
@@ -345,7 +345,7 @@ public sealed class AndroidUninstallEdlAcceptanceTests
     {
         var plan = GptFixture.RestoredAndroidBytes;
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(EdlAdb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(EdlAdb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(EdlAdb("shell", "getprop", "ro.serialno"), Serial + "\n")
             .Answer(EdlAdb("shell", "getprop", "sys.boot_completed"), "1\n")
             .Answer(

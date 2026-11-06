@@ -40,14 +40,15 @@ public partial class MainWindow
                     {
                         _boardRecoveryDiscoveredDirectory = null;
                         using var detector = await LoadGlobalToolsAsync(EdlDeviceProfiles.FindByModel("TB322FC")!, token);
-                        var profile = await GlobalEdlDetection.DetectAsync(detector.ClientPath, _runner!, discovery, null, token);
+                        var hardware = await GlobalEdlDetection.DetectIdentityAsync(detector.ClientPath, _runner!, discovery, null, token);
+                        var profile = hardware.Profile;
                         if (DeviceModelRoutes.IsWriteRoutePending(profile.Model))
                             throw new InvalidOperationException(T("Dynamic.Model.RoutePendingInEdl", UiText.ModelName(profile.Model)));
                         var tools = await LoadGlobalToolsAsync(profile, token);
                         try
                         {
                             var entry = GlobalEdlBinding.Attach(profile, discovery);
-                            client = new EdlClient(tools, entry, _runner!, discovery);
+                            client = new EdlClient(tools, entry, _runner!, discovery, hardware);
                             _internalInstallEdlTools = tools;
                             _internalInstallEdlEntry = entry;
                             _internalInstallEdlClient = client;
