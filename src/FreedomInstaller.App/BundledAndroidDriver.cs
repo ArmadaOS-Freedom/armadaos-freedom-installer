@@ -73,9 +73,17 @@ internal static class BundledAndroidDriver
                 RejectLink(target);
                 // Validation rejected this hash-keyed cache. Remove only its expected regular files;
                 // unexpected entries or links require manual repair, never recursive traversal.
-                ValidateLayout(target);
-                foreach (var pin in Pins) File.Delete(Path.Combine(target, pin.Path));
-                foreach (var dir in Directories.Reverse()) Directory.Delete(Path.Combine(target, dir), false);
+                ValidateLayout(target, allowMissing: true);
+                foreach (var pin in Pins)
+                {
+                    var path = Path.Combine(target, pin.Path);
+                    if (File.Exists(path)) File.Delete(path);
+                }
+                foreach (var dir in Directories.Reverse())
+                {
+                    var path = Path.Combine(target, dir);
+                    if (Directory.Exists(path)) Directory.Delete(path, false);
+                }
             }
             Directory.Move(staging, target);
         }
@@ -106,12 +114,16 @@ internal static class BundledAndroidDriver
         }
     }
 
-    private static void ValidateLayout(string root)
+    private static void ValidateLayout(string root, bool allowMissing = false)
     {
         foreach (var relative in Directories)
         {
             var dir = Path.Combine(root, relative);
-            if (!Directory.Exists(dir)) throw new InvalidDataException("Android driver cache directory is missing.");
+            if (!Directory.Exists(dir))
+            {
+                if (allowMissing && !File.Exists(dir)) continue;
+                throw new InvalidDataException("Android driver cache directory is missing.");
+            }
             RejectLink(dir);
             var expected = new HashSet<string>(PathComparer);
             foreach (var name in Pins.Select(p => p.Path).Concat(Directories.Where(d => d.Length != 0)))
@@ -125,7 +137,8 @@ internal static class BundledAndroidDriver
                 if (!expected.Remove(Path.GetFileName(path)))
                     throw new InvalidDataException("Android driver cache contains unexpected entries.");
             }
-            if (expected.Count != 0) throw new InvalidDataException("Android driver cache is incomplete.");
+            if (expected.Count != 0 && !allowMissing)
+                throw new InvalidDataException("Android driver cache is incomplete.");
         }
     }
 

@@ -76,7 +76,7 @@ public partial class MainWindow
                             await BindUninstallRecoveryIdentityAsync(client, source, token);
                             connected = true;
                         }
-                        catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException)
+                        catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException or InvalidDataException)
                         {
                             source = null;
                             _boardRecoveryDiscoveredDirectory = null;
@@ -92,7 +92,7 @@ public partial class MainWindow
                                 await BindUninstallRecoveryIdentityAsync(client, source, token);
                             _boardRecoveryDiscoveredDirectory = source;
                         }
-                        catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException)
+                        catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException or InvalidDataException)
                         {
                             source = null;
                             _boardRecoveryDiscoveredDirectory = null;
@@ -208,7 +208,7 @@ public partial class MainWindow
                 }
                 AppendLocalizedLog(M("Dynamic.RecoverySource.BoardMissing"));
             }
-            catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException)
+            catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException or InvalidDataException)
             {
                 AppendLocalizedLog(M("Dynamic.RecoverySource.BoardInvalid", error.Message));
             }

@@ -403,7 +403,7 @@ public sealed class InternalInstallAcceptanceTests
     {
         var constructor = typeof(EdlDeviceProfile)
             .GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
-            .Single(candidate => candidate.GetParameters().Length == 10);
+            .Single(candidate => candidate.GetParameters().Length == 11);
 
         return (EdlDeviceProfile)constructor.Invoke(new object?[]
         {
@@ -417,6 +417,7 @@ public sealed class InternalInstallAcceptanceTests
             Array.Empty<EdlLoaderMaterial>(),
             null,
             false,
+            EdlInstallBootTrust.Standard,
         })!;
     }
 
