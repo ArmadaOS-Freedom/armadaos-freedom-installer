@@ -181,6 +181,18 @@ namespace FreedomInstaller.App
 
         public int PickerCallCount { get; private set; }
 
+        public string? PickerResult { get; set; }
+
+        public IReadOnlyList<string> TestLog => _testLog;
+
+        public bool InternalInstallOperationActive => _internalInstallOperationActive;
+
+        public Task RunCheckBoardRecoveryEdlAsync(string parent)
+        {
+            _internalInstallBackupParent = parent;
+            return CheckUninstallBoardRecoveryEdlAsync();
+        }
+
         public MainWindow(EdlClient client, string? cachedDirectory, string? selectedPcDirectory, string tempRoot)
         {
             _internalInstallEdlClient = client;
@@ -216,13 +228,13 @@ namespace FreedomInstaller.App
         private string? PickExistingDirectory(string? initial, string key)
         {
             PickerCallCount++;
-            return null;
+            return PickerResult;
         }
 
         private void ApplyInternalInstallBackupParent(string parent) => _internalInstallBackupParent = parent;
 
         private Task RunBusyAsync(Func<CancellationToken, Task> work) =>
-            throw new NotSupportedException("RunBusyAsync is not available in the headless recovery-selection test shell.");
+            work(CancellationToken.None);
 
         private Task<EdlToolchain> LoadGlobalToolsAsync(EdlDeviceProfile profile, CancellationToken token) =>
             throw new NotSupportedException("LoadGlobalToolsAsync is not available in the headless recovery-selection test shell.");
