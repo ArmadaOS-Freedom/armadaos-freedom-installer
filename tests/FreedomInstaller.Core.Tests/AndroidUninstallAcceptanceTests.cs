@@ -70,7 +70,7 @@ public sealed class AndroidUninstallAcceptanceTests
         Assert.Equal(GptFixture.RestoredAndroidBytes, observation.UserdataPartitionBytes);
 
         Assert.Equal(6, runner.Commands.Count);
-        AssertCommand(runner.Commands[0], "-s", Serial, "shell", "getprop", "ro.product.model");
+        AssertCommand(runner.Commands[0], "-s", Serial, "shell", "getprop");
         AssertCommand(runner.Commands[1], "-s", Serial, "shell", "getprop", "ro.serialno");
         AssertCommand(runner.Commands[2], "-s", Serial, "shell", "getprop", "sys.boot_completed");
 
@@ -119,7 +119,7 @@ public sealed class AndroidUninstallAcceptanceTests
         const long SysfsUnits = ExpectedBytes / 512L;
 
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(Adb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(Adb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(Adb("shell", "getprop", "ro.serialno"), Serial + "\n")
             .Answer(Adb("shell", "getprop", "sys.boot_completed"), "1\n")
             .Answer(Adb("shell", "cat", "/sys/class/block/sda2/size"), SysfsUnits + "\n")
@@ -140,7 +140,7 @@ public sealed class AndroidUninstallAcceptanceTests
     public async Task Read_UsesTheBootSerialOnlyWhenTheSerialnoPropertyIsEmpty()
     {
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(Adb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(Adb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(Adb("shell", "getprop", "ro.serialno"), "  \n")
             .Answer(Adb("shell", "getprop", "ro.boot.serialno"), Serial + "\n")
             .Answer(Adb("shell", "getprop", "sys.boot_completed"), "1\n")
@@ -204,7 +204,7 @@ public sealed class AndroidUninstallAcceptanceTests
     public async Task Read_RejectsAnInvalidOrOverflowingSysfsLength(string sizeUnits)
     {
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(Adb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(Adb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(Adb("shell", "getprop", "ro.serialno"), Serial + "\n")
             .Answer(Adb("shell", "getprop", "sys.boot_completed"), "1\n")
             .Answer(Adb("shell", "cat", "/sys/class/block/sda2/size"), sizeUnits + "\n");
@@ -219,7 +219,7 @@ public sealed class AndroidUninstallAcceptanceTests
     public async Task Read_FailsWhenAQueryExitsNonZero()
     {
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(Adb("shell", "getprop", "ro.product.model"), string.Empty, exitCode: 1, standardError: "error: device offline");
+            .Answer(Adb("shell", "getprop"), string.Empty, exitCode: 1, standardError: "error: device offline");
 
         var probe = new AdbAndroidUninstallAcceptanceProbe(runner, AdbPath);
 
@@ -230,7 +230,7 @@ public sealed class AndroidUninstallAcceptanceTests
     public async Task Read_FailsWhenAPropertyIsMissing()
     {
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(Adb("shell", "getprop", "ro.product.model"), "\n")
+            .Answer(Adb("shell", "getprop"), "\n")
             .Answer(Adb("shell", "getprop", "ro.serialno"), Serial + "\n");
 
         var probe = new AdbAndroidUninstallAcceptanceProbe(runner, AdbPath);
@@ -411,9 +411,24 @@ public sealed class AndroidUninstallAcceptanceTests
     private static string Adb(params string[] arguments)
         => string.Join(" ", new[] { "-s", Serial }.Concat(arguments));
 
+    [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    [InlineData("TB710FU")]
+    public async Task Read_UsesSharedModelForPortRom(string model)
+    {
+        var runner = AcceptingRunner()
+            .Answer(Adb("shell", "getprop"),
+                "[ro.product.model]: [25091RP04C]\n[ro.product.bootimage.model]: [" + model + "]\n");
+        var observation = await new AdbAndroidUninstallAcceptanceProbe(runner, AdbPath)
+            .ReadAsync(Serial, Disk, UserdataNumber);
+        Assert.Equal(model, observation.Model);
+        Assert.Equal(Serial, observation.Serial);
+    }
+
     private static AndroidAcceptanceCommandRunner AcceptingRunner()
         => new AndroidAcceptanceCommandRunner()
-            .Answer(Adb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(Adb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(Adb("shell", "getprop", "ro.serialno"), Serial + "\n")
             .Answer(Adb("shell", "getprop", "sys.boot_completed"), "1\n")
             .Answer(Adb("shell", "cat", "/sys/class/block/sda2/size"), RestoredSysfsUnits + "\n")

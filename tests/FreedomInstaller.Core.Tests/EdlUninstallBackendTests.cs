@@ -476,6 +476,10 @@ internal sealed class EbRunner : ICommandRunner
 
     private ProcessResult RunClient(ProcessCommand command)
     {
+        if (Has(command.Arguments, "identify"))
+            return new ProcessResult(0,
+                $"ARMADA_EDL_IDENTITY_V1 serial={E003EdlTestData.BusSerialHex} hwid={_tools.HardwareId}", string.Empty);
+
         if (Has(command.Arguments, "printgpt"))
         {
             return RunProbe(command.Arguments);
