@@ -39,8 +39,8 @@ public sealed class GblFixtureFactorySmokeTests
     }
 
     [Theory]
-    [InlineData(false, 49)]
-    [InlineData(true, 48)]
+    [InlineData(false, 48)]
+    [InlineData(true, 47)]
     public async Task UnlockedG5_UsesRealFactoryAndTruthfulBackup(bool omitEfispBackup, int expectedBackupFiles)
     {
         // Source first, session second: the session is disposed first, the source last.
@@ -56,6 +56,7 @@ public sealed class GblFixtureFactorySmokeTests
         Assert.NotNull(session.Backend.Prepared);
         Assert.Equal(G5Model, session.Toolchain.Model);
         Assert.Equal(expectedBackupFiles, session.Backup.Files.Count);
+        Assert.DoesNotContain("metadata", session.Backup.Files.Keys);
 
         // The capture is the real one: its EFISP claim tracks the truth of this call, not the device.
         Assert.Equal(!omitEfispBackup, session.Backup.Files.ContainsKey("efisp"));

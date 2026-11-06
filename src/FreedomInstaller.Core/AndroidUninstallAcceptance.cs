@@ -16,7 +16,7 @@ namespace FreedomInstaller.Core;
 /// came up and accepted the new partition layout.
 /// </para>
 /// </summary>
-/// <param name="Model">Trimmed value of <c>getprop ro.product.model</c>, exactly as the device printed it.</param>
+/// <param name="Model">Canonical model from the shared Android model resolver.</param>
 /// <param name="Serial">
 /// Trimmed value of <c>getprop ro.serialno</c>, or of <c>getprop ro.boot.serialno</c> when the first one is
 /// empty. An implementation never falls back to any other source for a serial.
@@ -144,7 +144,7 @@ public interface IAndroidUninstallAcceptanceProbe
 /// timeout:
 /// </para>
 /// <list type="number">
-/// <item><c>[adb, "-s", serial, "shell", "getprop", "ro.product.model"]</c> - the model.</item>
+/// <item><c>[adb, "-s", serial, "shell", "getprop"]</c> - the model candidate.</item>
 /// <item><c>[adb, "-s", serial, "shell", "getprop", "ro.serialno"]</c> - the serial.</item>
 /// <item><c>[adb, "-s", serial, "shell", "getprop", "ro.boot.serialno"]</c> - only when the previous one
 /// printed nothing.</item>
@@ -273,11 +273,12 @@ public sealed class AdbAndroidUninstallAcceptanceProbe : IAndroidUninstallAccept
 
         token.ThrowIfCancellationRequested();
 
-        var model = (await RunAsync(serial, token, "shell", "getprop", "ro.product.model")
-            .ConfigureAwait(false)).StandardOutput.Trim();
-        if (model.Length == 0)
+        var dump = (await RunAsync(serial, token, "shell", "getprop")
+            .ConfigureAwait(false)).StandardOutput;
+        var model = AndroidModelResolver.Resolve(dump);
+        if (model is null)
         {
-            throw new InvalidDataException("The device did not report ro.product.model.");
+            throw new InvalidDataException("The Android model could not be identified: " + AndroidModelResolver.Describe(dump));
         }
 
         var reportedSerial = (await RunAsync(serial, token, "shell", "getprop", "ro.serialno")

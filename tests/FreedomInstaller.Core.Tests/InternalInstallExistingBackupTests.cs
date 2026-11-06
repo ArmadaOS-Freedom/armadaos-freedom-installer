@@ -379,9 +379,10 @@ public sealed partial class InternalInstallExistingBackupTests : IClassFixture<E
                 .ToArray());
         Assert.Single(Directory.GetDirectories(parent));
 
-        // Loading issues geometry probes only: no payload read, write or reset.
-        Assert.Equal(6, openRunner.Commands.Count);
-        Assert.All(openRunner.Commands, command => Assert.Equal("printgpt", command.Arguments[0]));
+        // Hardware identification precedes geometry probes; no payload read, write or reset.
+        Assert.Equal(7, openRunner.Commands.Count);
+        Assert.Equal("identify", openRunner.Commands[0].Arguments.Last());
+        Assert.All(openRunner.Commands.Skip(1), command => Assert.Equal("printgpt", command.Arguments[0]));
         Assert.Empty(openRunner.Reads);
         Assert.Empty(openRunner.Writes);
         Assert.Equal(0, openRunner.ResetCount);

@@ -274,7 +274,7 @@ public sealed class InternalInstallAcceptance
         var dump = (await QueryAsync(ct, "-s", serial, "shell", "getprop").ConfigureAwait(false))
             .StandardOutput;
 
-        var actualModel = DeviceProbe.IdentifyModel(dump);
+        var actualModel = AndroidModelResolver.Resolve(dump);
         if (actualModel is null)
         {
             throw new InvalidDataException(

@@ -258,11 +258,11 @@ public partial class MainWindow
             // 真实 9008 在场：先做只读识别，再加载真正的工具链；识别只用共享客户端，绝不触碰 Firehose 或探针。
             SetText(GlobalProgressStatusText, "Dynamic.Global.Status.BindingExistingEdl");
 
-            EdlDeviceProfile detectedProfile;
+            EdlHardwareIdentity detectedHardware;
             using (EdlToolchain identificationTools = await LoadGlobalToolsAsync(
                 EdlDeviceProfiles.FindByModel("TB322FC")!, token))
             {
-                detectedProfile = await GlobalEdlDetection.DetectAsync(
+                detectedHardware = await GlobalEdlDetection.DetectIdentityAsync(
                     identificationTools.ClientPath,
                     _runner,
                     discovery,
@@ -270,6 +270,7 @@ public partial class MainWindow
                     token);
             }
 
+            var detectedProfile = detectedHardware.Profile;
             if (expectedProfile is not null
                 && !string.Equals(expectedProfile.ProfileId, detectedProfile.ProfileId, StringComparison.Ordinal))
             {
@@ -285,7 +286,7 @@ public partial class MainWindow
             _globalEdlEntry = entry;
             _globalPower = null;
 
-            var client = new EdlClient(tools, entry, _runner, new WindowsEdlEndpointDiscovery());
+            var client = new EdlClient(tools, entry, _runner, new WindowsEdlEndpointDiscovery(), detectedHardware);
             _globalEdlClient = client;
             await client.ProbeRawGeometryAsync(
                 0,

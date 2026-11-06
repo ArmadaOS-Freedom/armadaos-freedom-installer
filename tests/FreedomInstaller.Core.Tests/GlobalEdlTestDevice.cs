@@ -397,6 +397,9 @@ internal sealed class GlobalEdlTestRunner : ICommandRunner
 
     private string Execute(ProcessCommand command, CancellationToken cancellationToken)
     {
+        if (command.Arguments.SequenceEqual(new[] { "--pid", "9008", "--loglevel", "Debug", "identify" }))
+            return $"ARMADA_EDL_IDENTITY_V1 serial={BusSerialHex} hwid={HardwareId}";
+
         if (command.Arguments.Count == 0)
         {
             throw new InvalidOperationException("fixture: the synthetic EDL command has no arguments");

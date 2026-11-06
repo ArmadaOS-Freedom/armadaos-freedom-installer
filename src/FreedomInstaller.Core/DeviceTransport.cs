@@ -677,7 +677,8 @@ public sealed class DeviceTransport
     /// </para>
     /// <para>
     /// The model must be exactly one of the supported models, as decided by
-    /// <see cref="DeviceProbe.IdentifyModel"/>. A missing model, an unsupported model and two contradictory
+    /// <see cref="AndroidModelResolver"/>. This is a candidate only; EDL verifies the hardware before loading.
+    /// A missing model, an unsupported model and two contradictory
     /// model properties all throw <see cref="InvalidOperationException"/>; a non-zero adb exit code throws
     /// the same type with the captured diagnostic.
     /// </para>
@@ -712,12 +713,12 @@ public sealed class DeviceTransport
                 $"读取设备 {serial} 的 adb 属性失败（{AdbPath}，退出码 {result.ExitCode}）：{DescribeDiagnostic(result)}");
         }
 
-        var model = DeviceProbe.IdentifyModel(result.StandardOutput);
+        var model = AndroidModelResolver.Resolve(result.StandardOutput);
         if (model is null)
         {
-            // Missing model, unsupported model and two contradictory model properties all land here.
+            var description = AndroidModelResolver.Describe(result.StandardOutput);
             throw new InvalidOperationException(
-                $"无法从设备 {serial} 的 getprop 输出确认受支持的型号（只接受 联想拯救者 Y700 四代（TB322FC）/ 联想拯救者 Y700 五代（TB323FU）/ 联想小新 Pad Pro GT（TB710FU）），拒绝继续。");
+                $"无法从设备 {serial} 的 getprop 输出确认受支持的型号（只接受 联想拯救者 Y700 四代（TB322FC）/ 联想拯救者 Y700 五代（TB323FU）/ 联想小新 Pad Pro GT（TB710FU）），拒绝继续。诊断：{description}");
         }
 
         // getprop runs inside Android, so it says nothing about fastboot accepting writes: always Unknown.
