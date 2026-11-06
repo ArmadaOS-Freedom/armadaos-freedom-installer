@@ -3093,6 +3093,27 @@
                                 </StackPanel>
                             </Grid>
 
+                            <StackPanel Margin="18,0,0,12">
+                                <TextBlock Text="{DynamicResource Static.Environment.AdbDriver}"
+                                           FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource InkBrush}" />
+                                <TextBlock x:Name="EnvironmentAdbStatusText"
+                                           Text="{DynamicResource Dynamic.Environment.DriverState.Unknown}"
+                                           FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                <TextBlock x:Name="EnvironmentAdbVersionText"
+                                           Text="{DynamicResource Dynamic.Environment.VersionUnknown}"
+                                           FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                            </StackPanel>
+
+                            <StackPanel Margin="18,0,0,12">
+                                <TextBlock Text="{DynamicResource Static.Environment.FastbootDriver}"
+                                           FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource InkBrush}" />
+                                <TextBlock x:Name="EnvironmentFastbootStatusText"
+                                           Text="{DynamicResource Dynamic.Environment.DriverState.Unknown}"
+                                           FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                <TextBlock x:Name="EnvironmentFastbootVersionText"
+                                           Text="{DynamicResource Dynamic.Environment.VersionUnknown}"
+                                           FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                            </StackPanel>
                             <!-- 当前结论放在按钮之前：状态行与「下一步做什么」都取自控制器消息。 -->
                             <Border Background="{DynamicResource SurfaceBrush}"
                                     BorderBrush="{DynamicResource StrokeBrush}"

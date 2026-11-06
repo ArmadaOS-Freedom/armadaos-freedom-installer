@@ -44,6 +44,7 @@ _PROPERTY_NAMES = (
     "BundledEdlG5Archive",
     "BundledEdlTb710fuArchive",
     "BundledQualcommDriverArchive",
+    "BundledAndroidDriverArchive",
     "BundledEdlRawPacker",
     "BundledEdlRawUnpacker",
     "BundledAvbSigningKey",
@@ -274,6 +275,26 @@ def _build_driver_zip(repo_root, out_path):
     return out_path
 
 
+def _build_android_driver_zip(repo_root, out_path):
+    driver_root = Path(repo_root) / "vendor" / "android"
+    members = []
+    for package in ("google", "oplus"):
+        for name in ("android_winusb.inf", "androidwinusba64.cat",
+                     "amd64/WdfCoInstaller01009.dll",
+                     "amd64/winusbcoinstaller2.dll" if package == "google" else "amd64/WinUSBCoInstaller2.dll"):
+            rel = f"{package}/{name}"
+            source = driver_root / rel
+            if not source.is_file():
+                raise SystemExit(f"Android driver zip: missing source file {source}")
+            members.append((source, rel))
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for source, rel in members:
+            archive.write(source, rel)
+    return out_path
+
+
 def _source_digest(repo_root, manifest):
     """Sorted list of {path,bytes,sha256} for every checked-in source path and
     build script declared in the manifest."""
@@ -460,6 +481,8 @@ def prepare(repo_root, work_dir, manifest_path=None):
     _log("driver", "building Qualcomm driver ZIP")
     driver_zip = run_dir / "qualcomm-driver.zip"
     _build_driver_zip(repo_root, driver_zip)
+    android_driver_zip = run_dir / "android-driver.zip"
+    _build_android_driver_zip(repo_root, android_driver_zip)
 
     # --- Phase 6: package G4 / G5 / TB710FU -------------------------------
     python_zip = fetched["python"]
@@ -526,6 +549,7 @@ def prepare(repo_root, work_dir, manifest_path=None):
         "BundledEdlG5Archive": str(g5_out.resolve()),
         "BundledEdlTb710fuArchive": str(tb710fu_out.resolve()),
         "BundledQualcommDriverArchive": str(driver_zip.resolve()),
+        "BundledAndroidDriverArchive": str(android_driver_zip.resolve()),
         "BundledEdlRawPacker": str(packer_exe.resolve()),
         "BundledEdlRawUnpacker": str(unpacker_exe.resolve()),
         "BundledAvbSigningKey": str(

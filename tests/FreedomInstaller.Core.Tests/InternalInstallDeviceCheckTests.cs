@@ -450,7 +450,7 @@ internal sealed class DeviceCheckRunner : ICommandRunner
         var display = after ? ReturnDisplayId : _displayId;
         var serial = after ? ReturnSerial : ActualSerial;
 
-        return string.Join(
+        var dump = string.Join(
             '\n',
             new[]
             {
@@ -466,7 +466,10 @@ internal sealed class DeviceCheckRunner : ICommandRunner
                 "[ro.boot.flash.locked]: [1]",
                 "[ro.boot.vbmeta.device_state]: [locked]",
             });
+        return GetpropTransform?.Invoke(dump) ?? dump;
     }
+
+    public Func<string, string>? GetpropTransform { get; set; }
 
     private string BootCompleted()
     {
@@ -511,6 +514,29 @@ public sealed class InternalInstallDeviceCheckTests
     private const string Soc = "3251823604";
     private const string DisplayId = "TB322FC.2026.06.01";
     private const string G4Product = "elden_prc_wifi";
+
+    [Theory]
+    [InlineData("TB322FC", "elden_prc_wifi", 1)]
+    [InlineData("TB323FU", "fixture-unmapped-board", 1)]
+    [InlineData("TB710FU", "topaz_prc_wifi", 0)]
+    public async Task Check_PortRomKeepsCanonicalModelAcrossDeviceSpecificFastbootReturn(string model, string product, int expectedFastbootReboots)
+    {
+        var runner = new DeviceCheckRunner(Serial, new DeviceCheckClock(), model: model, displayId: "ported-ROM")
+        {
+            FastbootProductValue = product,
+            SnapshotStatus = "none",
+            GetpropTransform = dump => dump
+                .Replace("[ro.product.model]: [" + model + "]", "[ro.product.model]: [25091RP04C]")
+                .Replace("[ro.product.vendor.model]: [" + model + "]", "[ro.product.vendor.model]: [Xiaomi for arm64]")
+                .Replace("[ro.product.name]: [" + model + "]", "[ro.product.name]: [piano]")
+                + "\n[ro.product.bootimage.model]: [" + model + "]",
+        };
+        var result = await CreateCheck(runner).CheckAsync(Serial);
+        Assert.True(result.Succeeded);
+        Assert.Equal(model, result.Android!.Identity.Model);
+        Assert.Equal(AndroidReturnState.Verified, result.AndroidReturn);
+        Assert.Equal(expectedFastbootReboots, runner.FastbootReboots);
+    }
 
     [Theory]
     [InlineData(BootloaderState.Locked, "no")]
@@ -954,7 +980,13 @@ public sealed class InternalInstallDeviceCheckTests
             state.Clock.Advance(InternalInstallDeviceCheck.FastbootTimeout + TimeSpan.FromSeconds(1));
             return Task.FromException<ProcessResult>(new TimeoutException("fastboot serialno timed out"));
         };
-        var check = CreateCheck(runner);
+        var driverQueries = 0;
+        var check = new InternalInstallDeviceCheck(AdbPath, FastbootPath, runner, runner.Clock,
+            fastbootDriverProbe: () =>
+            {
+                driverQueries++;
+                return new WindowsDriverCheckResult(WindowsDriverCheckState.Missing, null, null, null);
+            });
 
         var result = await check.CheckAsync(Serial);
 
@@ -962,6 +994,8 @@ public sealed class InternalInstallDeviceCheckTests
         Assert.Equal(AndroidReturnState.Unconfirmed, result.AndroidReturn);
         Assert.Equal(1, runner.AdbBootloaderReboots);
         Assert.Equal(0, runner.FastbootReboots);
+        Assert.Equal(1, driverQueries);
+        Assert.Contains("缺少匹配的 Fastboot 驱动", result.Error);
     }
 
     [Fact]

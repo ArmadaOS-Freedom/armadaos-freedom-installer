@@ -57,7 +57,10 @@ internal sealed record DriverPackageEvidence(
     string? DigitalSigner,
     string? CatalogFile,
     bool SignatureAccepted,
-    string? SignatureDetail);
+    string? SignatureDetail)
+{
+    public IReadOnlyList<string> MatchingHardwareIds { get; init; } = Array.Empty<string>();
+}
 
 /// <summary>
 /// Read-only state of one present 9008 device node: its bound service, its bound published INF, and the

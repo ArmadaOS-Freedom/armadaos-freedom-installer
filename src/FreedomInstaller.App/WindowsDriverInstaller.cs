@@ -40,6 +40,30 @@ internal static class WindowsDriverInstaller
             return Failure($"Bundled driver package validation failed: {Describe(error)}");
         }
 
+        return await InstallInfAsync(files.InfPath).ConfigureAwait(false);
+    }
+
+    internal static async Task<DriverInstallResult> InstallAndroidAsync(AndroidDriverFiles files)
+    {
+        if (!OperatingSystem.IsWindows()
+            || RuntimeInformation.OSArchitecture != Architecture.X64
+            || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            return Failure("Driver installation requires a native Windows x64 process.");
+        try { BundledAndroidDriver.ValidateFiles(files); }
+        catch (Exception error) { return Failure($"Bundled Android driver validation failed: {Describe(error)}"); }
+        return await InstallAndroidSequenceAsync(files, InstallInfAsync).ConfigureAwait(false);
+    }
+
+    internal static async Task<DriverInstallResult> InstallAndroidSequenceAsync(
+        AndroidDriverFiles files, Func<string, Task<DriverInstallResult>> install)
+    {
+        var google = await install(files.GoogleInfPath).ConfigureAwait(false);
+        if (google.Outcome != DriverInstallOutcome.Completed) return google;
+        return await install(files.OplusInfPath).ConfigureAwait(false);
+    }
+
+    private static async Task<DriverInstallResult> InstallInfAsync(string infPath)
+    {
         // SpecialFolder.System maps to the real System32 only because the guard above
         // already rejected emulated x86 / ARM64 processes.
         string pnputilPath = Path.Combine(
@@ -61,7 +85,7 @@ internal static class WindowsDriverInstaller
             WindowStyle = ProcessWindowStyle.Hidden,
         };
         startInfo.ArgumentList.Add("/add-driver");
-        startInfo.ArgumentList.Add(files.InfPath);
+        startInfo.ArgumentList.Add(infPath);
         startInfo.ArgumentList.Add("/install");
 
         Process? process = null;
