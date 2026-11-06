@@ -23,6 +23,7 @@
 *.tzst binary
 
 # Preserve signed vendor files and loader XML exactly as supplied.
+vendor/android/** binary
 vendor/qualcomm/driver/** binary
 vendor/qualcomm/g4/** binary
 vendor/qualcomm/g5/** binary

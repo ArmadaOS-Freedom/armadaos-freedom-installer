@@ -199,10 +199,34 @@ public sealed class InternalInstallDeviceCheck
     private static readonly TimeSpan PropertyTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan FastbootQueryTimeout = TimeSpan.FromSeconds(3);
 
+    private async Task<string> ReadFastbootDriverDiagnosticAsync()
+    {
+        if (_fastbootDriverProbe is null) return string.Empty;
+        try
+        {
+            var result = await Task.Run(_fastbootDriverProbe).ConfigureAwait(false);
+            return " " + DescribeFastbootDriver(result);
+        }
+        catch (Exception)
+        {
+            return " Windows 驱动状态查询失败，请在“环境与驱动”重新检查。";
+        }
+    }
+
+    internal static string DescribeFastbootDriver(WindowsDriverCheckResult result) => result.State switch
+    {
+        WindowsDriverCheckState.Missing => "缺少匹配的 Fastboot 驱动，请返回“环境与驱动”安装或修复驱动。",
+        WindowsDriverCheckState.Problem => "Windows 发现 Fastboot 驱动或设备绑定异常，请在“环境与驱动”修复并重新检查。" + " " + result.Detail,
+        WindowsDriverCheckState.Prepared => "Fastboot 驱动已准备，但 Windows 当前未发现相应 USB 接口。请确认平板处于 Fastboot，并使用长边 USB-C 数据接口。",
+        WindowsDriverCheckState.Connected => "Windows 已识别到正常绑定的 Fastboot 接口，但目标平板未通过命令核对。请检查连接记录及是否连接了其他设备。",
+        _ => "暂时无法确认 Windows Fastboot 驱动状态，请在“环境与驱动”重新检查。"
+    };
+
     private readonly string _adbPath;
     private readonly string _fastbootPath;
     private readonly ICommandRunner _runner;
     private readonly TimeProvider _clock;
+    private readonly Func<WindowsDriverCheckResult>? _fastbootDriverProbe;
 
     /// <summary>
     /// Creates the check. The two tool paths must be non-blank and the runner non-null; nothing is
@@ -213,7 +237,8 @@ public sealed class InternalInstallDeviceCheck
         string adbPath,
         string fastbootPath,
         ICommandRunner runner,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        Func<WindowsDriverCheckResult>? fastbootDriverProbe = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(adbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(fastbootPath);
@@ -223,6 +248,7 @@ public sealed class InternalInstallDeviceCheck
         _fastbootPath = fastbootPath;
         _runner = runner;
         _clock = clock ?? TimeProvider.System;
+        _fastbootDriverProbe = fastbootDriverProbe;
     }
 
     /// <summary>
@@ -388,10 +414,12 @@ public sealed class InternalInstallDeviceCheck
                 if (_clock.GetElapsedTime(pollStart) >= FastbootTimeout)
                 {
                     proofExhausted = true;
+                    var driverDetail = await ReadFastbootDriverDiagnosticAsync().ConfigureAwait(false);
                     RecordFailure(
                         InternalDeviceCheckStage.WaitingFastboot,
                         $"在 {FastbootTimeout.TotalSeconds:0} 秒内未在 fastboot 中确认序列号 {expectedSerial}。"
-                        + (lastPollError is null ? string.Empty : $" 最近一次错误：{lastPollError}"));
+                        + (lastPollError is null ? string.Empty : $" 最近一次错误：{lastPollError}")
+                        + driverDetail);
                     break;
                 }
 

@@ -23,7 +23,7 @@ namespace FreedomInstaller.Core;
 /// <see cref="DriverEvidenceSnapshot"/> first so the verdict can be tested without a live Windows host.
 /// </para>
 /// </summary>
-public sealed class WindowsQualcommDriver
+public sealed partial class WindowsQualcommDriver
 {
     private const string UsbPrefix = "USB\\";
     private const string UsbEnumerator = "USB";
@@ -947,7 +947,7 @@ public sealed class WindowsQualcommDriver
     /// failures propagate so the caller can report Unknown instead of Missing.
     /// </summary>
     [SupportedOSPlatform("windows")]
-    private static DriverPackageEvidence? InspectPublishedInf(string publishedInfName)
+    private static DriverPackageEvidence? InspectPublishedInf(string publishedInfName, Func<string?, bool>? matcher = null)
     {
         IntPtr infHandle = SetupOpenInfFile(publishedInfName, null, InfStyleWin4, out uint errorLine);
 
@@ -960,7 +960,7 @@ public sealed class WindowsQualcommDriver
 
         try
         {
-            if (!DeclaresTargetModelsSection(infHandle))
+            if (!DeclaresTargetModelsSection(infHandle, matcher))
             {
                 return null;
             }
@@ -1014,7 +1014,7 @@ public sealed class WindowsQualcommDriver
     }
 
     [SupportedOSPlatform("windows")]
-    private static bool DeclaresTargetModelsSection(IntPtr infHandle)
+    private static bool DeclaresTargetModelsSection(IntPtr infHandle, Func<string?, bool>? matcher = null)
     {
         var context = default(InfContext);
 
@@ -1030,6 +1030,7 @@ public sealed class WindowsQualcommDriver
                 "SetupFindFirstLineW failed for the [Manufacturer] section.");
         }
 
+        bool matched = false;
         while (true)
         {
             // Cheap decoration prefilter: SetupDiGetActualModelsSectionW fails for Manufacturer lines that
@@ -1041,9 +1042,10 @@ public sealed class WindowsQualcommDriver
 
                 if (modelsSection is not null
                     && IsNativeAmd64ModelsSection(modelsSection)
-                    && SectionDeclaresTargetModel(infHandle, modelsSection))
+                    && SectionDeclaresTargetModel(infHandle, modelsSection, matcher))
                 {
-                    return true;
+                    if (matcher is null) return true;
+                    matched = true;
                 }
             }
 
@@ -1053,7 +1055,7 @@ public sealed class WindowsQualcommDriver
             {
                 if (IsOrdinaryLookupMiss(Marshal.GetLastWin32Error()))
                 {
-                    return false;
+                    return matched;
                 }
 
                 throw new Win32Exception(
@@ -1160,7 +1162,7 @@ public sealed class WindowsQualcommDriver
     /// exact USB VID_05C6/PID_9008 strings. Descriptions and install-section names are never matched.
     /// </summary>
     [SupportedOSPlatform("windows")]
-    private static bool SectionDeclaresTargetModel(IntPtr infHandle, string modelsSection)
+    private static bool SectionDeclaresTargetModel(IntPtr infHandle, string modelsSection, Func<string?, bool>? matcher = null)
     {
         var context = default(InfContext);
 
@@ -1176,6 +1178,7 @@ public sealed class WindowsQualcommDriver
                 $"SetupFindFirstLineW failed for the models section '{modelsSection}'.");
         }
 
+        bool matched = false;
         while (true)
         {
             uint fieldCount = SetupGetFieldCount(ref context);
@@ -1186,9 +1189,10 @@ public sealed class WindowsQualcommDriver
             {
                 string? hardwareId = ReadStringField(ref context, fieldIndex);
 
-                if (IsTargetUsbHardwareId(hardwareId))
+                if (matcher?.Invoke(hardwareId) ?? IsTargetUsbHardwareId(hardwareId))
                 {
-                    return true;
+                    if (matcher is null) return true;
+                    matched = true;
                 }
             }
 
@@ -1198,7 +1202,7 @@ public sealed class WindowsQualcommDriver
             {
                 if (IsOrdinaryLookupMiss(Marshal.GetLastWin32Error()))
                 {
-                    return false;
+                    return matched;
                 }
 
                 throw new Win32Exception(

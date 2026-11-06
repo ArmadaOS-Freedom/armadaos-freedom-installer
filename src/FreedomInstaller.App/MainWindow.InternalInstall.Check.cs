@@ -249,7 +249,8 @@ public partial class MainWindow
                     var check = new InternalInstallDeviceCheck(
                         transport.AdbPath,
                         transport.FastbootPath,
-                        _runner);
+                        _runner,
+                        fastbootDriverProbe: () => new WindowsAndroidDriver().Inspect(AndroidUsbMode.Fastboot));
                     var result = await check.CheckAsync(target.Serial, progress, token);
 
                     acceptProgress = false;
