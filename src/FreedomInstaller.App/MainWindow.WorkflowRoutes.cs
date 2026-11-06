@@ -5,8 +5,8 @@ using FreedomInstaller.Core;
 namespace FreedomInstaller.App;
 
 /// <summary>
-/// 六模式执行分发的显式路由表：只按 <c>CurrentModeTag()</c> 精确分派；
-/// 六个操作全部接入真实执行入口，未知模式仍走占位汇报入口（fail closed）。
+/// 五模式执行分发的显式路由表：只按 <c>CurrentModeTag()</c> 精确分派；
+/// 五个操作全部接入真实执行入口，未知模式仍走占位汇报入口（fail closed）。
 /// </summary>
 public partial class MainWindow
 {
@@ -34,8 +34,6 @@ public partial class MainWindow
                 return ExecutePrepareUpdateWorkflowAsync();
             case "repair":
                 return ExecuteRepairAfterUpdateWorkflowAsync();
-            case "restore":
-                return ExecuteRestoreStockBootWorkflowAsync();
             default:
                 return ReportUnpreparedWorkflowAsync();
         }
@@ -52,11 +50,6 @@ public partial class MainWindow
     }
 
     private Task ExecuteRepairAfterUpdateWorkflowAsync()
-    {
-        return ExecuteBootMaintenanceAsync();
-    }
-
-    private Task ExecuteRestoreStockBootWorkflowAsync()
     {
         return ExecuteBootMaintenanceAsync();
     }

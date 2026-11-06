@@ -9,7 +9,7 @@ using FreedomInstaller.Core;
 namespace FreedomInstaller.App;
 
 /// <summary>
-/// Android -> 全新备份 -> 9008 的引导维护控制器：更新前准备 / 更新后修复 / 恢复原厂引导。
+/// Android -> 全新备份 -> 9008 的引导维护控制器：更新前准备 / 更新后修复。
 /// 所有设备写入只通过 <see cref="BootMaintenanceBackend"/> 的真实工厂与 ExecuteAsync 发生；
 /// 本控制器绝不做手动分区写入、手动复位或 ADB 验收，也绝不虚构任何结果。
 /// </summary>
@@ -101,7 +101,7 @@ public partial class MainWindow
 
     /// <summary>
     /// 「下一步」在来源页的真实准备入口：要求真实检查、同一 9008 客户端、全新备份与明确的
-    /// 已有备份父目录；更新前 / 恢复原厂还必须已选原厂恢复来源。准备阶段只读，不写任何分区。
+    /// 已有备份父目录；更新前还必须已选原厂恢复来源。准备阶段只读，不写任何分区。
     /// </summary>
     private async Task PrepareBootMaintenanceConfirmationAsync()
     {
@@ -139,7 +139,7 @@ public partial class MainWindow
             return;
         }
 
-        // 更新前 / 恢复原厂必须已选原厂恢复来源；来源目录绝不作为当前目录传入工厂。
+        // 更新前必须已选原厂恢复来源；来源目录绝不作为当前目录传入工厂。
         if (mode != MaintenanceMode.AfterUpdate
             && string.IsNullOrWhiteSpace(_bootMaintenanceOriginalDirectory))
         {
