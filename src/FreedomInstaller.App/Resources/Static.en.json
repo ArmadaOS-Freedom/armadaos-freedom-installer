@@ -229,13 +229,11 @@
   "Static.StockBackupLabel": "Stock boot backup folder",
   "Static.SummaryTitle": "Plan summary",
   "Static.SupportBack": "← Back",
-  "Static.SupportButton": "Support project",
-  "Static.SupportLead": "ArmadaOS Freedom keeps moving on genuine interest and money the maintainers put in themselves. From boot and display to power and peripherals, every tablet adaptation needs repeated testing and long-term tracking of upstream updates.",
+  "Static.SupportButton": "About project",
   "Static.SupportNote": "Free software. Beware of scams. Sponsorship is entirely voluntary and never changes what the app can do.",
-  "Static.SupportQrAutomationName": "Alipay and WeChat support QR codes",
   "Static.SupportSponsor": "If this work helps you, you are welcome to sponsor voluntarily through Alipay or WeChat to support device testing, system adaptation and ongoing maintenance. Give only what you can comfortably spare, and thank you for every bit of support.",
   "Static.SupportTail": "Reporting problems, sending code and improving the documentation also support the project.",
-  "Static.SupportTitle": "Support the project",
+  "Static.SupportTitle": "About project",
   "Static.TfCardPickLabel": "Choose the target card",
   "Static.TfCardTitle": "Target TF card",
   "Static.TfField.Boot": "boot reserve",
@@ -263,5 +261,11 @@
   "Static.ModelName.Tb323fu": "Lenovo Legion Y700 Gen 5 (TB323FU)",
   "Static.ModelName.Tb710fu": "Lenovo Xiaoxin Pad Pro GT (TB710FU)",
   "Static.Global.ConnectionGuideTitle": "Before connecting your tablet",
-  "Static.Global.ConnectionGuideLead": "Android connection: follow the illustration to enable Developer options and USB debugging, then allow this computer on the tablet. For the Y700, use the long-edge USB-C port. If the tablet is already in 9008, you can skip the illustration and click “Connect tablet” directly."
+  "Static.Global.ConnectionGuideLead": "Android connection: follow the illustration to enable Developer options and USB debugging, then allow this computer on the tablet. For the Y700, use the long-edge USB-C port. If the tablet is already in 9008, you can skip the illustration and click “Connect tablet” directly.",
+  "Static.SupportAlipayTitle": "Alipay",
+  "Static.SupportAlipayScan": "Scan the QR code below with Alipay",
+  "Static.SupportAlipayQrAutomationName": "Alipay payment QR code",
+  "Static.SupportWeChatTitle": "WeChat Pay",
+  "Static.SupportWeChatScan": "Scan the QR code below with WeChat",
+  "Static.SupportWeChatQrAutomationName": "WeChat Pay payment QR code"
 }

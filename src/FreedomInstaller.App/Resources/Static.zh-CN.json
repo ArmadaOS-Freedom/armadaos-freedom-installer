@@ -229,13 +229,11 @@
   "Static.StockBackupLabel": "原厂 boot 备份目录",
   "Static.SummaryTitle": "方案摘要",
   "Static.SupportBack": "← 返回",
-  "Static.SupportButton": "支持项目",
-  "Static.SupportLead": "ArmadaOS Freedom 目前靠热爱和自费投入持续推进。从启动、显示到供电和外设，每一项平板适配都需要反复测试，也需要长期跟进上游更新。",
+  "Static.SupportButton": "关于项目",
   "Static.SupportNote": "免费软件，谨防被骗。赞助完全自愿，不影响功能使用。",
-  "Static.SupportQrAutomationName": "支付宝与微信赞助二维码",
   "Static.SupportSponsor": "如果这些工作对你有帮助，欢迎通过支付宝或微信自愿赞助，支持设备测试、系统适配和持续维护。量力而行，谢谢每一份支持。",
   "Static.SupportTail": "反馈问题、提交代码和完善文档，同样是在支持项目。",
-  "Static.SupportTitle": "支持项目",
+  "Static.SupportTitle": "关于项目",
   "Static.TfCardPickLabel": "选择目标卡",
   "Static.TfCardTitle": "目标 TF 卡",
   "Static.TfField.Boot": "boot 预留空间",
@@ -263,5 +261,11 @@
   "Static.ModelName.Tb323fu": "联想拯救者 Y700 五代（TB323FU）",
   "Static.ModelName.Tb710fu": "联想小新 Pad Pro GT（TB710FU）",
   "Static.Global.ConnectionGuideTitle": "连接平板前的准备",
-  "Static.Global.ConnectionGuideLead": "安卓连接：按图示开启开发者选项和 USB 调试，并在平板上允许这台电脑。Y700 请使用长边 USB-C 接口。若已进入 9008，可跳过图示，直接点击“连接平板”。"
+  "Static.Global.ConnectionGuideLead": "安卓连接：按图示开启开发者选项和 USB 调试，并在平板上允许这台电脑。Y700 请使用长边 USB-C 接口。若已进入 9008，可跳过图示，直接点击“连接平板”。",
+  "Static.SupportAlipayTitle": "支付宝",
+  "Static.SupportAlipayScan": "使用支付宝扫描下方二维码",
+  "Static.SupportAlipayQrAutomationName": "支付宝收款二维码",
+  "Static.SupportWeChatTitle": "微信支付",
+  "Static.SupportWeChatScan": "使用微信扫描下方二维码",
+  "Static.SupportWeChatQrAutomationName": "微信支付收款二维码"
 }
