@@ -39,11 +39,13 @@ public sealed class BootMaintenanceAfterUpdateTests :
         "efisp",
     };
 
-    [Fact]
-    public async Task After_TemplateB_NewStockA_RepairsAndReadsBackWholeWithoutPackage()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task After_TemplateB_NewStockA_RepairsAndReadsBackWholeWithoutPackage(bool qualcommSlot)
     {
         int nativeCallsBefore = Shared.Runner.Calls;
-        using AfterUpdateRun run = await PrepareAfterUpdateAsync();
+        using AfterUpdateRun run = await PrepareAfterUpdateAsync(qualcommSlot);
         Assert.True(Shared.Runner.Calls > nativeCallsBefore);
 
         BootMaintenancePrepared prepared = run.Backend.Prepared;
@@ -53,6 +55,9 @@ public sealed class BootMaintenanceAfterUpdateTests :
         BootMaintenanceSlotSummary slotA = prepared.Slots.Single(s => s.Slot == "a");
         Assert.Equal(BootMaintenanceSourceKind.Project, slotA.SourceKind);
         Assert.Equal("a", slotA.SourceSlot);
+
+        CurrentBootSlotFacts bootSlot = await CurrentBootSlot.ReadAsync(run.Fresh);
+        Assert.Equal(qualcommSlot ? "qualcomm-gpt" : "aosp-misc", bootSlot.Source);
 
         BootMaintenanceRegionSummary targetA = prepared.Regions.Single(r => r.Role == "boot_a");
         EdlCapturedRegion region = run.Harness.Current.Files["boot_a"];
@@ -168,7 +173,26 @@ public sealed class BootMaintenanceAfterUpdateTests :
         Assert.Equal(resetsBefore, h.Ib.ResetCount);
     }
 
-    private static async Task<InternalDeviceCheckResult> RunRealCheckAsync(EdlUninstallCurrentMenuTests.Harness h)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RepairInstallation_ExistingAospRouteKeepsAblAndData(bool locked)
+    {
+        using var run = await PrepareAfterUpdateAsync(qualcommSlot: true, repairInstallation: true, locked: locked);
+        Assert.DoesNotContain(run.Backend.Prepared.Regions, r => r.Role.StartsWith("abl_", StringComparison.Ordinal));
+        Assert.True(run.Backend.Prepared.Regions.Single(r => r.Role == "boot_a").WillWrite);
+        Assert.True(run.Backend.Prepared.Regions.Single(r => r.Role == "boot_b").WillWrite);
+        int writesBefore = run.Harness.Ib.Writes.Count;
+        var result = await run.Backend.ExecuteAsync(run.Backend.Prepared.ConfirmationId);
+        Assert.Equal(BootMaintenanceOutcome.Completed, result.Outcome);
+        Assert.Contains("boot_a", result.VerifiedRegions);
+        Assert.Contains("boot_b", result.VerifiedRegions);
+        foreach (var write in run.Harness.Ib.Writes.Skip(writesBefore))
+            Assert.Contains(run.Backend.Prepared.Regions, r => AllowedWriteRoles.Contains(r.Role)
+                && r.Lun == write.Lun && r.StartSector == write.StartSector && r.SectorCount == write.SectorCount);
+    }
+
+    private static async Task<InternalDeviceCheckResult> RunRealCheckAsync(EdlUninstallCurrentMenuTests.Harness h, bool locked = false)
     {
         string serial = h.Client.Binding.AndroidIdentity.Identity.Serial;
         var checkRunner = new DeviceCheckRunner(serial, new DeviceCheckClock())
@@ -176,17 +200,17 @@ public sealed class BootMaintenanceAfterUpdateTests :
             FastbootCurrentSlot = "a",
             ReturnSlotSuffix = "_a",
             BootImmediatelyCompleteOnReturn = true,
-            UnlockedReportValue = "yes",
+            UnlockedReportValue = locked ? "no" : "yes",
         };
         InternalDeviceCheckResult check = await new InternalInstallDeviceCheck(
             AdbOrFastboot.AdbPath, AdbOrFastboot.FastbootPath, checkRunner, checkRunner.Clock)
             .CheckAsync(serial);
         Assert.True(check.Succeeded);
-        Assert.Equal(BootloaderState.Unlocked, check.Android!.Identity.BootloaderState);
+        Assert.Equal(locked ? BootloaderState.Locked : BootloaderState.Unlocked, check.Android!.Identity.BootloaderState);
         return check;
     }
 
-    private async Task<AfterUpdateRun> PrepareAfterUpdateAsync()
+    private async Task<AfterUpdateRun> PrepareAfterUpdateAsync(bool qualcommSlot = false, bool repairInstallation = false, bool locked = false)
     {
         var frozen = new EdlUninstallCurrentMenuTests(Toolchain, Shared);
         EdlUninstallCurrentMenuTests.Harness h = await frozen.PrepareAsync();
@@ -197,6 +221,18 @@ public sealed class BootMaintenanceAfterUpdateTests :
         InternalBackupSet? fresh = null;
         try
         {
+            if (qualcommSlot)
+            {
+                EdlCapturedRegion miscRegion = h.Current.Files["misc"];
+                byte[] miscBytes = await File.ReadAllBytesAsync(miscRegion.FilePath);
+                Assert.True(miscBytes.Length >= 2048 + 32);
+                Array.Clear(miscBytes, 2048, 32);
+                string syntheticMiscPath = Path.Combine(h.CaseDirectory, "misc-zero-aosp-control.bin");
+                await File.WriteAllBytesAsync(syntheticMiscPath, miscBytes);
+                h.Device.AddWriteOverlay(miscRegion.Lun, miscRegion.StartSector, miscRegion.SectorCount, syntheticMiscPath);
+                EdlUninstallCurrentMenuTests.OverlayQualcommSlotGpt(h.Device, h.CaseDirectory, activeA: true);
+            }
+
             workspace = new();
             EdlRawBootBuilderTests.SlotFixture freshSlot = EdlRawBootBuilderTests.CreateSlot(workspace, "a", 0x91);
             aosp = new(DirectAvbSourceKind.Aosp);
@@ -209,9 +245,9 @@ public sealed class BootMaintenanceAfterUpdateTests :
             Directory.CreateDirectory(afterCurrentDirectory);
             fresh = await InternalInstallBackup.CreateAsync(h.Client, afterCurrentDirectory);
 
-            InternalDeviceCheckResult check = await RunRealCheckAsync(h);
+            InternalDeviceCheckResult check = await RunRealCheckAsync(h, locked);
 
-            var sources = new BootMaintenanceSources(BootTools: Shared.Tools);
+            var sources = new BootMaintenanceSources(BootTools: Shared.Tools, RepairInstallation: repairInstallation);
             string evidenceDirectory = Path.Combine(h.CaseDirectory, "evidence");
             Directory.CreateDirectory(evidenceDirectory);
 

@@ -328,7 +328,8 @@ internal sealed partial class InternalInstallPreparationContext
             string chosenParent,
             CancellationToken ct,
             CurrentBootInitializedInactiveProof? initializedInactiveProof = null,
-            CurrentBootAfterEpochWitness? afterEpochWitness = null)
+            CurrentBootAfterEpochWitness? afterEpochWitness = null,
+            BootMaintenanceAblRecovery? ablRecovery = null)
         {
             ArgumentNullException.ThrowIfNull(backup);
             ArgumentNullException.ThrowIfNull(currentSlot);
@@ -418,7 +419,9 @@ internal sealed partial class InternalInstallPreparationContext
                 // RSA chain, the actual ABL EfispLoad detector, the vendor PRC/ROW consensus, the exact embedded
                 // EFI asset and the real captured EFI target. A null result is the AOSP path and keeps its exact
                 // signed-root and metadata preparation below. No guessed allowlist and no unconditional fallback.
-                GblPreparationInputs? gblInputs = await PrepareDirectGblInputsAsync(
+                ablRecovery?.RequireBinding(backup, lockState, sourceSlots);
+                if (ablRecovery is not null) await ablRecovery.RevalidateAsync(ct).ConfigureAwait(false);
+                GblPreparationInputs? gblInputs = ablRecovery is not null ? null : await PrepareDirectGblInputsAsync(
                     currentSlot,
                     lockState,
                     sourceSlots,
@@ -450,7 +453,8 @@ internal sealed partial class InternalInstallPreparationContext
                         facts.Files,
                         ownChild,
                         claims,
-                        ct).ConfigureAwait(false);
+                        ct,
+                        ablRecovery).ConfigureAwait(false);
 
                     avbNodes = await PrepareDirectAvbNodesAsync(
                         avbRoots,

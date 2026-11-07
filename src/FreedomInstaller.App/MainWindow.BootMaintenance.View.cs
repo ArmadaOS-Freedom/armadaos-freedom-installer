@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using FreedomInstaller.Core;
@@ -21,7 +22,7 @@ public partial class MainWindow
     private string? _bootMaintenancePackagePath;
 
     private bool IsBootMaintenanceMode =>
-        CurrentModeTag() is "prepare" or "repair";
+        CurrentModeTag() is "prepare" or "repair" or "repair-install";
 
     private bool UsesSharedDevicePreparationPages =>
         IsInternalInstallMode || IsBootMaintenanceMode || IsModernUserdataUninstallMode || IsModernTfInstallMode;
@@ -34,6 +35,7 @@ public partial class MainWindow
             {
                 "prepare" => MaintenanceMode.BeforeUpdate,
                 "repair" => MaintenanceMode.AfterUpdate,
+                "repair-install" => MaintenanceMode.AfterUpdate,
                 _ => throw new InvalidOperationException(
                     $"Unknown boot maintenance mode '{CurrentModeTag()}'; no default fallback."),
             };
@@ -45,6 +47,9 @@ public partial class MainWindow
         _bootMaintenanceOperationActive
         || HasUnconfirmedBootMaintenanceWrite
         || HasUnknownBootMaintenanceReset;
+
+    private bool IsRepairInstallationMode =>
+        CurrentModeTag() == "repair-install";
 
     private bool CanEnterBootMaintenanceStep(int step)
     {
@@ -61,6 +66,11 @@ public partial class MainWindow
             return step == 3;
         }
 
+        if (IsRepairInstallationMode && step == 1)
+        {
+            return false;
+        }
+
         switch (step)
         {
             case 0:
@@ -72,6 +82,12 @@ public partial class MainWindow
             }
             case 2:
             {
+                if (IsRepairInstallationMode)
+                {
+                    // 修复模式：来源页准备前允许尚无当前备份对象，但必须已有真实设备证据。
+                    return HasBootMaintenanceDeviceProof || HasBootMaintenanceBackupPrerequisite;
+                }
+
                 if (_internalInstallBackup is null || !HasBootMaintenanceDeviceProof)
                 {
                     return false;
@@ -100,16 +116,25 @@ public partial class MainWindow
 
         RenderSharedDeviceEntryLead();
 
-        // 卸载隐藏内部第 1 步，并把 03/04 重排为 02/03；其他模式恢复显示与原始序号。
+        bool repair = IsRepairInstallationMode;
+        InternalInstallBackupWarningText.SetResourceReference(TextBlock.TextProperty, repair
+            ? "Dynamic.BootMaintenance.Repair.BackupWarning"
+            : "Static.InternalInstall.Backup.Warning");
+        InternalInstallBackupCoverageText.SetResourceReference(TextBlock.TextProperty, repair
+            ? "Dynamic.BootMaintenance.Repair.BackupCoverage"
+            : "Static.InternalInstall.Backup.Coverage");
+
+        // 卸载或修复隐藏内部第 1 步，并把 03/04 重排为 02/03；其他模式恢复显示与原始序号。
+        var hideBackup = IsModernUserdataUninstallMode || IsRepairInstallationMode;
+        InternalInstallNavBackup.Visibility = hideBackup ? Visibility.Collapsed : Visibility.Visible;
+        SharedWorkflowThirdStepNumber.Text = hideBackup ? "02" : "03";
+        SharedWorkflowConfirmStepNumber.Text = hideBackup ? "03" : "04";
         var uninstall = IsModernUserdataUninstallMode;
-        InternalInstallNavBackup.Visibility = uninstall ? Visibility.Collapsed : Visibility.Visible;
-        SharedWorkflowThirdStepNumber.Text = uninstall ? "02" : "03";
-        SharedWorkflowConfirmStepNumber.Text = uninstall ? "03" : "04";
 
         if (IsBootMaintenanceMode)
         {
             SharedWorkflowThirdStepText.SetResourceReference(TextBlock.TextProperty, "Dynamic.BootMaintenance.Nav.Sources");
-            SharedWorkflowConfirmStepText.SetResourceReference(TextBlock.TextProperty, "Dynamic.BootMaintenance.Nav.Confirm");
+            SharedWorkflowConfirmStepText.SetResourceReference(TextBlock.TextProperty, IsRepairInstallationMode ? "Dynamic.BootMaintenance.Repair.ConfirmTitle" : "Dynamic.BootMaintenance.Nav.Confirm");
         }
         else if (IsModernTfInstallMode)
         {
@@ -127,12 +152,24 @@ public partial class MainWindow
             SharedWorkflowConfirmStepText.SetResourceReference(TextBlock.TextProperty, "Static.InternalInstall.Nav.Confirm");
         }
 
-        // 全新备份提示只在卸载模式显示卸载专属说明，其他模式保持维护原文案；两种模式都重设以正确复位。
+        // 全新备份提示：卸载用卸载专属说明，修复用修复专属说明，其他模式保持维护原文案；都重设以正确复位。
         BootMaintenanceFreshBackupHint.SetResourceReference(
             TextBlock.TextProperty,
             uninstall
                 ? "Dynamic.UserdataUninstall.FreshBackupHint"
-                : "Dynamic.BootMaintenance.FreshBackup");
+                : IsRepairInstallationMode
+                    ? "Dynamic.BootMaintenance.Repair.FreshBackup"
+                    : "Dynamic.BootMaintenance.FreshBackup");
+
+        // 来源页「原厂恢复备份」标签/网格与「项目备份」标签/网格：修复模式隐藏前者，其他模式恢复显示。
+        var hideOriginalSource = IsRepairInstallationMode;
+        SharedEdlOriginalSourceLabel.Visibility = hideOriginalSource ? Visibility.Collapsed : Visibility.Visible;
+        BootMaintenanceOriginalGrid.Visibility = hideOriginalSource ? Visibility.Collapsed : Visibility.Visible;
+        BootMaintenanceFreshBackupHint.Visibility = hideOriginalSource ? Visibility.Collapsed : Visibility.Visible;
+        BootMaintenancePackageBrowseButton.Visibility = IsRepairInstallationMode ? Visibility.Visible : Visibility.Collapsed;
+        var hideProject = IsRepairInstallationMode;
+        BootMaintenanceProjectLabel.Visibility = hideProject ? Visibility.Collapsed : Visibility.Visible;
+        BootMaintenanceProjectGrid.Visibility = hideProject ? Visibility.Collapsed : Visibility.Visible;
 
         // 原厂引导恢复复选框及其提示：仅在卸载模式显示，其他模式一律折叠复位。
         var stockVisibility = uninstall ? Visibility.Visible : Visibility.Collapsed;
@@ -183,20 +220,29 @@ public partial class MainWindow
         SharedEdlEntryHintText.SetResourceReference(TextBlock.TextProperty, "Dynamic.BootMaintenance.EdlHint");
         SharedEdlOriginalEntryLabel.SetResourceReference(TextBlock.TextProperty, "Dynamic.BootMaintenance.OriginalSource");
         SharedEdlOriginalSourceLabel.SetResourceReference(TextBlock.TextProperty, "Dynamic.BootMaintenance.OriginalSource");
-        BootMaintenanceConfirmTitle.SetResourceReference(TextBlock.TextProperty, "Dynamic.BootMaintenance.ConfirmTitle");
+        BootMaintenanceConfirmTitle.SetResourceReference(TextBlock.TextProperty, IsRepairInstallationMode ? "Dynamic.BootMaintenance.Repair.ConfirmTitle" : "Dynamic.BootMaintenance.ConfirmTitle");
 
         // 原始目录在入口页与来源页呈现同一真实值。
         BootMaintenanceEntryOriginalBox.Text = _bootMaintenanceOriginalDirectory ?? string.Empty;
         BootMaintenanceOriginalBox.Text = _bootMaintenanceOriginalDirectory ?? string.Empty;
         BootMaintenanceProjectBox.Text = _bootMaintenanceProjectDirectory ?? string.Empty;
 
-        // 来源页按模式呈现：只有修复模式需要项目备份与安装包。
+        // 来源页按模式呈现：只有修复模式需要项目备份与安装包；原厂来源仅非修复模式显示。
         BootMaintenanceRepairSourcesRow.Visibility = CurrentBootMaintenanceMode == MaintenanceMode.AfterUpdate
             ? Visibility.Visible
             : Visibility.Collapsed;
+        var repair = IsRepairInstallationMode;
+        SharedEdlOriginalSourceLabel.Visibility = repair ? Visibility.Collapsed : Visibility.Visible;
+        BootMaintenanceOriginalGrid.Visibility = repair ? Visibility.Collapsed : Visibility.Visible;
+        BootMaintenanceFreshBackupHint.Visibility = repair ? Visibility.Collapsed : Visibility.Visible;
+        var hideProject = IsRepairInstallationMode;
+        BootMaintenanceProjectLabel.Visibility = hideProject ? Visibility.Collapsed : Visibility.Visible;
+        BootMaintenanceProjectGrid.Visibility = hideProject ? Visibility.Collapsed : Visibility.Visible;
 
         SetText(BootMaintenanceSourcesTitle, "Dynamic.BootMaintenance.SourceTitle");
-        SetText(BootMaintenanceSourcesLead, "Dynamic.BootMaintenance.SourceLead");
+        SetText(BootMaintenanceSourcesLead, IsRepairInstallationMode
+            ? "Dynamic.BootMaintenance.Repair.SourceLead"
+            : "Dynamic.BootMaintenance.SourceLead");
 
         RenderBootMaintenanceCheckButton();
         RenderBootMaintenanceSourcesStatus();
@@ -208,12 +254,12 @@ public partial class MainWindow
     private void RenderBootMaintenanceCheckButton()
     {
         // 9008 路线使用专门的识别文案；非内部模式默认检查是只读安卓读取，使用新默认文案；
-        // 完整 Fastboot 核验仍在高级折叠区，不在这里伪造任何检查结果。
+        // 卸载/修复改走完整自动检查，使用内部自动重启文案；完整 Fastboot 核验仍在高级折叠区，不在这里伪造任何检查结果。
         if (_bootMaintenanceAlreadyEdl)
         {
             InternalInstallCheckButton.SetResourceReference(ContentControl.ContentProperty, "Dynamic.BootMaintenance.CheckEdl");
         }
-        else if (IsSharedNonInternalDeviceMode)
+        else if (IsSharedNonInternalDeviceMode && !IsModernUserdataUninstallMode && !IsRepairInstallationMode)
         {
             InternalInstallCheckButton.SetResourceReference(ContentControl.ContentProperty, "Dynamic.Shared.CheckTablet");
         }
@@ -222,7 +268,7 @@ public partial class MainWindow
             InternalInstallCheckButton.SetResourceReference(ContentControl.ContentProperty, "Static.InternalInstall.Check.Button");
         }
 
-        var hideOriginalEntry = IsModernUserdataUninstallMode;
+        var hideOriginalEntry = IsModernUserdataUninstallMode || IsRepairInstallationMode;
         SharedEdlEntryHintText.Visibility = hideOriginalEntry ? Visibility.Collapsed : Visibility.Visible;
         SharedEdlOriginalEntryLabel.Visibility = hideOriginalEntry ? Visibility.Collapsed : Visibility.Visible;
         BootMaintenanceEntryOriginalRow.Visibility = hideOriginalEntry ? Visibility.Collapsed : Visibility.Visible;
@@ -343,7 +389,9 @@ public partial class MainWindow
             BootMaintenanceRegionsHost.Children.Add(regionText);
         }
 
-        SetText(BootMaintenanceRiskText, BootMaintenanceRiskKey(CurrentBootMaintenanceMode));
+        SetText(BootMaintenanceRiskText, prepared.Regions.Any(r => r.WillWrite && (r.Role is "abl_a" or "abl_b"))
+            ? "Dynamic.BootMaintenance.Repair.RiskAbl"
+            : BootMaintenanceRiskKey(CurrentBootMaintenanceMode));
         // Refresh 不得清空运行时现场：控制器持有已保存的结果 / 错误 / 进度时按其重绘。
         RenderBootMaintenanceRuntimeStatus();
     }
@@ -382,7 +430,10 @@ public partial class MainWindow
         InternalInstallNavCapacity.IsEnabled = CanEnterBootMaintenanceStep(2);
         InternalInstallNavConfirm.IsEnabled = CanEnterBootMaintenanceStep(3);
 
-        PrevButton.IsEnabled = _internalInstallStep > 0 && CanEnterBootMaintenanceStep(_internalInstallStep - 1);
+        PrevButton.IsEnabled = _internalInstallStep > 0
+            && (IsRepairInstallationMode && _internalInstallStep == 2
+                ? CanEnterBootMaintenanceStep(0)
+                : CanEnterBootMaintenanceStep(_internalInstallStep - 1));
 
         NextButton.Visibility = _internalInstallStep < 3 ? Visibility.Visible : Visibility.Collapsed;
         NextButton.IsEnabled = CanLeaveBootMaintenanceStep(_internalInstallStep);
@@ -397,6 +448,7 @@ public partial class MainWindow
         BootMaintenanceOriginalBrowseButton.IsEnabled = idle && !protectedState;
         BootMaintenanceProjectBrowseButton.IsEnabled = idle && !protectedState;
         BootMaintenancePackageBox.IsEnabled = idle && !protectedState;
+        BootMaintenancePackageBrowseButton.IsEnabled = idle && !protectedState;
 
         // 9008 勾选与检查按钮在繁忙/保护状态下禁用；存在未知进入尝试的活跃 EDL 状态时不允许重开安卓检查。
         BootMaintenanceAlreadyEdlCheck.IsEnabled = _ready && idle && !protectedState && !HasInternalInstallLiveEdlState;
@@ -407,6 +459,11 @@ public partial class MainWindow
     // “下一步”在来源页（step 2）的启用条件：只校验真实备份与必填路径；路径仅允许 Prepare，真正校验在后端执行。
     private bool CanLeaveBootMaintenanceStep(int step)
     {
+        if (IsRepairInstallationMode)
+        {
+            return CanLeaveRepairInstallationStep(step);
+        }
+
         if (step < 2)
         {
             return CanEnterBootMaintenanceStep(step + 1);
@@ -439,6 +496,29 @@ public partial class MainWindow
         }
 
         return false;
+    }
+
+    // 修复模式导航：0 -> 2 -> 3；第 1 步始终隐藏。来源页允许尚无当前备份对象但要求设备事实门槛。
+    private bool CanLeaveRepairInstallationStep(int step)
+    {
+        switch (step)
+        {
+            case 0:
+                return _ready
+                    && !_busy
+                    && !_bootMaintenanceOperationActive
+                    && !ProtectedBootMaintenanceState
+                    && HasBootMaintenanceBackupPrerequisite;
+            case 2:
+                if (!_ready || _busy || _bootMaintenanceOperationActive || ProtectedBootMaintenanceState)
+                {
+                    return false;
+                }
+
+                return HasBootMaintenanceDeviceProof || HasBootMaintenanceBackupPrerequisite;
+            default:
+                return false;
+        }
     }
 
     private bool CanExecuteBootMaintenance()
@@ -577,7 +657,9 @@ public partial class MainWindow
             return;
         }
 
+        // 修复模式不使用原厂来源选择器：只通过自动回滚捕获建立原厂来源。
         if (!IsBootMaintenanceMode
+            || IsRepairInstallationMode
             || _bootMaintenanceOperationActive
             || ProtectedBootMaintenanceState)
         {
@@ -599,6 +681,7 @@ public partial class MainWindow
     private void OnBrowseBootMaintenanceProject(object sender, RoutedEventArgs e)
     {
         if (!_ready
+            || IsRepairInstallationMode
             || !IsBootMaintenanceMode
             || _busy
             || _bootMaintenanceOperationActive
@@ -614,6 +697,35 @@ public partial class MainWindow
 
         _bootMaintenanceProjectDirectory = directory;
         BootMaintenanceProjectBox.Text = directory;
+        InvalidateBootMaintenancePreparation();
+        RefreshBootMaintenanceActions();
+    }
+
+    // 修复模式：安装包浏览框与现有安装包导入器使用同一组扩展名；只存真实路径。
+    private void OnBrowseBootMaintenancePackage(object sender, RoutedEventArgs e)
+    {
+        if (!_ready
+            || !IsRepairInstallationMode
+            || _busy
+            || _bootMaintenanceOperationActive
+            || ProtectedBootMaintenanceState)
+        {
+            return;
+        }
+
+        var dialog = new OpenFileDialog
+        {
+            Filter = T("Dynamic.Dialog.PackageFileFilter"),
+            CheckFileExists = true,
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        _bootMaintenancePackagePath = dialog.FileName;
+        BootMaintenancePackageBox.Text = dialog.FileName;
         InvalidateBootMaintenancePreparation();
         RefreshBootMaintenanceActions();
     }

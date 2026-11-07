@@ -37,6 +37,7 @@ public static partial class InternalInstallBackup
     {
         StockOriginal,
         ProjectTemplate,
+        BootloaderRecovery,
     }
 
     /// <summary>The two A/B slots whose maintenance chain is compared role by role.</summary>
@@ -149,6 +150,11 @@ public static partial class InternalInstallBackup
     /// The shared historical-source loader. Every guard is identical for both purposes except the per-role
     /// chain-byte comparison, which only <see cref="BootMaintenanceSourcePurpose.StockOriginal"/> enforces.
     /// </summary>
+    internal static Task<InternalBackupSet> OpenBootMaintenanceBootloaderRecoveryAsync(
+        EdlClient client, InternalBackupSet currentBackup, string backupDirectory, CancellationToken token)
+        => OpenBootMaintenanceSourceAsync(client, currentBackup, backupDirectory,
+            BootMaintenanceSourcePurpose.BootloaderRecovery, token);
+
     private static async Task<InternalBackupSet> OpenBootMaintenanceSourceAsync(
         EdlClient client,
         InternalBackupSet currentBackup,

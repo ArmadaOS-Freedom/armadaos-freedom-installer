@@ -692,8 +692,13 @@ public partial class MainWindow
                     });
 
                     // 唯一一次真实调用：已有模式只校验原始目录，正常模式才在父目录下新建子目录。
+                    // 修复模式（非内部使用板备份分支）走修复专用助手，其他模式保持原样。
                     InternalBackupSet set;
-                    if (useBoardBackup)
+                    if (IsRepairInstallationMode && IsBootMaintenanceMode && !useBoardBackup && !useExisting)
+                    {
+                        set = await CaptureRepairCurrentAsync(activeClient, parentPath, progress, token);
+                    }
+                    else if (useBoardBackup)
                     {
                         SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.ReadingBoard"));
                         var recoveredDirectory = await BoardRecoveryBackup.ReadDirectoryAsync(
@@ -897,12 +902,21 @@ public partial class MainWindow
         InternalInstallBackupProgressBar.IsIndeterminate = false;
         InternalInstallBackupProgressBar.Value = 100;
 
-        // 复用模式明确写「已有备份已校验」，其余详情仍只来自真实返回的集合。
-        SetInternalInstallBackupStatus(
-            useExisting
-                ? M("Dynamic.InternalInstall.Backup.ExistingSucceeded", set.Files.Count)
-                : M("Dynamic.InternalInstall.Backup.Succeeded", set.Files.Count));
-        SetInternalInstallBackupVerified(M("Dynamic.InternalInstall.Backup.KeepEdl"));
+        // 复用模式明确写「已有备份已校验」；修复模式使用修复专属成功 / KeepEdl 文案，
+        // 其余详情仍只来自真实返回的集合。
+        if (IsRepairInstallationMode)
+        {
+            SetInternalInstallBackupStatus(M("Dynamic.BootMaintenance.Repair.Succeeded", set.Files.Count));
+            SetInternalInstallBackupVerified(M("Dynamic.BootMaintenance.Repair.BackupKeepEdl"));
+        }
+        else
+        {
+            SetInternalInstallBackupStatus(
+                useExisting
+                    ? M("Dynamic.InternalInstall.Backup.ExistingSucceeded", set.Files.Count)
+                    : M("Dynamic.InternalInstall.Backup.Succeeded", set.Files.Count));
+            SetInternalInstallBackupVerified(M("Dynamic.InternalInstall.Backup.KeepEdl"));
+        }
         RenderInternalInstallBackupDetail();
         AppendLocalizedLog(
             M(
@@ -960,7 +974,8 @@ public partial class MainWindow
         SetText(InternalInstallBackupStatusText, message);
 
         // 卸载中全新备份页不可见：把同一份真实状态同时写到可见的来源页准备状态栏。
-        if (IsModernUserdataUninstallMode)
+        // 修复模式同样隐藏备份页，需要同一份真实状态。(仅状态镜像，不产生写入。)
+        if (IsModernUserdataUninstallMode || IsRepairInstallationMode)
         {
             SetText(BootMaintenancePrepareStatusText, message);
         }

@@ -85,6 +85,13 @@ public partial class MainWindow
             return;
         }
 
+        // 修复模式禁止进入隐藏内部第 1 步；其余导航保留原门槛。
+        if (IsRepairInstallationMode && step == 1)
+        {
+            RestoreInternalInstallNav();
+            return;
+        }
+
         if (step != _internalInstallStep && !CanEnterBootMaintenanceStep(step))
         {
             RestoreInternalInstallNav();
@@ -115,6 +122,35 @@ public partial class MainWindow
             || HasUnknownBootMaintenanceReset)
         {
             return;
+        }
+
+        // 修复模式：在任何本地捕获 / 历史 / 客户端 / 新鲜备份读取之前，先确保本次修复的
+        // 全新备份对象存在。缺少时自动选取持久父目录并调用内部备份核心；这里刻意不包外层
+        // RunBusy / operationActive，内部核心自己具备忙碌与保护门槛。失败必须留在来源页。
+        if (IsRepairInstallationMode
+            && _internalInstallBackup is null
+            && !IsModernUserdataUninstallMode
+            && !IsModernTfInstallMode)
+        {
+            var repairParent = _internalInstallBackupParent;
+            if (string.IsNullOrWhiteSpace(repairParent) || !Directory.Exists(repairParent))
+            {
+                repairParent = DefaultRecoveryOutputDirectory();
+                ApplyInternalInstallBackupParent(repairParent);
+            }
+
+            // 已有真实 9008 会话时走 9008 修复备份；否则走共享备份核心。
+            await BackupInternalInstallCoreAsync(useBoardBackup: false);
+
+            if (!IsRepairInstallationMode
+                || _internalInstallStep != 2
+                || !_ready
+                || _busy
+                || _bootMaintenanceOperationActive
+                || _internalInstallBackup is null)
+            {
+                return;
+            }
         }
 
         // 路线由真实事实决定：完整检查仍然成立走完整检查工厂；否则（默认 ADB 读取事实，
@@ -184,7 +220,8 @@ public partial class MainWindow
                 OriginalBackupDirectory: _bootMaintenanceOriginalDirectory,
                 BootTools: _internalInstallNativeTools,
                 ProjectBackupDirectory: _bootMaintenanceProjectDirectory,
-                RepairPackage: null);
+                RepairPackage: null,
+                RepairInstallation: IsRepairInstallationMode);
             // 可变引用：AfterUpdate 在真实准备内置工具后按票面刷新 BootTools。
 
             // 终态一写出 acceptProgress 变 false：排队的迟到进度回调不能再覆盖新界面状态。

@@ -32,6 +32,7 @@ public sealed partial class BootMaintenanceBackend
 
     /// <summary>The TF boot authority this backend owns; assigned by the factory after construction.</summary>
     private InternalInstallPreparationContext.TfBootAuthority? _afterAuthority;
+    private BootMaintenanceAblRecovery? _afterAblRecovery;
 
     /// <summary>The immutable repair contract of the no-template fallback route; otherwise null.</summary>
     private EdlRawPackageContract? _afterFallbackContract;
@@ -126,8 +127,8 @@ public sealed partial class BootMaintenanceBackend
             await ReadbackEveryCurrentRegionAsync(
                 client, ownedCurrent, evidenceDirectory, progress, cancellationToken).ConfigureAwait(false);
 
-            BootSlotControlFacts miscFacts = await BootSlotControl
-                .ReadAsync(RegionClaim(ownedCurrent.Files, "misc", "the current rollback capture"), cancellationToken)
+            CurrentBootSlotFacts miscFacts = await CurrentBootSlot
+                .ReadAsync(ownedCurrent, cancellationToken)
                 .ConfigureAwait(false);
 
             BootVirtualAbControlFacts virtualAbFacts = await BootVirtualAbControl
@@ -256,9 +257,22 @@ public sealed partial class BootMaintenanceBackend
             }
 
             InternalInstallPreparationContext.TfBootAuthority authority;
+            BootMaintenanceAblRecovery? ablRecovery = null;
             try
             {
-                if (afterEpochWitness is not null)
+                if (sources.RepairInstallation)
+                {
+                    ablRecovery = await BootMaintenanceAblRecovery.CreateAsync(client, ownedCurrent,
+                        lockState, sources.OriginalBackupDirectory, cancellationToken).ConfigureAwait(false);
+                    if (ablRecovery is not null) ownedResources.Add(ablRecovery);
+                }
+                if (ablRecovery is not null)
+                {
+                    authority = await InternalInstallPreparationContext.TfBootAuthority.CreateAsync(
+                        ownedCurrent, currentSlot, lockState, evidenceDirectory, cancellationToken,
+                        initializedProof, afterEpochWitness, ablRecovery).ConfigureAwait(false);
+                }
+                else if (afterEpochWitness is not null)
                 {
                     authority = await InternalInstallPreparationContext
                         .PrepareAfterBootAuthorityAsync(
@@ -641,6 +655,8 @@ public sealed partial class BootMaintenanceBackend
             IReadOnlyDictionary<string, long> bounds = authority.RequireRuntimeRawBounds(
                 materialsBySource, rawLengthsBySource, cancellationToken);
             await authority.RevalidateAsync(cancellationToken).ConfigureAwait(false);
+            if (ablRecovery is not null)
+                await ablRecovery.RevalidateAsync(cancellationToken).ConfigureAwait(false);
 
             string inactiveSlot = currentSlot == "a" ? "b" : "a";
             var orderedTargets = new[] { inactiveSlot, currentSlot };
@@ -723,7 +739,7 @@ public sealed partial class BootMaintenanceBackend
                 ownedResources.Add(OpenAfterReadLease(
                     candidate.Path, "the AfterUpdate candidate boot of slot " + target));
 
-                bool willWrite = !string.Equals(
+                bool willWrite = sources.RepairInstallation || !string.Equals(
                     targetRegion.Sha256, candidate.Sha256, StringComparison.OrdinalIgnoreCase);
 
                 bootRegionByTarget[target] = new PlannedRegion(
@@ -872,7 +888,19 @@ public sealed partial class BootMaintenanceBackend
                 }
             }
 
-            ValidateAfterPlan(plan);
+            // Change the loader only after both signed boot chains have been fully verified.
+            if (ablRecovery is not null)
+            {
+                foreach (string slot in orderedTargets)
+                {
+                    string role = "abl_" + slot;
+                    if (ablRecovery.Replacements.TryGetValue(role, out var candidate))
+                        plan.Add(await BuildAfterCompanionRegionAsync(role, slot,
+                            RequireRegion(ownedCurrent.Files, role, "current ABL"), candidate,
+                            evidenceDirectory, ownedResources, cancellationToken).ConfigureAwait(false));
+                }
+            }
+            ValidateAfterPlan(plan, ablRecovery);
 
             DeviceIdentity preparedIdentity = deviceFacts.Identity.Identity;
             string bindingTag = contract is not null
@@ -962,6 +990,7 @@ public sealed partial class BootMaintenanceBackend
                 ownedResources);
 
             backend._afterAuthority = authority;
+            backend._afterAblRecovery = ablRecovery;
             if (contract is not null && fallbackFacts is not null)
             {
                 backend._afterFallbackContract = contract;
@@ -1021,6 +1050,8 @@ public sealed partial class BootMaintenanceBackend
                 "The AfterUpdate backend carries no TF boot authority; it was not created by the factory.");
 
         await authority.RevalidateAsync(cancellationToken).ConfigureAwait(false);
+        if (_afterAblRecovery is not null)
+            await _afterAblRecovery.RevalidateAsync(cancellationToken).ConfigureAwait(false);
 
         if (_afterFallbackContract is null && _afterFallbackFacts is null)
         {
@@ -1161,7 +1192,7 @@ public sealed partial class BootMaintenanceBackend
             fresh.Sha256, destination, candidate.Sha256);
     }
 
-    private static void ValidateAfterPlan(IReadOnlyList<PlannedRegion> plan)
+    private static void ValidateAfterPlan(IReadOnlyList<PlannedRegion> plan, BootMaintenanceAblRecovery? ablRecovery = null)
     {
         if (plan.Count == 0)
         {
@@ -1169,6 +1200,15 @@ public sealed partial class BootMaintenanceBackend
                 PlanIncompleteCode + ": the AfterUpdate preparation produced no truthful planned region.");
         }
 
+        if (ablRecovery is not null)
+        {
+            foreach (string role in ablRecovery.Replacements.Keys)
+                if (plan.Count(r => r.Role == role && r.WillWrite) != 1)
+                    throw new InvalidOperationException(PlanIncompleteCode + ": missing ABL recovery write " + role);
+            int firstAbl = plan.ToList().FindIndex(r => r.Role is "abl_a" or "abl_b");
+            if (firstAbl >= 0 && plan.Skip(firstAbl).Any(r => r.Role is not ("abl_a" or "abl_b")))
+                throw new InvalidOperationException(PlanIncompleteCode + ": ABL recovery must be written last.");
+        }
         var seenRoles = new HashSet<string>(StringComparer.Ordinal);
         for (int left = 0; left < plan.Count; left++)
         {
@@ -1179,11 +1219,14 @@ public sealed partial class BootMaintenanceBackend
                 or "vbmeta_system_a" or "vbmeta_system_b"
                 or "vbmeta_a" or "vbmeta_b"
                 or "efisp";
+            if (region.Role is "abl_a" or "abl_b")
+                allowed = ablRecovery?.MatchesReplacement(region.Role, region.Lun, region.StartSector,
+                    region.SectorCount, region.Length, region.CurrentSha256, region.CandidateSha256) == true;
             if (!allowed)
             {
                 throw new InvalidOperationException(
                     PlanIncompleteCode + ": planned role '" + region.Role
-                    + "' is outside the AfterUpdate whitelist; no ABL, xbl, GPT, misc, userdata, root or "
+                    + "' is outside the verified maintenance scope; no unverified ABL, xbl, GPT, misc, userdata, root or "
                     + "other write may be planned.");
             }
 

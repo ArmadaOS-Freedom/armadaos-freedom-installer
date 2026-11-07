@@ -1297,7 +1297,7 @@ public sealed partial class BootMaintenanceBackend : IDisposable
         string? CandidatePath,
         string? CandidateSha256)
     {
-        /// <summary>True when this region carries a stock candidate that differs from the current bytes.</summary>
+        /// <summary>True when this region has a candidate selected for a full write and readback.</summary>
         internal bool WillWrite => CandidatePath is not null;
     }
 

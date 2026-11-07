@@ -34,6 +34,8 @@ public partial class MainWindow
                 return ExecutePrepareUpdateWorkflowAsync();
             case "repair":
                 return ExecuteRepairAfterUpdateWorkflowAsync();
+            case "repair-install":
+                return ExecuteBootMaintenanceAsync();
             default:
                 return ReportUnpreparedWorkflowAsync();
         }

@@ -112,7 +112,16 @@ public partial class MainWindow
                 return;
             }
 
+            var previousStep = _internalInstallStep;
             NavigateBootMaintenanceStep(step);
+            if (IsRepairInstallationMode
+                && step == 2
+                && _internalInstallStep == 2
+                && previousStep != 2)
+            {
+                await PrepareBootMaintenanceConfirmationAsync();
+            }
+
             return;
         }
 

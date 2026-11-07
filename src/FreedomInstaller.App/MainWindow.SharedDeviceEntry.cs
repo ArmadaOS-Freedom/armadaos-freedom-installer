@@ -203,7 +203,11 @@ public partial class MainWindow
             return;
         }
 
-        if (IsSharedNonInternalDeviceMode)
+        if (IsRepairInstallationMode)
+        {
+            SetText(SharedDeviceCheckLead, "Dynamic.BootMaintenance.Repair.CheckLead");
+        }
+        else if (IsSharedNonInternalDeviceMode)
         {
             SetText(SharedDeviceCheckLead, "Dynamic.Shared.DeviceCheckLead");
         }

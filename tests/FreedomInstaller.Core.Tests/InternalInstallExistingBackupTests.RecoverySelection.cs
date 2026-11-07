@@ -179,6 +179,8 @@ namespace FreedomInstaller.App
 
         public bool IsModernUserdataUninstallMode { get; set; }
 
+        public bool IsRepairInstallationMode { get; set; }
+
         public int PickerCallCount { get; private set; }
 
         public string? PickerResult { get; set; }
