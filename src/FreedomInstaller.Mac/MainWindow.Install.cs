@@ -346,6 +346,13 @@ public partial class MainWindow
                 acceptProgress = false;
                 _internalInstallDeviceCheck = result;
                 RenderDeviceCheck(result);
+                if (!result.Succeeded && !result.Cancelled)
+                {
+                    // As in the WPF window (0.7.22): the failed stage and its reason also go to the log.
+                    AppendLog(M("Dynamic.InternalInstall.Check.FailedStage", M(CheckStageKey(result.FailedStage))));
+                    AppendLog(M("Dynamic.InternalInstall.Check.Failed", Placeholder(result.Error)));
+                }
+
                 if (result.Succeeded && result.AndroidReturn == AndroidReturnState.Verified)
                 {
                     _internalInstallPower = await CapturePowerAsync(transport.AdbPath, result.Android!.Identity.Serial, token);
@@ -362,6 +369,7 @@ public partial class MainWindow
                 var diagnostic = string.IsNullOrWhiteSpace(exception.Message) ? UnknownValue : exception.Message;
                 SetText(InternalInstallCheckProgressText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
                 SetText(InternalInstallCheckStatusText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
+                AppendLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
             }
         });
     }
@@ -392,7 +400,7 @@ public partial class MainWindow
     {
         var identity = result.Android?.Identity;
         var firmware = identity?.Firmware;
-        SetText(InternalInstallModelText, "Dynamic.RawValue", Placeholder(identity?.Model));
+        SetText(InternalInstallModelText, UiText.ModelName(identity?.Model));
         SetText(InternalInstallSerialText, "Dynamic.RawValue", Placeholder(identity?.Serial ?? result.FastbootSerial));
         SetText(InternalInstallFirmwareText, "Dynamic.RawValue", Placeholder(firmware?.DisplayId ?? firmware?.BuildFingerprint));
         SetText(InternalInstallBootloaderText, BootStateKey(result.FastbootLockState));
@@ -631,7 +639,7 @@ public partial class MainWindow
 
                 if (!ReferenceEquals(pendingTools.Profile, profile))
                 {
-                    SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.ToolchainMismatch", pendingTools.Model, pendingTools.AndroidBuild);
+                    SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.ToolchainMismatch", UiText.ModelName(pendingTools.Model), pendingTools.AndroidBuild);
                     return;
                 }
 
@@ -822,7 +830,7 @@ public partial class MainWindow
                 SetText(
                     InternalInstallPackageStatusText,
                     validation.TestOnly ? "Dynamic.InternalInstall.Capacity.TestOnly" : "Dynamic.InternalInstall.Capacity.Valid",
-                    imported.DeviceModel,
+                    UiText.ModelName(imported.DeviceModel),
                     validation.PackageId,
                     validation.Version,
                     validation.ManifestFingerprint);
@@ -1035,7 +1043,7 @@ public partial class MainWindow
     {
         var backup = _internalInstallBackup;
         var validation = _internalInstallPackage?.Validation;
-        var model = backup?.Model ?? UnknownValue;
+        object model = backup is null ? UnknownValue : UiText.ModelName(backup.Model);
         object bootloader = M(BootStateKey(prepared.FastbootLockState));
         var androidBytes = checked(prepared.AndroidGiB * Gibibyte);
         var linuxBytes = checked(prepared.LinuxRootBytes + set.Allocation.LinuxBootBytes);
@@ -1189,7 +1197,7 @@ public partial class MainWindow
             this,
             T("Dynamic.InternalInstall.Execution.Dialog.Title"),
             T("Dynamic.InternalInstall.Execution.Dialog.Body",
-                _internalInstallBackup!.Model,
+                UiText.ModelName(_internalInstallBackup!.Model),
                 prepared.AndroidSerial,
                 FormatExecutionBytes(prepared.AndroidGiB * Gibibyte),
                 FormatExecutionBytes(linuxTotal),
@@ -1646,7 +1654,7 @@ public partial class MainWindow
                     SetText(
                         InternalInstallExitMaintenanceStatusText,
                         "Dynamic.InternalInstall.Exit.Verified",
-                        fresh.Identity.Model,
+                        UiText.ModelName(fresh.Identity.Model),
                         fresh.Identity.Serial,
                         fresh.Identity.Firmware?.DisplayId ?? UnknownValue);
                     if (_internalInstallBackup is { } backup)
