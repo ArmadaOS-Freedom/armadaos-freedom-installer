@@ -71,17 +71,22 @@ public sealed class InternalInstallAcceptanceTests
     }
 
     [Theory]
-    [InlineData("TB322FC")]
-    [InlineData("TB323FU")]
-    [InlineData("TB710FU")]
-    public async Task PortRomUsesCanonicalModelThroughoutAcceptanceAndCapacityCheck(string model)
+    [InlineData("TB322FC", false)]
+    [InlineData("TB323FU", false)]
+    [InlineData("TB710FU", false)]
+    [InlineData("TB322FC", true)]
+    [InlineData("TB323FU", true)]
+    [InlineData("TB710FU", true)]
+    public async Task PortRomUsesCanonicalModelThroughoutAcceptanceAndCapacityCheck(string model, bool mixedBootimage)
     {
+        var bootimageModel = mixedBootimage ? "OPD2413" : model;
         var fake = new FakeAdbRunner
         {
             FullGetprop = BuildFullGetprop().Replace("[ro.product.model]: [TB322FC]", "[ro.product.model]: [25091RP04C]")
                 .Replace("[ro.product.vendor.model]: [TB322FC]", "[ro.product.vendor.model]: [Xiaomi for arm64]")
                 .Replace("[ro.product.name]: [TB322FC]", "[ro.product.name]: [piano]")
-                + "[ro.product.bootimage.model]: [" + model + "]\n",
+                + "[ro.product.bootimage.model]: [" + bootimageModel + "]\n"
+                + (mixedBootimage ? "[ro.product.model_for_attestation]: [" + model + "]\n[ro.product.device_for_attestation]: [" + model + "]\n" : string.Empty),
         };
         var result = await new InternalInstallAcceptance(Adb, fake).CheckAndroidAsync(
             CreateExpectedDevice(model: model), UserdataPartitionNumber, ExpectedAndroidBytes,

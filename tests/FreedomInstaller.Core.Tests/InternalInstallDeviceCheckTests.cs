@@ -516,20 +516,31 @@ public sealed class InternalInstallDeviceCheckTests
     private const string G4Product = "elden_prc_wifi";
 
     [Theory]
-    [InlineData("TB322FC", "elden_prc_wifi", 1)]
-    [InlineData("TB323FU", "fixture-unmapped-board", 1)]
-    [InlineData("TB710FU", "topaz_prc_wifi", 0)]
-    public async Task Check_PortRomKeepsCanonicalModelAcrossDeviceSpecificFastbootReturn(string model, string product, int expectedFastbootReboots)
+    [InlineData("TB322FC", "elden_prc_wifi", 1, false)]
+    [InlineData("TB323FU", "fixture-unmapped-board", 1, false)]
+    [InlineData("TB710FU", "topaz_prc_wifi", 0, false)]
+    [InlineData("TB322FC", "elden_prc_wifi", 1, true)]
+    [InlineData("TB323FU", "fixture-unmapped-board", 1, true)]
+    [InlineData("TB710FU", "topaz_prc_wifi", 0, true)]
+    public async Task Check_PortRomKeepsCanonicalModelAcrossDeviceSpecificFastbootReturn(string model, string product, int expectedFastbootReboots, bool mixedBootimage)
     {
         var runner = new DeviceCheckRunner(Serial, new DeviceCheckClock(), model: model, displayId: "ported-ROM")
         {
             FastbootProductValue = product,
             SnapshotStatus = "none",
-            GetpropTransform = dump => dump
-                .Replace("[ro.product.model]: [" + model + "]", "[ro.product.model]: [25091RP04C]")
-                .Replace("[ro.product.vendor.model]: [" + model + "]", "[ro.product.vendor.model]: [Xiaomi for arm64]")
-                .Replace("[ro.product.name]: [" + model + "]", "[ro.product.name]: [piano]")
-                + "\n[ro.product.bootimage.model]: [" + model + "]",
+            GetpropTransform = dump =>
+            {
+                var rewritten = dump
+                    .Replace("[ro.product.model]: [" + model + "]", "[ro.product.model]: [25091RP04C]")
+                    .Replace("[ro.product.vendor.model]: [" + model + "]", "[ro.product.vendor.model]: [Xiaomi for arm64]")
+                    .Replace("[ro.product.name]: [" + model + "]", "[ro.product.name]: [piano]");
+                if (!mixedBootimage)
+                    return rewritten + "\n[ro.product.bootimage.model]: [" + model + "]";
+                return rewritten
+                    + "\n[ro.product.bootimage.model]: [OPD2413]"
+                    + "\n[ro.product.model_for_attestation]: [" + model + "]"
+                    + "\n[ro.product.device_for_attestation]: [" + model + "]";
+            },
         };
         var result = await CreateCheck(runner).CheckAsync(Serial);
         Assert.True(result.Succeeded);

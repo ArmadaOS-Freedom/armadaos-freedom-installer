@@ -287,6 +287,97 @@ public sealed class AndroidModelResolutionTests
             TransportWith(dump).ReadAdbIdentityAsync("SYNTH0016"));
     }
 
+    [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    [InlineData("TB710FU")]
+    public async Task MixedOnePlusSurfaceUnknownBootimageWithBothAttestationKeys_IdentifiesModel(string model)
+    {
+        var dump =
+            Prop("ro.product.brand", "OnePlus") +
+            Prop("ro.product.model", "OPD2413") +
+            Prop("ro.product.vendor.model", "OPD2413") +
+            Prop("ro.product.name", "OPD2413") +
+            Prop("ro.product.bootimage.model", "OPD2413") +
+            Prop("ro.product.model_for_attestation", model) +
+            Prop("ro.product.device_for_attestation", model);
+
+        var transport = TransportWith(dump);
+        var identity = await transport.ReadAdbIdentityAsync("SYNTH-MIXED-01");
+
+        Assert.Equal(model, identity.Model);
+        Assert.StartsWith(model, AndroidModelResolver.Describe(dump), StringComparison.Ordinal);
+        Assert.Contains("OPD2413", AndroidModelResolver.Describe(dump), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    [InlineData("TB710FU")]
+    public async Task SupportedBootimageWithUnknownAttestation_SucceedsAsCandidate(string model)
+    {
+        var dump =
+            Prop("ro.product.model", "OPD2413") +
+            Prop("ro.product.bootimage.model", model) +
+            Prop("ro.product.model_for_attestation", "OPD2413");
+
+        var identity = await TransportWith(dump).ReadAdbIdentityAsync("SYNTH-MIXED-02");
+
+        Assert.Equal(model, identity.Model);
+    }
+
+    [Fact]
+    public async Task UnknownPreferredClaimsWithSpoofedSurface_RejectedAsNotIdentified()
+    {
+        var dump =
+            Prop("ro.product.model", "TB322FC") +
+            Prop("ro.product.vendor.model", "TB322FC") +
+            Prop("ro.product.bootimage.model", "OPD2413") +
+            Prop("ro.product.model_for_attestation", "OP615EL1");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            TransportWith(dump).ReadAdbIdentityAsync("SYNTH-MIXED-03"));
+
+        Assert.Contains("MODEL_NOT_IDENTIFIED", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("MODEL_EVIDENCE_CONFLICT", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnknownBootimageWithContradictoryAttestationValues_ThrowsConflict()
+    {
+        var dump =
+            Prop("ro.product.bootimage.model", "OPD2413") +
+            Prop("ro.product.model_for_attestation", "TB322FC") +
+            Prop("ro.product.device_for_attestation", "TB323FU");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            TransportWith(dump).ReadAdbIdentityAsync("SYNTH-MIXED-04"));
+
+        Assert.Contains("MODEL_EVIDENCE_CONFLICT", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnsupportedSurfaceAndBootimageOnly_RejectedAsNotIdentified(bool withBootimage)
+    {
+        // Donor OnePlus model is not an alias: even as the only surface/bootimage claim it never
+        // nominates a supported canonical model.
+        var dump =
+            Prop("ro.product.brand", "OnePlus") +
+            Prop("ro.product.model", "OPD2413") +
+            Prop("ro.product.vendor.model", "OPD2413") +
+            Prop("ro.product.name", "OPD2413");
+        if (withBootimage)
+            dump += Prop("ro.product.bootimage.model", "OPD2413");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            TransportWith(dump).ReadAdbIdentityAsync("SYNTH-OPD-ONLY"));
+
+        Assert.StartsWith(AndroidModelResolver.NotIdentifiedCode, AndroidModelResolver.Describe(dump), StringComparison.Ordinal);
+        Assert.Contains(AndroidModelResolver.NotIdentifiedCode, ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void DiagnosticReportsActualUnknownModelWithoutDumpingOtherProperties()
     {

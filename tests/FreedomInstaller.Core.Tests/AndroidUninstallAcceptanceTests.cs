@@ -412,14 +412,20 @@ public sealed class AndroidUninstallAcceptanceTests
         => string.Join(" ", new[] { "-s", Serial }.Concat(arguments));
 
     [Theory]
-    [InlineData("TB322FC")]
-    [InlineData("TB323FU")]
-    [InlineData("TB710FU")]
-    public async Task Read_UsesSharedModelForPortRom(string model)
+    [InlineData("TB322FC", false)]
+    [InlineData("TB323FU", false)]
+    [InlineData("TB710FU", false)]
+    [InlineData("TB322FC", true)]
+    [InlineData("TB323FU", true)]
+    [InlineData("TB710FU", true)]
+    public async Task Read_UsesSharedModelForPortRom(string model, bool mixedBootimage)
     {
+        var bootimageModel = mixedBootimage ? "OPD2413" : model;
+        var getprop = "[ro.product.model]: [25091RP04C]\n[ro.product.bootimage.model]: [" + bootimageModel + "]\n";
+        if (mixedBootimage)
+            getprop += "[ro.product.model_for_attestation]: [" + model + "]\n[ro.product.device_for_attestation]: [" + model + "]\n";
         var runner = AcceptingRunner()
-            .Answer(Adb("shell", "getprop"),
-                "[ro.product.model]: [25091RP04C]\n[ro.product.bootimage.model]: [" + model + "]\n");
+            .Answer(Adb("shell", "getprop"), getprop);
         var observation = await new AdbAndroidUninstallAcceptanceProbe(runner, AdbPath)
             .ReadAsync(Serial, Disk, UserdataNumber);
         Assert.Equal(model, observation.Model);
