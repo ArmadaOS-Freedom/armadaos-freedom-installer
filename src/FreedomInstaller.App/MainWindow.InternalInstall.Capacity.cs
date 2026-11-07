@@ -681,17 +681,24 @@ public partial class MainWindow
                         InternalBackupSet? recoverySource = null;
                         if (backup.Tables[0].Partitions.Any(p => p.Name == "ARMADA_BACKUP"))
                             recoverySource = await GetBoardFirstRecoverySourceAsync(backup, parentPath, token);
-                        var preparedArtifacts = await InternalInstallArtifacts.PrepareAsync(
-                            backup,
-                            androidGiB,
-                            storage,
-                            TemporaryWorkRoot,
-                            token,
-                            recoverySource);
+                        string attemptRoot = Path.Combine(TemporaryWorkRoot, "artifacts-" + Guid.NewGuid().ToString("N"));
+                        Directory.CreateDirectory(attemptRoot);
+                        InternalArtifactSet preparedArtifacts;
+                        try
+                        {
+                            preparedArtifacts = await InternalInstallArtifacts.PrepareAsync(
+                                backup, androidGiB, storage, attemptRoot, token, recoverySource);
+                        }
+                        catch
+                        {
+                            DiscardInternalInstallPreparation(attemptRoot, preserveRecovery: false);
+                            throw;
+                        }
 
                         if (_closeRequested || _closed)
                         {
                             preparedArtifacts.Dispose();
+                            DiscardInternalInstallPreparation(attemptRoot, preserveRecovery: false);
                             return;
                         }
 
@@ -1000,10 +1007,11 @@ public partial class MainWindow
     // ---------- 失效与生命周期 ----------
 
     /// <summary>
-    /// 只释放方案对象自己的只读锁：生成的方案文件与备份都保留，绝不删除用户文件。
+    /// 释放旧方案；尚未执行的临时镜像及时清理，执行后的恢复材料保留。
     /// </summary>
     private void ReleaseInternalInstallArtifacts()
     {
+        bool preserveRecovery = HasInternalInstallExecutionStarted;
         // 后端 / 资产 / 维护包先按固定顺序释放，方案对象自己的锁最后释放。
         try
         {
@@ -1022,6 +1030,7 @@ public partial class MainWindow
             try
             {
                 artifacts.Dispose();
+                DiscardInternalInstallPreparation(artifacts.DirectoryPath, preserveRecovery);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
