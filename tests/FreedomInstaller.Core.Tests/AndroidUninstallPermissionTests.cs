@@ -79,7 +79,7 @@ public sealed class AndroidUninstallPermissionTests
 
         // Exactly the ordinary getprops, the denied size read, the one readlink and the one df.
         Assert.Equal(6, runner.Commands.Count);
-        AssertCommand(runner.Commands[0], "-s", Serial, "shell", "getprop", "ro.product.model");
+        AssertCommand(runner.Commands[0], "-s", Serial, "shell", "getprop");
         AssertCommand(runner.Commands[1], "-s", Serial, "shell", "getprop", "ro.serialno");
         AssertCommand(runner.Commands[2], "-s", Serial, "shell", "getprop", "sys.boot_completed");
         AssertCommand(runner.Commands[3], "-s", Serial, "shell", "cat", SysfsPath);
@@ -115,7 +115,7 @@ public sealed class AndroidUninstallPermissionTests
     public async Task Read_NonPermissionSysfsError_PropagatesWithoutAnyFallbackQuery()
     {
         var runner = new AndroidAcceptanceCommandRunner()
-            .Answer(Adb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(Adb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(Adb("shell", "getprop", "ro.serialno"), Serial + "\n")
             .Answer(Adb("shell", "getprop", "sys.boot_completed"), "1\n")
             .Answer(
@@ -261,7 +261,7 @@ public sealed class AndroidUninstallPermissionTests
     /// </summary>
     private static AndroidAcceptanceCommandRunner PermissionDeniedRunner()
         => new AndroidAcceptanceCommandRunner()
-            .Answer(Adb("shell", "getprop", "ro.product.model"), Model + "\n")
+            .Answer(Adb("shell", "getprop"), "[ro.product.model]: [" + Model + "]\n")
             .Answer(Adb("shell", "getprop", "ro.serialno"), Serial + "\n")
             .Answer(Adb("shell", "getprop", "sys.boot_completed"), "1\n")
             .Answer(

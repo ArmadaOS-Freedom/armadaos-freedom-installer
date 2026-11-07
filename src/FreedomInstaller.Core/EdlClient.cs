@@ -159,6 +159,7 @@ public sealed class EdlClient
     private readonly Dictionary<int, EdlGeometry> _geometryByLun = new();
     private bool _initialProven;
     private string? _provenSaharaSerialHex;
+    private EdlHardwareIdentity? _hardwareIdentity;
 
     /// <summary>
     /// Creates the client. The toolchain and binding are stored by reference and are exposed unchanged;
@@ -168,7 +169,8 @@ public sealed class EdlClient
         EdlToolchain toolchain,
         EdlEntryResult binding,
         ICommandRunner runner,
-        IEdlEndpointDiscovery discovery)
+        IEdlEndpointDiscovery discovery,
+        EdlHardwareIdentity? hardwareIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(binding);
@@ -180,6 +182,7 @@ public sealed class EdlClient
 
         _runner = runner;
         _discovery = discovery;
+        _hardwareIdentity = hardwareIdentity;
     }
 
     /// <summary>Exact staged toolchain reference passed to the constructor.</summary>
@@ -198,6 +201,55 @@ public sealed class EdlClient
     /// </para>
     /// </summary>
     public bool HasInitialSaharaProof => _initialProven;
+
+    public EdlHardwareIdentity? HardwareIdentity => _hardwareIdentity;
+
+    public EdlClient WithSavedIdentity(EdlEntryResult savedBinding)
+    {
+        ArgumentNullException.ThrowIfNull(savedBinding);
+        if (!_initialProven || Binding.OfflineIdentity is null
+            || savedBinding.OfflineIdentity is not null || savedBinding.AndroidIdentity is null)
+            throw new InvalidOperationException("A proven offline session and a saved Android identity are required.");
+        var serial = EnsureCurrentEndpointIdentity();
+        var rebound = new EdlClient(Toolchain, savedBinding, _runner, _discovery, _hardwareIdentity);
+        if (!string.Equals(serial, rebound.EnsureCurrentEndpointIdentity(), StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(serial, _provenSaharaSerialHex, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The saved identity belongs to a different physical device.");
+        rebound._initialProven = true;
+        rebound._provenSaharaSerialHex = _provenSaharaSerialHex;
+        foreach (var pair in _geometryByLun) rebound._geometryByLun.Add(pair.Key, pair.Value);
+        return rebound;
+    }
+
+    /// <summary>
+    /// Proves and rebinds an already attached offline candidate to a saved Android identity.
+    /// <para>
+    /// When the session has not yet been proven, exactly one initial read-only geometry probe is run at
+    /// <paramref name="probeOutputPath"/> before the strict <see cref="WithSavedIdentity"/> checks are applied.
+    /// An already proven session is not probed again; its proof is transferred only after the strict
+    /// mismatch checks pass.
+    /// </para>
+    /// </summary>
+    public async Task<EdlClient> WithSavedIdentityAsync(
+        EdlEntryResult savedBinding,
+        string probeOutputPath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(savedBinding);
+        ArgumentNullException.ThrowIfNull(probeOutputPath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (Binding.OfflineIdentity is null || savedBinding.OfflineIdentity is not null
+            || savedBinding.AndroidIdentity is null)
+            throw new InvalidOperationException("An offline session and a saved Android identity are required.");
+
+        if (!_initialProven)
+        {
+            await ProbeRawGeometryAsync(0, true, probeOutputPath, cancellationToken).ConfigureAwait(false);
+        }
+
+        return WithSavedIdentity(savedBinding);
+    }
 
     /// <summary>
     /// Probes one LUN with <c>printgpt</c>.
@@ -231,6 +283,9 @@ public sealed class EdlClient
         }
 
         string expectedSerial = EnsureCurrentEndpointIdentity();
+
+        if (initialLoader)
+            await VerifyHardwareBeforeLoaderAsync(expectedSerial, cancellationToken).ConfigureAwait(false);
 
         TimeSpan timeout = initialLoader ? ProbeInitialTimeout : ProbeWarmTimeout;
         ProcessCommand command = new(
@@ -371,6 +426,9 @@ public sealed class EdlClient
         string canonicalOutput = ValidateRawGeometryOutputPath(newOutputFile);
 
         string expectedSerial = EnsureCurrentEndpointIdentity();
+
+        if (initialLoader)
+            await VerifyHardwareBeforeLoaderAsync(expectedSerial, cancellationToken).ConfigureAwait(false);
 
         TimeSpan timeout = initialLoader ? ProbeInitialTimeout : ProbeWarmTimeout;
         ProcessCommand command = new(
@@ -829,10 +887,26 @@ public sealed class EdlClient
     {
         _initialProven = false;
         _provenSaharaSerialHex = null;
+        _hardwareIdentity = null;
         _geometryByLun.Clear();
     }
 
     // ------------------------------------------------------------------ identity
+
+    private async Task VerifyHardwareBeforeLoaderAsync(string serial, CancellationToken token)
+    {
+        var hardware = _hardwareIdentity ?? await GlobalEdlDetection.DetectIdentityAsync(
+            Toolchain.ClientPath, _runner, _discovery, serial, token).ConfigureAwait(false);
+        if (!string.Equals(hardware.BusSerialHex, serial, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(hardware.Profile.FullHardwareId, Toolchain.HardwareId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(hardware.Profile.Model, Toolchain.Model, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "The verified 9008 hardware identity does not match the selected device profile. No loader was sent.");
+        var (endpoint, _) = GlobalEdlBinding.ReadEndpoint(_discovery, serial);
+        if (!string.Equals(endpoint.DeviceInstanceId, hardware.DeviceInstanceId, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The 9008 endpoint changed after hardware identification. Reconnect the device.");
+        _hardwareIdentity = hardware;
+    }
 
     /// <summary>
     /// Revalidates the loaded profile and the bound Android identity, re-enumerates the currently present

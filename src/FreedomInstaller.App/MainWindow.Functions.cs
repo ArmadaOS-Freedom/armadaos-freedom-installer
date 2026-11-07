@@ -7,7 +7,7 @@ namespace FreedomInstaller.App;
 /// <summary>
 /// 功能选择（应用入口）与「功能 → 向导」的视图切换。
 /// <para>
-/// 首页给出七张卡片：五张操作卡片各自进入一个原有向导，另外两张 9008 全局备份 / 恢复卡片
+/// 首页给出六张卡片：四张操作卡片各自进入一个原有向导，另外两张 9008 全局备份 / 恢复卡片
 /// 直接打开全局页视图，不写入操作标签；选中一张就进入原有向导，向导的任意一步都能回到首页重新选择。
 /// 这里只持有两个状态：当前选中的操作标签 <see cref="_selectedOperation"/>，
 /// 以及当前是否停在首页 <see cref="_showingHome"/>。设备身份、真实分区、安装包路径与日志
@@ -23,7 +23,7 @@ public partial class MainWindow
     /// <summary>默认操作：安装到内部存储（与旧版本的默认模式一致）。</summary>
     private const string DefaultOperation = "install";
 
-    /// <summary>当前选中的操作标签，取值与首页五种操作卡片的 <c>Tag</c> 对应；
+    /// <summary>当前选中的操作标签，取值与首页四种操作卡片的 <c>Tag</c> 对应；
     /// <c>install-tf</c> 只为旧启动参数与待处理恢复保留，首页不提供入口。</summary>
     private string _selectedOperation = DefaultOperation;
 
@@ -37,7 +37,7 @@ public partial class MainWindow
 
     /// <summary>已知操作标签（含仅为旧参数 / 待处理恢复保留的 install-tf）。</summary>
     private static bool IsKnownOperation(string? tag) =>
-        tag is "install" or "install-tf" or "prepare" or "repair" or "restore" or "uninstall";
+        tag is "install" or "install-tf" or "prepare" or "repair" or "uninstall";
 
     /// <summary>首页可选择的标签：已知标签中排除暂时关闭的 TF 卡安装。</summary>
     private static bool IsSelectableOperation(string? tag) =>

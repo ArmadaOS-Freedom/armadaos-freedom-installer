@@ -70,6 +70,32 @@ public sealed class InternalInstallAcceptanceTests
         Assert.DoesNotContain(fake.Commands, IsForbiddenCommand);
     }
 
+    [Theory]
+    [InlineData("TB322FC", false)]
+    [InlineData("TB323FU", false)]
+    [InlineData("TB710FU", false)]
+    [InlineData("TB322FC", true)]
+    [InlineData("TB323FU", true)]
+    [InlineData("TB710FU", true)]
+    public async Task PortRomUsesCanonicalModelThroughoutAcceptanceAndCapacityCheck(string model, bool mixedBootimage)
+    {
+        var bootimageModel = mixedBootimage ? "OPD2413" : model;
+        var fake = new FakeAdbRunner
+        {
+            FullGetprop = BuildFullGetprop().Replace("[ro.product.model]: [TB322FC]", "[ro.product.model]: [25091RP04C]")
+                .Replace("[ro.product.vendor.model]: [TB322FC]", "[ro.product.vendor.model]: [Xiaomi for arm64]")
+                .Replace("[ro.product.name]: [TB322FC]", "[ro.product.name]: [piano]")
+                + "[ro.product.bootimage.model]: [" + bootimageModel + "]\n"
+                + (mixedBootimage ? "[ro.product.model_for_attestation]: [" + model + "]\n[ro.product.device_for_attestation]: [" + model + "]\n" : string.Empty),
+        };
+        var result = await new InternalInstallAcceptance(Adb, fake).CheckAndroidAsync(
+            CreateExpectedDevice(model: model), UserdataPartitionNumber, ExpectedAndroidBytes,
+            EdlDeviceProfiles.FindByModel(model)!);
+        Assert.True(result.Verified, result.ToString());
+        Assert.Equal(model, result.ObservedIdentity!.Identity.Model);
+        Assert.DoesNotContain(fake.Commands, command => command.EndsWith("getprop ro.product.model", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Explicit_permission_denial_verifies_with_filesystem_only_evidence()
     {
@@ -382,7 +408,7 @@ public sealed class InternalInstallAcceptanceTests
     {
         var constructor = typeof(EdlDeviceProfile)
             .GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
-            .Single(candidate => candidate.GetParameters().Length == 10);
+            .Single(candidate => candidate.GetParameters().Length == 11);
 
         return (EdlDeviceProfile)constructor.Invoke(new object?[]
         {
@@ -396,10 +422,11 @@ public sealed class InternalInstallAcceptanceTests
             Array.Empty<EdlLoaderMaterial>(),
             null,
             false,
+            EdlInstallBootTrust.Standard,
         })!;
     }
 
-    private static InternalDeviceCheckResult CreateExpectedDevice(string currentSlot = "a", string? displayId = null)
+    private static InternalDeviceCheckResult CreateExpectedDevice(string currentSlot = "a", string? displayId = null, string model = Model)
     {
         var constructor = typeof(InternalDeviceCheckResult)
             .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
@@ -408,10 +435,10 @@ public sealed class InternalInstallAcceptanceTests
         return (InternalDeviceCheckResult)constructor.Invoke(new object?[]
         {
             new AndroidMaintenanceIdentity(
-                new DeviceIdentity(Serial, Model, BootloaderState.Unlocked) { Firmware = CreateFirmware(displayId) },
+                new DeviceIdentity(Serial, model, BootloaderState.Unlocked) { Firmware = CreateFirmware(displayId) },
                 SocSerial.ToString(CultureInfo.InvariantCulture)),
             Serial,
-            Model,
+            model,
             BootloaderState.Unlocked,
             OtaUpdateState.Completed,
             AndroidReturnState.Verified,

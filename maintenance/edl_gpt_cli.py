@@ -105,7 +105,10 @@ def _validate_request(
     """Validate the request envelope and return its normalized values."""
 
     mapping = _require_object(request, "request")
-    _require_exact_fields(mapping, _REQUEST_FIELDS, "request")
+    expected = _REQUEST_FIELDS | ({"reclaimBoardBackup"} if "reclaimBoardBackup" in mapping else set())
+    _require_exact_fields(mapping, expected, "request")
+    if not isinstance(mapping.get("reclaimBoardBackup", True), bool):
+        _fail("reclaimBoardBackup must be a boolean")
 
     if _require_int(mapping["schemaVersion"], "schemaVersion") != _SCHEMA_VERSION:
         _fail("schemaVersion must be 1")
@@ -287,6 +290,7 @@ def prepare_plan(request: dict[str, Any]) -> dict[str, Any]:
         owned["linuxBootPartUuid"],
         owned["linuxRootPartUuid"],
         owned.get("boardBackupPartUuid"),
+        request.get("reclaimBoardBackup", True),
     )
 
     write_unit = _write_unit_bytes(sector_size)

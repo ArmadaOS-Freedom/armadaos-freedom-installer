@@ -41,6 +41,7 @@ public partial class MainWindow
             _internalInstallArtifacts?.Dispose();
             _internalInstallPackage?.Dispose();
             _internalInstallBackup?.Dispose();
+            _internalInstallRecoverySource?.Dispose();
             _internalInstallEdlTools?.Dispose();
             _workSession.Complete(false);
         }

@@ -1851,6 +1851,10 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
         ArgumentNullException.ThrowIfNull(arguments);
         cancellationToken.ThrowIfCancellationRequested();
 
+        if (arguments.SequenceEqual(new[] { "--pid", "9008", "--loglevel", "Debug", "identify" }))
+            return Task.FromResult(new ProcessResult(0,
+                $"ARMADA_EDL_IDENTITY_V1 serial={E003EdlTestData.BusSerialHex} hwid={_hardwareId}", string.Empty));
+
         if (arguments.Length == 0)
         {
             throw new InvalidOperationException("IB001 fake received a command without arguments.");

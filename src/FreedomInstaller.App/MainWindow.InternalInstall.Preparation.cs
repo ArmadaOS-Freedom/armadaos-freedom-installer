@@ -9,7 +9,7 @@ using FreedomInstaller.Core;
 namespace FreedomInstaller.App;
 
 /// <summary>
-/// 「安装到内部存储」的主机侧准备：把程序集内置的两个 EDL 原始引导工具解到用户选定备份父目录下的
+/// 「安装到内部存储」的主机侧准备：把程序集内置的两个 EDL 原始引导工具解到应用工作目录下的
 /// 独立子目录，再交给 Core 的 <see cref="EdlRawBootTools"/> / <see cref="InternalInstallDirectAssets"/>
 /// 按编译期引脚复核并持有独立只读租约。
 /// <para>
@@ -46,6 +46,7 @@ public partial class MainWindow
 
     /// <summary>实际解出内置组件的目录，仅用于诊断日志，不参与任何门槛判断。</summary>
     private string? _internalInstallAssetsDirectory;
+    private string? _internalInstallBackendWorkDirectory;
 
     /// <summary>
     /// 准备并调用真实工厂。所有输入都必须是已经存在的真实对象：同一台设备的检查结果、同一个
@@ -96,25 +97,30 @@ public partial class MainWindow
             SetInternalInstallConfirmStatus(M("Dynamic.InternalInstall.Prepared.CheckingFactory"));
         }
 
-        var backend = await InternalInstallBackend.CreatePreparedAsync(
-            check,
-            client,
-            backup,
-            artifacts,
-            package,
-            assets,
-            services,
-            TemporaryWorkRoot,
-            cancellationToken);
+        string attemptRoot = Path.Combine(TemporaryWorkRoot, "prepare-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(attemptRoot);
+        InternalInstallBackend backend;
+        try
+        {
+            backend = await InternalInstallBackend.CreatePreparedAsync(
+                check, client, backup, artifacts, package, assets, services, attemptRoot, cancellationToken);
+        }
+        catch
+        {
+            DiscardInternalInstallPreparation(attemptRoot, preserveRecovery: false);
+            throw;
+        }
 
         if (_closeRequested || _closed)
         {
             // 窗口已经关闭：只释放刚返回的后端自己的租约，不碰调用方的任何对象。
             backend.Dispose();
+            DiscardInternalInstallPreparation(attemptRoot, preserveRecovery: false);
             throw new OperationCanceledException();
         }
 
         _internalInstallBackend = backend;
+        _internalInstallBackendWorkDirectory = attemptRoot;
         // 新后端就是新的安装前复核起点：旧的界面失败原因与上一次关闭批准都不再适用。
         _internalInstallExecutionError = null;
         _internalInstallPostWriteCloseApproved = false;
@@ -246,8 +252,11 @@ public partial class MainWindow
                     T("Dynamic.InternalInstall.Execution.ReleaseBlocked"));
             }
 
+            bool preserveRecovery = HasInternalInstallExecutionStarted;
             backend.Dispose();
             _internalInstallBackend = null;
+            DiscardInternalInstallPreparation(_internalInstallBackendWorkDirectory, preserveRecovery);
+            _internalInstallBackendWorkDirectory = null;
 
             // 只有真正释放成功之后才允许下一次执行；方法失败或异常都不会重置这个标志。
             _internalInstallExecuteAttempted = false;
@@ -271,5 +280,15 @@ public partial class MainWindow
         }
 
         _internalInstallAssetsDirectory = null;
+    }
+
+    private void DiscardInternalInstallPreparation(string? path, bool preserveRecovery)
+    {
+        if (path is null) return;
+        try { _workSession?.DiscardPreparation(path, preserveRecovery); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            AppendLocalizedLog(M("Dynamic.InternalInstall.Capacity.ArtifactCleanupFailed", error.Message));
+        }
     }
 }

@@ -891,7 +891,7 @@
                                Style="{StaticResource CaptionText}"
                                Margin="8,4,0,8" />
 
-                    <!-- 原有三页步骤标签：TF 卡安装、更新前准备、更新后修复、恢复 boot 与卸载继续使用。 -->
+                    <!-- 原有三页步骤标签：TF 卡安装、更新前准备、更新后修复与卸载继续使用。 -->
                     <StackPanel x:Name="LegacyStepNav">
                         <RadioButton x:Name="NavConnect"
                                      GroupName="StepNav"
@@ -2174,6 +2174,10 @@
                                            TextWrapping="Wrap"
                                            FontSize="13" />
                             </CheckBox>
+                            <TextBlock x:Name="InternalInstallBoardBackupHint"
+                                       Visibility="Collapsed" Margin="0,10,0,0"
+                                       Text="{DynamicResource Dynamic.InternalInstall.Backup.BoardAvailable}"
+                                       Style="{StaticResource CaptionText}" />
 
                             <StackPanel x:Name="InternalInstallBackupExistingRow"
                                         Visibility="Collapsed"
@@ -2742,6 +2746,15 @@
                                                Margin="0,6,0,0" />
 
                                     <!-- 卸载专用：恢复原厂安卓引导（默认不勾选，其他模式隐藏）。 -->
+                                    <Button x:Name="UninstallUseBoardBackupButton" Visibility="Collapsed"
+                                            HorizontalAlignment="Left" Margin="0,8,0,0"
+                                            Content="{DynamicResource Dynamic.UserdataUninstall.UseBoardBackup}"
+                                            Click="OnUseBoardUninstallBackup" />
+                                    <CheckBox x:Name="UninstallReclaimBackupCheck" Visibility="Collapsed"
+                                              Style="{StaticResource RiskCheckBox}" Margin="0,10,0,0" IsChecked="True"
+                                              Content="{DynamicResource Dynamic.UserdataUninstall.ReclaimBackup}"
+                                              Checked="OnUserdataUninstallReclaimBackupChanged"
+                                              Unchecked="OnUserdataUninstallReclaimBackupChanged" />
                                     <CheckBox x:Name="BootMaintenanceRestoreStockCheck"
                                               Style="{StaticResource RiskCheckBox}"
                                               Visibility="Collapsed"
@@ -3080,6 +3093,27 @@
                                 </StackPanel>
                             </Grid>
 
+                            <StackPanel Margin="18,0,0,12">
+                                <TextBlock Text="{DynamicResource Static.Environment.AdbDriver}"
+                                           FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource InkBrush}" />
+                                <TextBlock x:Name="EnvironmentAdbStatusText"
+                                           Text="{DynamicResource Dynamic.Environment.DriverState.Unknown}"
+                                           FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                <TextBlock x:Name="EnvironmentAdbVersionText"
+                                           Text="{DynamicResource Dynamic.Environment.VersionUnknown}"
+                                           FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                            </StackPanel>
+
+                            <StackPanel Margin="18,0,0,12">
+                                <TextBlock Text="{DynamicResource Static.Environment.FastbootDriver}"
+                                           FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource InkBrush}" />
+                                <TextBlock x:Name="EnvironmentFastbootStatusText"
+                                           Text="{DynamicResource Dynamic.Environment.DriverState.Unknown}"
+                                           FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                <TextBlock x:Name="EnvironmentFastbootVersionText"
+                                           Text="{DynamicResource Dynamic.Environment.VersionUnknown}"
+                                           FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                            </StackPanel>
                             <!-- 当前结论放在按钮之前：状态行与「下一步做什么」都取自控制器消息。 -->
                             <Border Background="{DynamicResource SurfaceBrush}"
                                     BorderBrush="{DynamicResource StrokeBrush}"
@@ -3207,6 +3241,19 @@
                                 Style="{StaticResource PrimaryButton}"
                                 Margin="0,0,8,8" />
                     </WrapPanel>
+
+                    <!-- 连接前的准备：可折叠的连接图示与说明，默认展开；进入本页不会自动访问设备。 -->
+                    <Expander Style="{StaticResource SectionExpander}"
+                              IsExpanded="True"
+                              Margin="0,12,0,0"
+                              Header="{DynamicResource Static.Global.ConnectionGuideTitle}">
+                        <StackPanel Margin="0,6,0,0">
+                            <TextBlock Text="{DynamicResource Static.Global.ConnectionGuideLead}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap" />
+                            <local:ConnectionGuide Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Expander>
 
                     <!-- 连接：型号由连接时自动识别，页面没有手动选择；进入本页不会自动访问设备。 -->
                     <Border Style="{StaticResource CardBorder}" Margin="0,12,0,0">
@@ -3553,39 +3600,6 @@
                                 </Grid>
                             </Button>
 
-                            <Button Tag="restore"
-                                    Click="OnSelectOperation"
-                                    Style="{StaticResource FunctionCard}"
-                                    Margin="0,0,12,12">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Border Grid.Column="0" Style="{StaticResource FunctionCardIcon}">
-                                        <Path Data="M 5 10 H 14 C 17 10 17 16 14 16 H 9 M 5 10 L 9 6 M 5 10 L 9 14"
-                                              Width="18"
-                                              Height="18"
-                                              Stretch="Uniform"
-                                              HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              Stroke="{DynamicResource AccentBrush}"
-                                              StrokeThickness="1.8" />
-                                    </Border>
-                                    <StackPanel Grid.Column="1">
-                                        <TextBlock Text="{DynamicResource Static.Function.Restore.Title}"
-                                                   FontSize="16"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="{DynamicResource InkBrush}"
-                                                   TextWrapping="Wrap" />
-                                        <TextBlock Text="{DynamicResource Static.Function.Restore.Desc}"
-                                                   FontSize="12"
-                                                   Foreground="{DynamicResource MutedBrush}"
-                                                   TextWrapping="Wrap"
-                                                   Margin="0,6,0,0" />
-                                    </StackPanel>
-                                </Grid>
-                            </Button>
 
                             <Button Tag="uninstall"
                                     Click="OnSelectOperation"
@@ -3623,7 +3637,7 @@
 
                             <!--
                                 9008 全局备份 / 恢复：两张独立卡片，只切到全局页对应视图，
-                                不写入五种功能的操作标签，也不进入任何安装向导。
+                                不写入四种功能的操作标签，也不进入任何安装向导。
                             -->
                             <Button Click="OnOpenGlobalBackupFromHome"
                                     Style="{StaticResource FunctionCard}"
@@ -3695,14 +3709,7 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!--
-                ================= 支持项目（独立视图） =================
-                与首页一样占满主体三列，默认收起；顶部按钮只在空闲时可点，返回后回到打开前的
-                首页或向导（步骤、输入与已读到的状态都不重算）。全部文案走 Static.* 静态键，
-                主题与语言切换后立即跟随。
-                二维码图片是仓库里已有的原图，按原字节以 Resource 嵌入，这里只做等比缩放显示：
-                不裁剪、不重绘、不改写像素，也不从网络加载；图片不附加点击，不打开任何支付链接。
-            -->
+            <!-- 关于项目 -->
             <ScrollViewer x:Name="SupportPage"
                           Grid.Column="0"
                           Grid.ColumnSpan="3"
@@ -3711,7 +3718,7 @@
                           Padding="0,0,6,0"
                           Margin="0,0,0,12"
                           Visibility="Collapsed">
-                <StackPanel>
+                <StackPanel MaxWidth="1080" HorizontalAlignment="Stretch">
                     <!-- 返回：只切回原来的首页或向导，不发起查询、不清空输入。 -->
                     <Button x:Name="SupportBackButton"
                             Content="{DynamicResource Static.SupportBack}"
@@ -3722,32 +3729,320 @@
                             Margin="0,0,0,8" />
 
                     <TextBlock Text="{DynamicResource Static.SupportTitle}" Style="{StaticResource H1Text}" />
-                    <TextBlock Text="{DynamicResource Static.SupportLead}"
-                               Style="{StaticResource BodyText}"
-                               Margin="0,8,0,0" />
-                    <TextBlock Text="{DynamicResource Static.SupportSponsor}"
-                               Style="{StaticResource BodyText}"
-                               Margin="0,10,0,0" />
 
-                    <Border Style="{StaticResource CardBorder}" Margin="0,16,0,16">
+                    <!-- 项目简介与版本 -->
+                    <Border Style="{StaticResource CardBorder}" Padding="16" Margin="0,16,0,16">
                         <StackPanel>
-                            <!-- 原始宽高比显示：宽度随窗口收缩，最多 1000 DIP，且不放大超过原图尺寸。 -->
-                            <Image Source="pack://application:,,,/Assets/sponsor-zh.png"
-                                   MaxWidth="1000"
-                                   Stretch="Uniform"
-                                   StretchDirection="DownOnly"
-                                   HorizontalAlignment="Left"
-                                   AutomationProperties.Name="{DynamicResource Static.SupportQrAutomationName}" />
+                            <TextBlock Text="{DynamicResource Dynamic.AboutIntroTitle}"
+                                       Style="{StaticResource H2Text}"
+                                       Margin="0,0,0,8" />
+                            <TextBlock Text="{DynamicResource Dynamic.AboutIntroBody}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBlock Text="{DynamicResource Dynamic.AboutCurrentVersion}"
+                                           Style="{StaticResource CaptionText}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0" />
+                                <TextBlock x:Name="AboutVersionText"
+                                           Style="{StaticResource BodyInkText}"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button Content="{DynamicResource Dynamic.AboutRepository}"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Click="OnOpenAboutRepository" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
 
-                            <TextBlock Text="{DynamicResource Static.SupportNote}"
+                    <!-- 开发者 -->
+                    <TextBlock Text="{DynamicResource Dynamic.AboutDevelopers}"
+                               Style="{StaticResource H2Text}"
+                               Margin="0,12,0,8" />
+                    <UniformGrid Columns="3" Rows="1" Margin="0,0,0,4">
+                        <Border Style="{StaticResource CardBorder}"
+                                Padding="14"
+                                MinHeight="108"
+                                Margin="0,0,8,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Image Source="pack://application:,,,/Assets/about-mydanyi.jpg"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Static.AuthorName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Static.AuthorName}"
+                                               Style="{StaticResource H2Text}"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleAuthor}"
+                                               Style="{StaticResource CaptionText}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource CardBorder}"
+                                Padding="14"
+                                MinHeight="108"
+                                Margin="4,0,4,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Image Source="pack://application:,,,/Assets/about-lich-wang.jpg"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutLichWangName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutLichWangName}"
+                                               Style="{StaticResource H2Text}"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleDeveloper}"
+                                               Style="{StaticResource CaptionText}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenLichWangGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenLichWangBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource CardBorder}"
+                                Padding="14"
+                                MinHeight="108"
+                                Margin="8,0,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Image Source="pack://application:,,,/Assets/about-h0cheung.png"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutH0CheungName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutH0CheungName}"
+                                               Style="{StaticResource H2Text}"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleDeveloper}"
+                                               Style="{StaticResource CaptionText}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenH0CheungGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenH0CheungBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </UniformGrid>
+
+                    <!-- 特别感谢 -->
+                    <TextBlock Text="{DynamicResource Dynamic.AboutSpecialThanks}"
+                               Style="{StaticResource H2Text}"
+                               Margin="0,12,0,8" />
+                    <UniformGrid Columns="2" Rows="1" Margin="0,0,0,4">
+                        <Border Style="{StaticResource CardBorder}"
+                                Padding="14"
+                                MinHeight="108"
+                                Margin="0,0,8,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Image Source="pack://application:,,,/Assets/about-sunflower2333.png"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutSunflowerName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutSunflowerName}"
+                                               Style="{StaticResource H2Text}"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenSunflowerGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource CardBorder}"
+                                Padding="14"
+                                MinHeight="108"
+                                Margin="8,0,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Image Source="pack://application:,,,/Assets/about-bilibili-509773383.jpg"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutBilibiliThanksName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutBilibiliThanksName}"
+                                               Style="{StaticResource H2Text}"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenBilibiliThanks"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </UniformGrid>
+
+                    <!-- 社区与反馈 -->
+                    <TextBlock Text="{DynamicResource Dynamic.AboutCommunity}"
+                               Style="{StaticResource H2Text}"
+                               Margin="0,16,0,8" />
+                    <Border Style="{StaticResource CardBorder}" Padding="16" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Dynamic.AboutQqGroup}"
                                        Style="{StaticResource BodyInkText}"
-                                       FontWeight="SemiBold"
-                                       Margin="0,14,0,0" />
-                            <TextBlock Text="{DynamicResource Static.SupportTail}"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="{DynamicResource Dynamic.AboutQqNumber}"
+                                       Style="{StaticResource BodyInkText}"
+                                       Margin="0,4,0,0" />
+                            <TextBlock Text="{DynamicResource Dynamic.AboutQqInvitation}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,6,0,0" />
+                            <Button Content="{DynamicResource Dynamic.AboutCopyQq}"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Click="OnCopyQqGroup"
+                                    HorizontalAlignment="Left"
+                                    Margin="0,10,0,0" />
+                            <TextBlock x:Name="AboutCopyStatus"
                                        Style="{StaticResource CaptionText}"
+                                       Visibility="Collapsed"
                                        Margin="0,6,0,0" />
                         </StackPanel>
                     </Border>
+
+                    <!-- 支持项目 -->
+                    <TextBlock Text="{DynamicResource Dynamic.AboutSupportSection}"
+                               Style="{StaticResource H2Text}"
+                               Margin="0,16,0,8" />
+                    <TextBlock Text="{DynamicResource Static.SupportSponsor}"
+                               Style="{StaticResource BodyText}"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,10" />
+
+                    <WrapPanel>
+                        <WrapPanel.Resources>
+                            <BitmapImage x:Key="SponsorQrOriginal"
+                                         UriSource="pack://application:,,,/Assets/sponsor-zh.png" />
+                        </WrapPanel.Resources>
+                        <Border Style="{StaticResource CardBorder}" Width="300" Padding="20" Margin="0,0,16,16">
+                            <StackPanel>
+                                <TextBlock Text="{DynamicResource Static.SupportAlipayTitle}"
+                                           Style="{StaticResource H2Text}" />
+                                <TextBlock Text="{DynamicResource Static.SupportAlipayScan}"
+                                           Style="{StaticResource BodyText}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,6,0,8" />
+                                <Border Background="White" Padding="12" CornerRadius="8" HorizontalAlignment="Center">
+                                    <Image Width="200" Height="200" Stretch="Uniform"
+                                           RenderOptions.BitmapScalingMode="HighQuality"
+                                           AutomationProperties.Name="{DynamicResource Static.SupportAlipayQrAutomationName}">
+                                        <Image.Source>
+                                            <CroppedBitmap Source="{StaticResource SponsorQrOriginal}"
+                                                           SourceRect="435,432,330,324" />
+                                        </Image.Source>
+                                    </Image>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardBorder}" Width="300" Padding="20" Margin="0,0,16,16">
+                            <StackPanel>
+                                <TextBlock Text="{DynamicResource Static.SupportWeChatTitle}"
+                                           Style="{StaticResource H2Text}" />
+                                <TextBlock Text="{DynamicResource Static.SupportWeChatScan}"
+                                           Style="{StaticResource BodyText}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,6,0,8" />
+                                <Border Background="White" Padding="12" CornerRadius="8" HorizontalAlignment="Center">
+                                    <Image Width="200" Height="200" Stretch="Uniform"
+                                           RenderOptions.BitmapScalingMode="HighQuality"
+                                           AutomationProperties.Name="{DynamicResource Static.SupportWeChatQrAutomationName}">
+                                        <Image.Source>
+                                            <CroppedBitmap Source="{StaticResource SponsorQrOriginal}"
+                                                           SourceRect="950,446,292,292" />
+                                        </Image.Source>
+                                    </Image>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                    </WrapPanel>
+
+                    <TextBlock Text="{DynamicResource Static.SupportNote}"
+                               Style="{StaticResource BodyInkText}"
+                               FontWeight="SemiBold"
+                               Margin="0,14,0,0" />
+                    <TextBlock Text="{DynamicResource Static.SupportTail}"
+                               Style="{StaticResource CaptionText}"
+                               Margin="0,6,0,0" />
                 </StackPanel>
             </ScrollViewer>
         </Grid>
@@ -3774,7 +4069,6 @@
                                    Foreground="{DynamicResource MutedBrush}"
                                    VerticalAlignment="Center"
                                    Margin="0,0,6,0" />
-                        <!-- 作者名只显示这一处：中文为「单翼」，英文为「danyi」，不追加任何账号后缀。 -->
                         <TextBlock Text="{DynamicResource Static.AuthorName}"
                                    FontSize="12"
                                    FontWeight="SemiBold"

@@ -129,7 +129,7 @@ namespace FreedomInstaller.App
                 this,
                 T(
                     "Dynamic.TfInstall.ConfirmBody",
-                    boot.Model,
+                    UiText.ModelName(boot.Model),
                     boot.AndroidSerial,
                     card.DevicePath,
                     FormatBytes(card.SizeBytes),

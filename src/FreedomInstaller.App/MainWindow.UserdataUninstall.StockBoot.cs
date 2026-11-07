@@ -8,6 +8,33 @@ namespace FreedomInstaller.App;
 
 public partial class MainWindow
 {
+    private void OnUserdataUninstallReclaimBackupChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready || _userdataUninstallStockCheckboxSuppress || sender is not CheckBox changed) return;
+        if (!CanUserdataUninstallToggleRestoreStock())
+        {
+            SyncUserdataUninstallRestoreStockCheckboxes();
+            return;
+        }
+        var desired = changed.IsChecked == true;
+        if (_userdataUninstallReclaimBackup == desired) return;
+        _userdataUninstallReclaimBackup = desired;
+        InvalidateModernUserdataUninstallPreparation();
+        if (_internalInstallStep >= 3) _internalInstallStep = 2;
+        RenderModernUserdataUninstallPages();
+    }
+
+    private void OnUseBoardUninstallBackup(object sender, RoutedEventArgs e)
+    {
+        if (!CanUserdataUninstallToggleRestoreStock()) return;
+        InvalidateModernUserdataUninstallPreparation();
+        _bootMaintenanceOriginalDirectory = null;
+        _internalInstallRecoverySource?.Dispose();
+        _internalInstallRecoverySource = null;
+        _boardRecoveryAttemptManifest = null;
+        RenderModernUserdataUninstallPages();
+    }
+
     private void OnUserdataUninstallRestoreStockChanged(object sender, RoutedEventArgs e)
     {
         if (!_ready || _userdataUninstallStockCheckboxSuppress)
@@ -81,6 +108,7 @@ public partial class MainWindow
         {
             BootMaintenanceRestoreStockCheck.IsChecked = _userdataUninstallRestoreStockBoot;
             BootMaintenanceConfirmRestoreStockCheck.IsChecked = _userdataUninstallRestoreStockBoot;
+            UninstallReclaimBackupCheck.IsChecked = _userdataUninstallReclaimBackup;
             var hintVisibility = _userdataUninstallRestoreStockBoot ? Visibility.Visible : Visibility.Collapsed;
             BootMaintenanceRestoreStockHint.Visibility = hintVisibility;
             BootMaintenanceConfirmRestoreStockHint.Visibility = hintVisibility;
@@ -103,6 +131,8 @@ public partial class MainWindow
 
         BootMaintenanceRestoreStockCheck.IsEnabled = enabled;
         BootMaintenanceConfirmRestoreStockCheck.IsEnabled = enabled;
+        UninstallReclaimBackupCheck.IsEnabled = enabled;
+        UninstallUseBoardBackupButton.IsEnabled = enabled;
     }
 
     private string UserdataUninstallSelectedBootBehaviorText()

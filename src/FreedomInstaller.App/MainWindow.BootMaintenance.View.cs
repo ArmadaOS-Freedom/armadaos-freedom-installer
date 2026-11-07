@@ -21,7 +21,7 @@ public partial class MainWindow
     private string? _bootMaintenancePackagePath;
 
     private bool IsBootMaintenanceMode =>
-        CurrentModeTag() is "prepare" or "repair" or "restore";
+        CurrentModeTag() is "prepare" or "repair";
 
     private bool UsesSharedDevicePreparationPages =>
         IsInternalInstallMode || IsBootMaintenanceMode || IsModernUserdataUninstallMode || IsModernTfInstallMode;
@@ -34,7 +34,6 @@ public partial class MainWindow
             {
                 "prepare" => MaintenanceMode.BeforeUpdate,
                 "repair" => MaintenanceMode.AfterUpdate,
-                "restore" => MaintenanceMode.RestoreStock,
                 _ => throw new InvalidOperationException(
                     $"Unknown boot maintenance mode '{CurrentModeTag()}'; no default fallback."),
             };
@@ -138,6 +137,10 @@ public partial class MainWindow
         // 原厂引导恢复复选框及其提示：仅在卸载模式显示，其他模式一律折叠复位。
         var stockVisibility = uninstall ? Visibility.Visible : Visibility.Collapsed;
         BootMaintenanceRestoreStockCheck.Visibility = stockVisibility;
+        UninstallUseBoardBackupButton.Visibility = stockVisibility;
+        UninstallReclaimBackupCheck.Visibility = stockVisibility;
+        InternalInstallBoardBackupHint.Visibility = IsInternalInstallMode && _internalInstallBoardBackupDetected
+            ? Visibility.Visible : Visibility.Collapsed;
         BootMaintenanceConfirmRestoreStockCheck.Visibility = stockVisibility;
         if (!uninstall)
         {
@@ -219,7 +222,7 @@ public partial class MainWindow
             InternalInstallCheckButton.SetResourceReference(ContentControl.ContentProperty, "Static.InternalInstall.Check.Button");
         }
 
-        var hideOriginalEntry = IsModernUserdataUninstallMode && !_bootMaintenanceAlreadyEdl;
+        var hideOriginalEntry = IsModernUserdataUninstallMode;
         SharedEdlEntryHintText.Visibility = hideOriginalEntry ? Visibility.Collapsed : Visibility.Visible;
         SharedEdlOriginalEntryLabel.Visibility = hideOriginalEntry ? Visibility.Collapsed : Visibility.Visible;
         BootMaintenanceEntryOriginalRow.Visibility = hideOriginalEntry ? Visibility.Collapsed : Visibility.Visible;
@@ -254,7 +257,7 @@ public partial class MainWindow
         }
 
         SetText(BootMaintenancePrepareStatusText, M("Dynamic.BootMaintenance.PreparedSummary",
-            prepared.Model ?? string.Empty,
+            UiText.ModelName(prepared.Model),
             prepared.AndroidSerial ?? string.Empty,
             prepared.CurrentSlot ?? string.Empty));
     }
@@ -281,7 +284,7 @@ public partial class MainWindow
 
         // 设备摘要：只陈述真实准备的型号/序列号/当前槽位，不断言系统可启动性或 A/B 双槽完整。
         SetText(BootMaintenanceDeviceText, M("Dynamic.BootMaintenance.DeviceSummary",
-            prepared.Model ?? string.Empty,
+            UiText.ModelName(prepared.Model),
             prepared.AndroidSerial ?? string.Empty,
             prepared.SocSerial ?? string.Empty,
             prepared.CurrentSlot ?? string.Empty));
@@ -351,7 +354,6 @@ public partial class MainWindow
         {
             MaintenanceMode.BeforeUpdate => "Dynamic.BootMaintenance.Risk.BeforeUpdate",
             MaintenanceMode.AfterUpdate => "Dynamic.BootMaintenance.Risk.AfterUpdate",
-            MaintenanceMode.RestoreStock => "Dynamic.BootMaintenance.Risk.RestoreStock",
             _ => throw new InvalidOperationException($"Unknown maintenance mode '{mode}'."),
         };
     }
@@ -426,7 +428,7 @@ public partial class MainWindow
                 return false;
             }
 
-            // BeforeUpdate/RestoreStock 必须已选原厂恢复来源；AfterUpdate 允许项目/安装包为空（可能沿用模板）。
+            // BeforeUpdate 必须已选原厂恢复来源；AfterUpdate 允许项目/安装包为空（可能沿用模板）。
             if (CurrentBootMaintenanceMode != MaintenanceMode.AfterUpdate
                 && string.IsNullOrWhiteSpace(_bootMaintenanceOriginalDirectory))
             {

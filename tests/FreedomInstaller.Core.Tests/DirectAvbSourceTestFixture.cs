@@ -45,7 +45,8 @@ internal sealed class DirectAvbSourceTestFixture : IDisposable
     private readonly EdlRawAvbChainTests.AvbFixture _b;
     private readonly RSA? _aospKey;
 
-    internal DirectAvbSourceTestFixture(DirectAvbSourceKind kind, DirectAvbSourceKind? slotBKind = null)
+    internal DirectAvbSourceTestFixture(DirectAvbSourceKind kind, DirectAvbSourceKind? slotBKind = null,
+        string? smallSystemSlot = null)
     {
         Kind = kind;
         BKind = slotBKind ?? kind;
@@ -65,6 +66,21 @@ internal sealed class DirectAvbSourceTestFixture : IDisposable
 
             b = CreateFixture(BKind == DirectAvbSourceKind.Aosp ? key : null);
             RebuildRootPartition(b);
+
+            WriteCoherentRecovery(a);
+            WriteCoherentRecovery(b);
+            if (smallSystemSlot is not null)
+            {
+                var owner = smallSystemSlot == "a" ? a : b;
+                var mixed = EdlRawMixedAvbTests.SmallSystemLeaf();
+                File.WriteAllBytes(owner.VbmetaSystemPath, mixed.Partition);
+                byte[] rootBytes = owner.BuildRootPartition(
+                    owner.ChainFor("boot", 3, 4), owner.ChainFor("recovery", 1, 8), mixed.Chain);
+                int metadataSize = checked(256 + (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(rootBytes.AsSpan(12, 8))
+                    + (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(rootBytes.AsSpan(20, 8)));
+                Array.Clear(rootBytes, metadataSize, rootBytes.Length - metadataSize);
+                File.WriteAllBytes(owner.VbmetaPath, rootBytes);
+            }
 
             Sources = MeasureSources(a, b);
             OriginalRootKeySha256 = LowerHex(SHA256.HashData(a.KeyBlob));
@@ -130,6 +146,19 @@ internal sealed class DirectAvbSourceTestFixture : IDisposable
         File.WriteAllBytes(fixture.VbmetaPath, partition);
         fixture.VbmetaBytes = partition;
         Assert.Equal(0, partition.Length % SectorSize);
+    }
+
+    private static void WriteCoherentRecovery(EdlRawAvbChainTests.AvbFixture fixture)
+    {
+        byte[][] originalDescriptors = fixture.PlainDescriptors;
+        byte[] payload = Enumerable.Repeat((byte)0x21, 32768).ToArray();
+        byte[] salt = Enumerable.Repeat((byte)0x9d, 16).ToArray();
+        byte[] descriptor = BootMaintenanceStockChainTests.RecoveryHashDescriptor(
+            payload.Length, salt, SHA256.HashData(salt.Concat(payload).ToArray()), "sha256");
+        byte[] bytes = BootMaintenanceStockChainTests.BuildRecoveryPartition(fixture, descriptor, null);
+        fixture.PlainDescriptors = originalDescriptors;
+        fixture.RecoveryBytes = bytes;
+        File.WriteAllBytes(fixture.RecoveryPath, bytes);
     }
 
     private static RSA ImportAospPublicTestKey()

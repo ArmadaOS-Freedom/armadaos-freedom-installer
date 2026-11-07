@@ -1,6 +1,6 @@
 // STOCK-CHAIN-1: read-only companion-chain proof for stock boot maintenance.
 // Verifies that a candidate vbmeta/recovery/vbmeta_system triple is a faithful
-// AOSP rekey of the original stock triple: every node is RSA-4096 verified in
+// AOSP rekey of the original stock triple: every node's declared RSA signature is verified in
 // place, each child key is pinned by its own root vbmeta chain, every
 // declaration beyond the rekey is identical, and the source recovery payload
 // is proven physically against its authenticated hash descriptor. The verifier
@@ -188,8 +188,7 @@ public static partial class EdlRawBootBuilder
         string childLabel)
     {
         AvbNodeChainKey chain = FindChainKey(root, chainName, childLabel + " root vbmeta");
-        byte[] pinned = new byte[AvbPublicKeyBytes];
-        Array.Copy(root.Blob, chain.KeyOffset, pinned, 0, AvbPublicKeyBytes);
+        byte[] pinned = AvbNodeSlice(root.Blob, chain.KeyOffset, chain.KeyLength);
         string pinnedSha256 = AvbNodeSha256Hex(pinned);
         if (!string.Equals(pinnedSha256, child.SourcePublicKeySha256, StringComparison.OrdinalIgnoreCase))
         {

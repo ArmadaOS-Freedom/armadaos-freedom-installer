@@ -21,6 +21,19 @@ namespace FreedomInstaller.App;
 /// </summary>
 public partial class MainWindow
 {
+    private async Task<bool> DetectInternalBoardBackupAsync(string adbPath, string serial, CancellationToken token)
+    {
+        try
+        {
+            var result = await _runner.RunAsync(new ProcessCommand(adbPath,
+                new[] { "-s", serial, "shell", "test -e /dev/block/by-name/ARMADA_BACKUP && echo ARMADA_BACKUP" },
+                TimeSpan.FromSeconds(10)), token);
+            return result.ExitCode == 0 && result.StandardOutput.Trim() == "ARMADA_BACKUP";
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { return false; }
+    }
+
     /// <summary>最近一次真实检查结果；null 表示还没有可用的检查结论。</summary>
     private InternalDeviceCheckResult? _internalInstallDeviceCheck;
 
@@ -45,6 +58,15 @@ public partial class MainWindow
     /// 不表示任何组件已校验通过，也不表示允许写入。
     /// </para>
     /// </summary>
+    /// <summary>
+    /// 当前模式的写入路线是否尚未开放：内部安装只看安装路线；维护、卸载与 TF 卡安装共用同一检查与
+    /// 备份管线，但它们的写入路线另行开放，因此看 <see cref="DeviceModelRoutes.IsWriteRoutePending"/>。
+    /// </summary>
+    private bool IsCurrentModeRoutePending(string? model) =>
+        IsSharedNonInternalDeviceMode
+            ? DeviceModelRoutes.IsWriteRoutePending(model)
+            : DeviceModelRoutes.IsInstallRoutePending(model);
+
     private bool HasCheckedInternalInstallDevice
     {
         get
@@ -65,9 +87,9 @@ public partial class MainWindow
                 return false;
             }
 
-            // 只开放识别与只读检查的型号（TB710FU）不构成进入备份页的证据：安装写入路线尚未开放。
+            // 当前模式的写入路线尚未开放的型号（TB710FU 的维护 / 卸载 / TF 卡）不构成进入备份页的证据。
             return !string.IsNullOrWhiteSpace(identity.Model)
-                && !DeviceModelRoutes.IsWriteRoutePending(identity.Model)
+                && !IsCurrentModeRoutePending(identity.Model)
                 && !string.IsNullOrWhiteSpace(identity.Serial)
                 && !string.IsNullOrWhiteSpace(identity.Firmware?.DisplayId)
                 && !string.IsNullOrWhiteSpace(android.SocSerial);
@@ -236,12 +258,19 @@ public partial class MainWindow
                     var check = new InternalInstallDeviceCheck(
                         transport.AdbPath,
                         transport.FastbootPath,
-                        _runner);
+                        _runner,
+                        fastbootDriverProbe: () => new WindowsAndroidDriver().Inspect(AndroidUsbMode.Fastboot));
                     var result = await check.CheckAsync(target.Serial, progress, token);
 
                     acceptProgress = false;
                     _internalInstallDeviceCheck = result;
                     RenderInternalInstallDeviceCheck(result);
+
+                    if (!result.Succeeded && !result.Cancelled)
+                    {
+                        AppendLocalizedLog(M("Dynamic.InternalInstall.Check.FailedStage", M(InternalInstallCheckStageKey(result.FailedStage))));
+                        AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", Placeholder(result.Error)));
+                    }
 
                     if (result.Succeeded && result.AndroidReturn == AndroidReturnState.Verified)
                     {
@@ -249,6 +278,8 @@ public partial class MainWindow
                             transport.AdbPath,
                             result.Android!.Identity.Serial,
                             token);
+                        _internalInstallBoardBackupDetected = await DetectInternalBoardBackupAsync(
+                            transport.AdbPath, result.Android.Identity.Serial, token);
                     }
 
                     RenderInternalInstallPower();
@@ -273,6 +304,7 @@ public partial class MainWindow
                         : exception.Message;
                     SetInternalInstallCheckProgress(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
                     SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
+                    AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
                 }
             });
         }
@@ -575,7 +607,7 @@ public partial class MainWindow
         var identity = result.Android?.Identity;
         var firmware = identity?.Firmware;
 
-        SetText(InternalInstallModelText, "Dynamic.RawValue", Placeholder(identity?.Model));
+        SetText(InternalInstallModelText, UiText.ModelName(identity?.Model));
         SetText(
             InternalInstallSerialText,
             "Dynamic.RawValue",
@@ -619,11 +651,11 @@ public partial class MainWindow
             return;
         }
 
-        // 检查本身通过，但该型号只开放识别与只读检查：如实说明，备份门槛保持关闭。
-        if (DeviceModelRoutes.IsWriteRoutePending(identity?.Model))
+        // 检查本身通过，但该型号在当前模式下的写入路线尚未开放：如实说明，备份门槛保持关闭。
+        if (IsCurrentModeRoutePending(identity?.Model))
         {
             SetText(InternalInstallRouteText, "Dynamic.InternalInstall.Check.RouteUnavailable");
-            SetInternalInstallCheckStatus(M("Dynamic.Model.RoutePending", Placeholder(identity?.Model)));
+            SetInternalInstallCheckStatus(M("Dynamic.Model.RoutePending", UiText.ModelName(identity?.Model)));
             return;
         }
 
@@ -686,6 +718,7 @@ public partial class MainWindow
         }
 
         _internalInstallDeviceCheck = null;
+        _internalInstallBoardBackupDetected = false;
         _internalInstallPower = null;
         // 检查结论作废时，共享安卓读取事实一起作废；真实 9008 历史绑定不受影响。
         ClearSharedAndroidIdentity();

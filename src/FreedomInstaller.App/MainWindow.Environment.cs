@@ -35,13 +35,16 @@ public partial class MainWindow
     private string? _environmentBootIdentity;
     private string? _environmentPendingBootId;
     private WindowsDriverCheckResult? _environmentDriverResult;
+    private WindowsDriverCheckResult? _environmentAdbResult;
+    private WindowsDriverCheckResult? _environmentFastbootResult;
 
     /// <summary>环境页自己的检查 / 安装日志，保留消息而不是渲染后的文字。</summary>
     private UiMessage? _environmentLogRoot;
 
     /// <summary>自检完全成功、系统受支持、工具与真实驱动都就绪、启动标识已确认且没有门禁。</summary>
     private bool EnvironmentIsReady =>
-        EnvironmentPlatformReady && _environmentDriverResult is { IsReady: true };
+        EnvironmentPlatformReady && _environmentDriverResult is { IsReady: true }
+        && _environmentAdbResult is { IsReady: true } && _environmentFastbootResult is { IsReady: true };
 
     /// <summary>与驱动是否就绪无关的平台前置条件：安装按钮也只在此基础上开放。</summary>
     private bool EnvironmentPlatformReady =>
@@ -49,8 +52,14 @@ public partial class MainWindow
         && _transport is not null && _environmentBootVerified && _environmentBootIdentity is not null
         && !_environmentPendingReboot && !_environmentStateUnknown;
 
+    private static bool NeedsDriverInstall(WindowsDriverCheckResult? result) =>
+        result?.State is WindowsDriverCheckState.Missing or WindowsDriverCheckState.Problem;
+
+    private bool EnvironmentAndroidDriverMissing =>
+        NeedsDriverInstall(_environmentAdbResult) || NeedsDriverInstall(_environmentFastbootResult);
+
     private bool EnvironmentDriverMissing =>
-        string.Equals(_environmentDriverResult?.State.ToString(), "Missing", StringComparison.Ordinal);
+        NeedsDriverInstall(_environmentDriverResult) || EnvironmentAndroidDriverMissing;
 
     // ---------- 启动与入口 ----------
 
@@ -137,6 +146,8 @@ public partial class MainWindow
         _environmentBootVerified = false;
         _environmentStateUnknown = false;
         _environmentDriverResult = null;
+        _environmentAdbResult = null;
+        _environmentFastbootResult = null;
         ReportEnvironment(M("Dynamic.Environment.Checking"));
 
         // 1. 原生系统：64 位且不低于 Windows 10。
@@ -177,30 +188,56 @@ public partial class MainWindow
         cancellationToken.ThrowIfCancellationRequested();
         _environmentDriverResult = result;
         RenderDriverState(result);
+        try
+        {
+            var android = await Task.Run(() =>
+            {
+                var probe = new WindowsAndroidDriver();
+                return (Adb: probe.Inspect(AndroidUsbMode.Adb), Fastboot: probe.Inspect(AndroidUsbMode.Fastboot));
+            }, cancellationToken);
+            if (_closed) return;
+            cancellationToken.ThrowIfCancellationRequested();
+            _environmentAdbResult = android.Adb;
+            _environmentFastbootResult = android.Fastboot;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { _environmentStateUnknown = true; }
+        RenderAndroidDriverStates();
         _environmentCheckCompleted = _environmentSystemSupported && _environmentToolsReady
-            && _environmentBootVerified && result is not null && !_environmentStateUnknown;
+            && _environmentBootVerified && result is not null
+            && _environmentAdbResult is not null && _environmentFastbootResult is not null && !_environmentStateUnknown;
         RenderEnvironmentStatus();
         RefreshEnvironmentActions();
     }
 
     private void RenderDriverState(WindowsDriverCheckResult? result)
+        => RenderDriverState(result, EnvironmentDriverStatusText, EnvironmentDriverVersionText, "9008");
+
+    private void RenderAndroidDriverStates()
+    {
+        RenderDriverState(_environmentAdbResult, EnvironmentAdbStatusText, EnvironmentAdbVersionText, "ADB");
+        RenderDriverState(_environmentFastbootResult, EnvironmentFastbootStatusText, EnvironmentFastbootVersionText, "Fastboot");
+    }
+
+    private void RenderDriverState(WindowsDriverCheckResult? result,
+        System.Windows.Controls.TextBlock statusText, System.Windows.Controls.TextBlock versionText, string mode)
     {
         if (result is null)
         {
-            SetText(EnvironmentDriverStatusText, "Dynamic.Environment.DriverState.Unknown");
-            SetText(EnvironmentDriverVersionText, "Dynamic.Environment.VersionUnknown");
+            SetText(statusText, "Dynamic.Environment.DriverState.Unknown");
+            SetText(versionText, "Dynamic.Environment.VersionUnknown");
             return;
         }
 
-        SetText(EnvironmentDriverStatusText, DriverStateKey(result.State.ToString()));
+        SetText(statusText, DriverStateKey(result.State.ToString()));
         var version = result.DriverVersion?.ToString();
-        SetText(EnvironmentDriverVersionText, string.IsNullOrWhiteSpace(version)
+        SetText(versionText, string.IsNullOrWhiteSpace(version)
             ? M("Dynamic.Environment.VersionUnknown")
             : M("Dynamic.Environment.DriverVersion", version));
 
         // 原生 Detail 只是可选说明，追加为日志；绝不覆盖已有历史。
         if (!string.IsNullOrWhiteSpace(result.Detail))
-            AppendEnvironmentLog(M("Dynamic.Environment.DriverDetail", result.Detail));
+            AppendEnvironmentLog(M("Dynamic.Environment.DriverDetail", mode + ": " + result.Detail));
     }
 
     private void RenderEnvironmentStatus()
@@ -226,9 +263,12 @@ public partial class MainWindow
     {
         _environmentCheckCompleted = false;
         _environmentDriverResult = null;
+        _environmentAdbResult = null;
+        _environmentFastbootResult = null;
         if (_closed) return;
         // 清零后不能继续显示上一次的 Ready / 版本结论。
         RenderDriverState(null);
+        RenderAndroidDriverStates();
         ReportEnvironment(M("Dynamic.Environment.CheckFailed"));
         RefreshEnvironmentActions();
     }
@@ -358,8 +398,13 @@ public partial class MainWindow
         {
             ReportEnvironment(M("Dynamic.Environment.Installing"));
 
-            QualcommDriverFiles files;
-            try { files = BundledQualcommDriver.EnsureAvailable(); }
+            QualcommDriverFiles? files = null;
+            AndroidDriverFiles? androidFiles = null;
+            try
+            {
+                if (NeedsDriverInstall(_environmentDriverResult)) files = BundledQualcommDriver.EnsureAvailable();
+                if (EnvironmentAndroidDriverMissing) androidFiles = BundledAndroidDriver.EnsureAvailable();
+            }
             catch (Exception)
             {
                 // 真实解包与哈希校验失败：不进入 UAC。
@@ -385,7 +430,11 @@ public partial class MainWindow
             try
             {
                 // 不传取消令牌、不接管进程：UAC 与 pnputil 的生命周期都属于安装器。
-                installResult = await WindowsDriverInstaller.InstallAsync(files);
+                installResult = files is null
+                    ? new DriverInstallResult(DriverInstallOutcome.Completed, 0, null)
+                    : await WindowsDriverInstaller.InstallAsync(files);
+                if (installResult.Outcome == DriverInstallOutcome.Completed && androidFiles is not null)
+                    installResult = await WindowsDriverInstaller.InstallAndroidAsync(androidFiles);
             }
             catch (Exception)
             {

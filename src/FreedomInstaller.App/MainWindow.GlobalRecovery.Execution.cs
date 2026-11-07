@@ -160,7 +160,7 @@ public partial class MainWindow
                             if (expectedProfile is null || !expectedProfile.IsComplete)
                             {
                                 throw new InvalidOperationException(
-                                    T("Dynamic.Global.Error.RestoreProfileUnsupported", verifiedIdentity.Model));
+                                    T("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(verifiedIdentity.Model)));
                             }
 
                             expectedBus = verifiedIdentity.BusSerialHex;
@@ -258,11 +258,11 @@ public partial class MainWindow
             // 真实 9008 在场：先做只读识别，再加载真正的工具链；识别只用共享客户端，绝不触碰 Firehose 或探针。
             SetText(GlobalProgressStatusText, "Dynamic.Global.Status.BindingExistingEdl");
 
-            EdlDeviceProfile detectedProfile;
+            EdlHardwareIdentity detectedHardware;
             using (EdlToolchain identificationTools = await LoadGlobalToolsAsync(
                 EdlDeviceProfiles.FindByModel("TB322FC")!, token))
             {
-                detectedProfile = await GlobalEdlDetection.DetectAsync(
+                detectedHardware = await GlobalEdlDetection.DetectIdentityAsync(
                     identificationTools.ClientPath,
                     _runner,
                     discovery,
@@ -270,6 +270,7 @@ public partial class MainWindow
                     token);
             }
 
+            var detectedProfile = detectedHardware.Profile;
             if (expectedProfile is not null
                 && !string.Equals(expectedProfile.ProfileId, detectedProfile.ProfileId, StringComparison.Ordinal))
             {
@@ -285,7 +286,7 @@ public partial class MainWindow
             _globalEdlEntry = entry;
             _globalPower = null;
 
-            var client = new EdlClient(tools, entry, _runner, new WindowsEdlEndpointDiscovery());
+            var client = new EdlClient(tools, entry, _runner, new WindowsEdlEndpointDiscovery(), detectedHardware);
             _globalEdlClient = client;
             await client.ProbeRawGeometryAsync(
                 0,
@@ -295,7 +296,7 @@ public partial class MainWindow
 
             RenderGlobalConnection();
             RenderGlobalPower();
-            AppendLocalizedLog(M("Dynamic.Global.Log.ConnectedEdl", detectedProfile.Model, entry.BusSerialHex));
+            AppendLocalizedLog(M("Dynamic.Global.Log.ConnectedEdl", UiText.ModelName(detectedProfile.Model), entry.BusSerialHex));
             SetText(GlobalProgressStatusText, "Dynamic.Global.Status.Connected");
             return;
         }
@@ -328,7 +329,7 @@ public partial class MainWindow
         if (resolved is null || !resolved.IsComplete)
         {
             throw new InvalidOperationException(
-                T("Dynamic.Global.Error.RestoreProfileUnsupported", identity.Model));
+                T("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(identity.Model)));
         }
 
         EdlDeviceProfile profile = resolved;
@@ -389,7 +390,7 @@ public partial class MainWindow
 
         RenderGlobalConnection();
         RenderGlobalPower();
-        AppendLocalizedLog(M("Dynamic.Global.Log.Connected", profile.Model, entered.BusSerialHex));
+        AppendLocalizedLog(M("Dynamic.Global.Log.Connected", UiText.ModelName(profile.Model), entered.BusSerialHex));
         SetText(GlobalProgressStatusText, "Dynamic.Global.Status.Connected");
     }
 
@@ -640,7 +641,7 @@ public partial class MainWindow
                     if (DeviceModelRoutes.IsWriteRoutePending(identity.Model))
                     {
                         throw new InvalidOperationException(
-                            T("Dynamic.Global.Error.RestoreRoutePending", identity.Model));
+                            T("Dynamic.Global.Error.RestoreRoutePending", UiText.ModelName(identity.Model)));
                     }
 
                     EdlDeviceProfile? profile = _globalEdlClient is not null
@@ -650,7 +651,7 @@ public partial class MainWindow
                     if (profile is null || !profile.IsComplete)
                     {
                         throw new InvalidOperationException(
-                            T("Dynamic.Global.Error.RestoreProfileUnsupported", identity.Model));
+                            T("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(identity.Model)));
                     }
 
                     if (!string.Equals(profile.ProfileId, identity.ProfileId, StringComparison.Ordinal))
@@ -702,7 +703,7 @@ public partial class MainWindow
                     SetText(
                         GlobalRestoreSummaryText,
                         "Dynamic.Global.Restore.Summary",
-                        plan.Identity.Model,
+                        UiText.ModelName(plan.Identity.Model),
                         plan.Identity.BusSerialHex,
                         plan.RegionCount,
                         FormatGlobalBytes(plan.WriteBytes),
@@ -778,7 +779,7 @@ public partial class MainWindow
             this,
             T(
                 "Dynamic.Global.Dialog.ConfirmRestore",
-                plan.Identity.Model,
+                UiText.ModelName(plan.Identity.Model),
                 plan.Identity.BusSerialHex,
                 plan.RegionCount,
                 FormatGlobalBytes(plan.WriteBytes),
@@ -827,7 +828,7 @@ public partial class MainWindow
                         SetText(
                             GlobalRestoreSummaryText,
                             "Dynamic.Global.Restore.Succeeded",
-                            plan.Identity.Model,
+                            UiText.ModelName(plan.Identity.Model),
                             plan.Identity.BusSerialHex,
                             plan.RegionCount,
                             FormatGlobalBytes(plan.WriteBytes),

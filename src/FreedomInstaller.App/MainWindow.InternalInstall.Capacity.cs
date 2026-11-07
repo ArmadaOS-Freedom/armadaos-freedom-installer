@@ -379,7 +379,7 @@ public partial class MainWindow
             SetInternalInstallCapacityPackageStatus(
                 M(
                     "Dynamic.InternalInstall.Capacity.TestOnly",
-                    imported.DeviceModel,
+                    UiText.ModelName(imported.DeviceModel),
                     validation.PackageId,
                     validation.Version,
                     validation.ManifestFingerprint));
@@ -389,7 +389,7 @@ public partial class MainWindow
             SetInternalInstallCapacityPackageStatus(
                 M(
                     "Dynamic.InternalInstall.Capacity.Valid",
-                    imported.DeviceModel,
+                    UiText.ModelName(imported.DeviceModel),
                     validation.PackageId,
                     validation.Version,
                     validation.ManifestFingerprint));
@@ -523,7 +523,8 @@ public partial class MainWindow
             long totalBytes;
             try
             {
-                totalBytes = checked(plan.OriginalUserdata.SectorCount * (long)plan.SectorSize);
+                totalBytes = checked((Math.Max(plan.OriginalUserdataEndSectorExclusive, plan.BackupEndSectorExclusive)
+                    - plan.OriginalUserdata.StartSector) * (long)plan.SectorSize);
             }
             catch (OverflowException)
             {
@@ -677,16 +678,27 @@ public partial class MainWindow
                         SetInternalInstallConfirmProgressIndeterminate(true);
                         SetInternalInstallConfirmStatus(
                             M("Dynamic.InternalInstall.Prepared.PreparingArtifacts"));
-                        var preparedArtifacts = await InternalInstallArtifacts.PrepareAsync(
-                            backup,
-                            androidGiB,
-                            storage,
-                            TemporaryWorkRoot,
-                            token);
+                        InternalBackupSet? recoverySource = null;
+                        if (backup.Tables[0].Partitions.Any(p => p.Name == "ARMADA_BACKUP"))
+                            recoverySource = await GetBoardFirstRecoverySourceAsync(backup, parentPath, token);
+                        string attemptRoot = Path.Combine(TemporaryWorkRoot, "artifacts-" + Guid.NewGuid().ToString("N"));
+                        Directory.CreateDirectory(attemptRoot);
+                        InternalArtifactSet preparedArtifacts;
+                        try
+                        {
+                            preparedArtifacts = await InternalInstallArtifacts.PrepareAsync(
+                                backup, androidGiB, storage, attemptRoot, token, recoverySource);
+                        }
+                        catch
+                        {
+                            DiscardInternalInstallPreparation(attemptRoot, preserveRecovery: false);
+                            throw;
+                        }
 
                         if (_closeRequested || _closed)
                         {
                             preparedArtifacts.Dispose();
+                            DiscardInternalInstallPreparation(attemptRoot, preserveRecovery: false);
                             return;
                         }
 
@@ -801,7 +813,7 @@ public partial class MainWindow
         var validation = _internalInstallPackage?.Validation;
 
         // 型号与版本仍由工厂绑定的备份 / 系统包给出；其余字段取后端已经验证过的值。
-        var model = backup?.Model ?? UnknownValue;
+        object model = backup is null ? UnknownValue : UiText.ModelName(backup.Model);
         var serial = prepared.AndroidSerial;
         var build = prepared.AndroidBuild;
         object bootloader = prepared.FastbootLockState switch
@@ -842,7 +854,7 @@ public partial class MainWindow
         SetText(
             InternalInstallConfirmBackupPathText,
             "Dynamic.InternalInstall.Confirm.Value",
-            prepared.BackupDirectory);
+            _internalInstallRecoverySource?.DirectoryPath ?? prepared.BackupDirectory);
         SetText(
             InternalInstallConfirmPowerText,
             "Dynamic.InternalInstall.Confirm.PowerRecord",
@@ -905,8 +917,8 @@ public partial class MainWindow
             build,
             bootloader,
             InternalInstallPowerMessage(),
-            prepared.BackupDirectory,
-            prepared.BackupManifestSha256,
+            _internalInstallRecoverySource?.DirectoryPath ?? prepared.BackupDirectory,
+            _internalInstallRecoverySource?.ManifestSha256 ?? prepared.BackupManifestSha256,
             validation?.PackageId ?? UnknownValue,
             validation?.Version ?? UnknownValue,
             prepared.PackageFingerprint,
@@ -926,6 +938,13 @@ public partial class MainWindow
                 "Dynamic.InternalInstall.Execution.WithFailureDetails",
                 preparedSummaryMessage,
                 M("Dynamic.InternalInstall.Prepared.GblInstallMode"));
+        }
+        else if (prepared.BootTrustMode == InternalInstallBootTrustMode.AospPreserved)
+        {
+            preparedSummaryMessage = M(
+                "Dynamic.InternalInstall.Execution.WithFailureDetails",
+                preparedSummaryMessage,
+                M("Dynamic.InternalInstall.Prepared.AospPreservedInstallMode"));
         }
 
         // 主摘要的 18 个参数保持原样，事实告警只作为第二段追加在它后面。
@@ -988,10 +1007,11 @@ public partial class MainWindow
     // ---------- 失效与生命周期 ----------
 
     /// <summary>
-    /// 只释放方案对象自己的只读锁：生成的方案文件与备份都保留，绝不删除用户文件。
+    /// 释放旧方案；尚未执行的临时镜像及时清理，执行后的恢复材料保留。
     /// </summary>
     private void ReleaseInternalInstallArtifacts()
     {
+        bool preserveRecovery = HasInternalInstallExecutionStarted;
         // 后端 / 资产 / 维护包先按固定顺序释放，方案对象自己的锁最后释放。
         try
         {
@@ -1010,6 +1030,7 @@ public partial class MainWindow
             try
             {
                 artifacts.Dispose();
+                DiscardInternalInstallPreparation(artifacts.DirectoryPath, preserveRecovery);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {

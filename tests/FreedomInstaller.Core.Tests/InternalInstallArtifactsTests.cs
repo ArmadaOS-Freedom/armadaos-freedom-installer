@@ -391,7 +391,7 @@ public sealed class InternalInstallArtifactsTests
     [InlineData("ARMADA_BOOT")]
     [InlineData("ARMADA_ROOT")]
     [InlineData("ARMADA_BACKUP")]
-    public void BuildGptRewrite_RejectsATableThatAlreadyOwnsAnArmadaLabel(string label)
+    public void BuildGptRewrite_RejectsInvalidExistingArmadaLayout(string label)
     {
         var image = RewriteImage(SectorSize4096, extraPartitionName: label);
         var head = image.BuildPrimaryFragment();
@@ -411,7 +411,7 @@ public sealed class InternalInstallArtifactsTests
             Guid.NewGuid(),
             Guid.NewGuid()));
 
-        Assert.IsType<InvalidDataException>(exception);
+        Assert.IsType<InvalidOperationException>(exception);
     }
 
     [Fact]

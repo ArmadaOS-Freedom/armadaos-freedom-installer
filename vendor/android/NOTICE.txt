@@ -1,0 +1,16 @@
+Android USB driver packages
+
+The original INF, catalog and required x64 coinstaller files are preserved without modification.
+Each package retains the copyright and vendor terms stated in its INF.
+
+Google USB Driver r13
+Source: https://dl.google.com/android/repository/usb_driver_r13-windows.zip
+DriverVer: 08/28/2014,11.0.0000.00000
+Catalog publisher: Google LLC
+
+OPLUS Android WinUSB driver
+Source: original signed Windows DriverStore package
+DriverVer: 01/04/2023,11.0.0000.00000
+Catalog publisher: Microsoft Windows Hardware Compatibility Publisher
+
+These packages supply Windows USB interface drivers. They are not tablet firmware.

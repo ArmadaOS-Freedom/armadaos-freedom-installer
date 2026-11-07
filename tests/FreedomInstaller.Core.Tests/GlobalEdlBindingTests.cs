@@ -33,6 +33,123 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
     // ------------------------------------------------------------------ offline binding candidate
 
     [Fact]
+    public async Task SavedIdentityRequiresPhysicalProofAndTransfersItWithoutReloading()
+    {
+        var discovery = ValidDiscovery();
+        var offline = GlobalEdlBinding.Attach(_fixture.Toolchain.Profile, discovery);
+        var runner = new E003FakeCommandRunner();
+        var client = new EdlClient(_fixture.Toolchain, offline, runner, discovery);
+        var identity = new AndroidMaintenanceIdentity(
+            new DeviceIdentity("SN0123456789", _fixture.Toolchain.Model, BootloaderState.Unknown)
+                { Firmware = new FirmwareSnapshot(_fixture.Toolchain.AndroidBuild, null, null, null, BootloaderState.Unknown) },
+            E003EdlTestData.SocSerialDecimal);
+        var saved = new EdlEntryResult(identity, E003EdlTestData.Endpoint(), E003EdlTestData.BusSerialHex);
+        Assert.Throws<InvalidOperationException>(() => client.WithSavedIdentity(saved));
+        Assert.Equal(0, runner.FirehoseCallCount);
+
+        var output = Path.Combine(_fixture.NewCaseDirectory(nameof(SavedIdentityRequiresPhysicalProofAndTransfersItWithoutReloading)), "probe.bin");
+        runner.Enqueue(RawLog(E003EdlTestData.BusSerialHex,
+            SaharaText(E003EdlTestData.BusSerialHex, _fixture.Toolchain.HardwareId, includeLoaderMarker: true),
+            RawGeometryLines(0, E003EdlTestData.InitialTotalSectors, E003EdlTestData.SectorSize),
+            PlanLine(0, 0, 1, E003EdlTestData.SectorSize, output), E003EdlTestData.SectorSize),
+            sideEffect: _ => File.WriteAllBytes(output, new byte[E003EdlTestData.SectorSize]));
+        await client.ProbeRawGeometryAsync(0, true, output);
+        var rebound = client.WithSavedIdentity(saved);
+        Assert.True(rebound.HasInitialSaharaProof);
+        Assert.Same(saved, rebound.Binding);
+        Assert.Equal(1, runner.FirehoseCallCount);
+
+        var wrong = new EdlEntryResult(new AndroidMaintenanceIdentity(identity.Identity, "1"),
+            E003EdlTestData.Endpoint(), "00000001");
+        Assert.Throws<InvalidOperationException>(() => client.WithSavedIdentity(wrong));
+        discovery.Endpoints = new[] { E003EdlTestData.Endpoint(description: "QUSB_BULK_CID:045A_SN:DEADBEEF") };
+        Assert.Throws<InvalidOperationException>(() => client.WithSavedIdentity(saved));
+        Assert.Equal(1, runner.FirehoseCallCount);
+    }
+
+    [Fact]
+    public async Task WithSavedIdentityAsync_proves_offline_client_with_one_initial_probe_and_transfers_proof()
+    {
+        var discovery = ValidDiscovery();
+        var offline = GlobalEdlBinding.Attach(_fixture.Toolchain.Profile, discovery);
+        var runner = new E003FakeCommandRunner();
+        var client = new EdlClient(_fixture.Toolchain, offline, runner, discovery);
+        var identity = new AndroidMaintenanceIdentity(
+            new DeviceIdentity("SN0123456789", _fixture.Toolchain.Model, BootloaderState.Unknown)
+                { Firmware = new FirmwareSnapshot(_fixture.Toolchain.AndroidBuild, null, null, null, BootloaderState.Unknown) },
+            E003EdlTestData.SocSerialDecimal);
+        var saved = new EdlEntryResult(identity, E003EdlTestData.Endpoint(), E003EdlTestData.BusSerialHex);
+
+        var caseDir = _fixture.NewCaseDirectory(nameof(WithSavedIdentityAsync_proves_offline_client_with_one_initial_probe_and_transfers_proof));
+        var output = Path.Combine(caseDir, "probe.bin");
+        runner.Enqueue(RawLog(E003EdlTestData.BusSerialHex,
+            SaharaText(E003EdlTestData.BusSerialHex, _fixture.Toolchain.HardwareId, includeLoaderMarker: true),
+            RawGeometryLines(0, E003EdlTestData.InitialTotalSectors, E003EdlTestData.SectorSize),
+            PlanLine(0, 0, 1, E003EdlTestData.SectorSize, output), E003EdlTestData.SectorSize),
+            sideEffect: _ => File.WriteAllBytes(output, new byte[E003EdlTestData.SectorSize]));
+
+        var rebound = await client.WithSavedIdentityAsync(saved, output);
+        Assert.True(rebound.HasInitialSaharaProof);
+        Assert.Same(saved, rebound.Binding);
+        Assert.Equal(1, runner.FirehoseCallCount);
+
+        var unused = Path.Combine(caseDir, "unused-probe.bin");
+        var rebound2 = await client.WithSavedIdentityAsync(saved, unused);
+        Assert.True(rebound2.HasInitialSaharaProof);
+        Assert.Same(saved, rebound2.Binding);
+        Assert.Equal(1, runner.FirehoseCallCount);
+        Assert.False(File.Exists(unused));
+    }
+
+    [Fact]
+    public async Task WithSavedIdentityAsync_mismatched_sahara_hwid_throws_without_proof()
+    {
+        var discovery = ValidDiscovery();
+        var offline = GlobalEdlBinding.Attach(_fixture.Toolchain.Profile, discovery);
+        var runner = new E003FakeCommandRunner();
+        var client = new EdlClient(_fixture.Toolchain, offline, runner, discovery);
+        var identity = new AndroidMaintenanceIdentity(
+            new DeviceIdentity("SN0123456789", _fixture.Toolchain.Model, BootloaderState.Unknown)
+                { Firmware = new FirmwareSnapshot(_fixture.Toolchain.AndroidBuild, null, null, null, BootloaderState.Unknown) },
+            E003EdlTestData.SocSerialDecimal);
+        var saved = new EdlEntryResult(identity, E003EdlTestData.Endpoint(), E003EdlTestData.BusSerialHex);
+
+        var caseDir = _fixture.NewCaseDirectory(nameof(WithSavedIdentityAsync_mismatched_sahara_hwid_throws_without_proof));
+        var output = Path.Combine(caseDir, "probe.bin");
+        runner.Enqueue(RawLog(E003EdlTestData.BusSerialHex,
+            SaharaText(E003EdlTestData.BusSerialHex, "0028000000000000", includeLoaderMarker: true),
+            RawGeometryLines(0, E003EdlTestData.InitialTotalSectors, E003EdlTestData.SectorSize),
+            PlanLine(0, 0, 1, E003EdlTestData.SectorSize, output), E003EdlTestData.SectorSize),
+            sideEffect: _ => File.WriteAllBytes(output, new byte[E003EdlTestData.SectorSize]));
+
+        await Assert.ThrowsAnyAsync<Exception>(() => client.WithSavedIdentityAsync(saved, output));
+        Assert.False(client.HasInitialSaharaProof);
+        Assert.Equal(1, runner.FirehoseCallCount);
+    }
+
+    [Fact]
+    public async Task WithSavedIdentityAsync_PreCancelled_token_makes_no_runner_call()
+    {
+        var discovery = ValidDiscovery();
+        var offline = GlobalEdlBinding.Attach(_fixture.Toolchain.Profile, discovery);
+        var runner = new E003FakeCommandRunner();
+        var client = new EdlClient(_fixture.Toolchain, offline, runner, discovery);
+        var identity = new AndroidMaintenanceIdentity(
+            new DeviceIdentity("SN0123456789", _fixture.Toolchain.Model, BootloaderState.Unknown)
+                { Firmware = new FirmwareSnapshot(_fixture.Toolchain.AndroidBuild, null, null, null, BootloaderState.Unknown) },
+            E003EdlTestData.SocSerialDecimal);
+        var saved = new EdlEntryResult(identity, E003EdlTestData.Endpoint(), E003EdlTestData.BusSerialHex);
+        var caseDir = _fixture.NewCaseDirectory(nameof(WithSavedIdentityAsync_PreCancelled_token_makes_no_runner_call));
+        var output = Path.Combine(caseDir, "probe.bin");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.WithSavedIdentityAsync(saved, output, cts.Token));
+        Assert.Equal(0, runner.FirehoseCallCount);
+    }
+
+    [Fact]
     public void Attach_valid_known_profile_one_endpoint_is_offline_candidate_only()
     {
         E003ScriptedEndpointDiscovery discovery = ValidDiscovery();
@@ -60,7 +177,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
         E003FakeCommandRunner runner = new E003FakeCommandRunner();
         EdlClient client = new EdlClient(_fixture.Toolchain, binding, runner, discovery);
         Assert.False(client.HasInitialSaharaProof);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -215,9 +332,9 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
         Assert.Equal(_fixture.Toolchain.HardwareId, evidence.HardwareId, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(0, evidence.Command.ExitCode);
         Assert.True(client.HasInitialSaharaProof);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
 
-        ProcessCommand command = runner.Commands[0];
+        ProcessCommand command = runner.FirehoseCommands[0];
         Assert.Equal(_fixture.Toolchain.ClientPath, command.Executable);
         Assert.Equal(ProbeInitialTimeout, command.Timeout);
         Assert.True(Path.IsPathFullyQualified(command.Arguments[3]));
@@ -264,10 +381,10 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
         Assert.Equal(new EdlGeometry(0, sectorSize, E003EdlTestData.InitialTotalSectors), evidence.Geometry);
         Assert.Equal(sectorSize, (int)new FileInfo(outputPath).Length);
         Assert.True(client.HasInitialSaharaProof);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
         Assert.Equal(
             WithGlobals("read-sector", "0", "1", outputPath, "--lun", "0"),
-            runner.Commands[0].Arguments);
+            runner.FirehoseCommands[0].Arguments);
     }
 
     [Fact]
@@ -324,12 +441,12 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
         Assert.Null(warm.SaharaSerialHex);
         Assert.Null(warm.HardwareId);
         Assert.True(client.HasInitialSaharaProof);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
 
-        Assert.Equal(ProbeWarmTimeout, runner.Commands[1].Timeout);
+        Assert.Equal(ProbeWarmTimeout, runner.FirehoseCommands[1].Timeout);
         Assert.Equal(
             WithGlobals("read-sector", "0", "1", warmPath, "--lun", "4"),
-            runner.Commands[1].Arguments);
+            runner.FirehoseCommands[1].Arguments);
 
         // A normal read on LUN 0 still uses the LUN 0 geometry; the warm LUN 4 probe did not overwrite it.
         EdlReadEvidence read = await client.ReadAsync(0, 0, 1, readPath);
@@ -365,7 +482,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
         Assert.Equal(new EdlGeometry(0, 4096, E003EdlTestData.InitialTotalSectors), evidence.Geometry);
         Assert.Equal(E003EdlTestData.BusSerialHex, evidence.SaharaSerialHex, StringComparer.OrdinalIgnoreCase);
         Assert.True(client.HasInitialSaharaProof);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
     }
 
     // ------------------------------------------------------------------ raw geometry failures
@@ -509,10 +626,10 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
         Assert.IsNotType<NotImplementedException>(initialError);
         Assert.False(string.IsNullOrWhiteSpace(initialError.Message));
         Assert.False(client.HasInitialSaharaProof);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
 
         // A warm probe without the initial proof must fail before the runner sees anything.
-        int runnerCalls = runner.CallCount;
+        int runnerCalls = runner.FirehoseCallCount;
         int discoveryReads = discovery.ReadCount;
 
         Exception warmError = await Assert.ThrowsAnyAsync<Exception>(
@@ -521,7 +638,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
         Assert.IsNotType<NotImplementedException>(warmError);
         Assert.IsType<InvalidOperationException>(warmError);
         Assert.False(client.HasInitialSaharaProof);
-        Assert.Equal(runnerCalls, runner.CallCount);
+        Assert.Equal(runnerCalls, runner.FirehoseCallCount);
         Assert.Equal(discoveryReads, discovery.ReadCount);
         Assert.False(File.Exists(warmPath));
     }
@@ -547,7 +664,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
             () => client.ProbeRawGeometryAsync(0, initialLoader: true, outputPath));
 
         Assert.IsType<IOException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
         Assert.Equal(discoveryReads, discovery.ReadCount);
         Assert.False(client.HasInitialSaharaProof);
         Assert.Equal<byte>(sentinel, File.ReadAllBytes(outputPath));
@@ -570,7 +687,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
             () => client.ProbeRawGeometryAsync(0, initialLoader: true, outputPath));
 
         Assert.IsType<IOException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
         Assert.Equal(discoveryReads, discovery.ReadCount);
         Assert.True(Directory.Exists(outputPath));
     }
@@ -591,7 +708,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
             () => client.ProbeRawGeometryAsync(0, initialLoader: true, relative));
 
         Assert.IsType<IOException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
         Assert.Equal(discoveryReads, discovery.ReadCount);
         Assert.False(File.Exists(Path.Combine(caseDirectory, relative)));
     }
@@ -612,7 +729,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
             () => client.ProbeRawGeometryAsync(0, initialLoader: true, outputPath));
 
         Assert.IsType<IOException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
         Assert.Equal(discoveryReads, discovery.ReadCount);
         Assert.False(File.Exists(outputPath));
     }
@@ -637,7 +754,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
             () => client.ProbeRawGeometryAsync(0, initialLoader: true, outputPath, cts.Token));
 
         Assert.IsAssignableFrom<OperationCanceledException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
         Assert.Equal(discoveryReads, discovery.ReadCount);
         Assert.False(File.Exists(outputPath));
     }
@@ -659,7 +776,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
             () => client.ProbeRawGeometryAsync(0, initialLoader: false, outputPath));
 
         Assert.IsType<InvalidOperationException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
         Assert.Equal(discoveryReads, discovery.ReadCount);
         Assert.False(File.Exists(outputPath));
     }
@@ -710,7 +827,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
 
         Assert.IsNotType<NotImplementedException>(error);
         Assert.IsType<InvalidOperationException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
         Assert.Equal(0, discovery.ReadCount);
         Assert.False(client.HasInitialSaharaProof);
         Assert.False(File.Exists(outputPath));
@@ -741,7 +858,7 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
 
         Assert.IsNotType<NotImplementedException>(error);
         Assert.IsType<InvalidOperationException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
         Assert.Equal(0, discovery.ReadCount);
         Assert.False(client.HasInitialSaharaProof);
     }
@@ -775,13 +892,13 @@ public sealed class GlobalEdlBindingTests : IClassFixture<EdlClientToolchainFixt
 
         Assert.IsNotType<NotImplementedException>(error);
         Assert.False(client.HasInitialSaharaProof);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
 
         Exception warmError = await Assert.ThrowsAnyAsync<Exception>(
             () => client.ProbeRawGeometryAsync(4, initialLoader: false, Path.Combine(caseDirectory, "warm.bin")));
 
         Assert.IsType<InvalidOperationException>(warmError);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
     }
 
     // ------------------------------------------------------------------ helpers

@@ -48,9 +48,25 @@ public sealed class UninstallTailBackupTests
     // ---------------------------------------------------------------- accepted layouts
 
     [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    public void RetainingRecoveryPartitionChangesExtentAndEvidence(string model)
+    {
+        var identity = new DeviceIdentity("TAIL-CHOICE", model, BootloaderState.Unlocked);
+        var original = OriginalTable();
+        var current = InstalledTable(ShortenedRootCount, Backup(BackupUuid));
+        var reclaim = UninstallEvidenceValidator.ValidateEdl(identity, original, current, 0);
+        var retain = UninstallEvidenceValidator.ValidateEdl(identity, original, current, 0, reclaimBoardBackup: false);
+        Assert.Equal(BackupStartSector, retain.Plan.UserdataEndSectorExclusive);
+        Assert.Equal(new long[] { 3, 4 }, retain.Plan.RemovedPartitionNumbers);
+        Assert.Equal(2L << 30, reclaim.Plan.RestoredAndroidBytes - retain.Plan.RestoredAndroidBytes);
+        Assert.NotEqual(reclaim.EvidenceFingerprint, retain.EvidenceFingerprint);
+    }
+
+    [Theory]
     [InlineData("TB322FC", BootloaderState.Unlocked)]
     [InlineData("TB323FU", BootloaderState.Locked)]
-    public void ValidateEdl_CurrentLayoutWithRetainedBackup_PlansBootRootOnlyRestore(
+    public void ValidateEdl_CurrentLayoutWithBackup_PlansCompleteFactoryExtentRestore(
         string model, BootloaderState bootloaderState)
     {
         var identity = new DeviceIdentity("R58EDLTAIL01", model, bootloaderState);
@@ -60,17 +76,16 @@ public sealed class UninstallTailBackupTests
 
         var inputs = UninstallEvidenceValidator.ValidateEdl(identity, original, current, 0);
 
-        // The factory extent comes back to the backup's first sector, not all the way to the factory end.
+        // Reclaim the recovery partition as well as Linux.
         Assert.Equal(GptFixture.UserdataStart, inputs.Plan.UserdataStartSector);
-        Assert.Equal(BackupStartSector, inputs.Plan.UserdataEndSectorExclusive);
-        Assert.Equal(GptFixture.RestoredAndroidBytes - TwoGiBInSectors * GptFixture.SectorSize4096, inputs.Plan.RestoredAndroidBytes);
+        Assert.Equal(GptFixture.UserdataEndExclusive, inputs.Plan.UserdataEndSectorExclusive);
+        Assert.Equal(GptFixture.RestoredAndroidBytes, inputs.Plan.RestoredAndroidBytes);
         Assert.Equal(GptFixture.UserdataEndExclusive, inputs.Record.OriginalUserdataEndSector);
 
-        // Exactly boot and root go; the retained backup slot 5 keeps its exact identity and geometry.
-        Assert.Equal(2, inputs.Plan.RemovedPartitionNumbers.Count);
+        Assert.Equal(3, inputs.Plan.RemovedPartitionNumbers.Count);
         Assert.Contains(3L, inputs.Plan.RemovedPartitionNumbers);
         Assert.Contains(4L, inputs.Plan.RemovedPartitionNumbers);
-        Assert.DoesNotContain(5L, inputs.Plan.RemovedPartitionNumbers);
+        Assert.Contains(5L, inputs.Plan.RemovedPartitionNumbers);
 
         var retainedBackup = GptFixture.Partition(current, 5);
         Assert.Equal(BackupUuid, retainedBackup.PartUuid);

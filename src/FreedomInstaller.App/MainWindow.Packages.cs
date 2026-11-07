@@ -108,7 +108,7 @@ public partial class MainWindow
         var workRoot = ResolvePackageWorkRoot();
 
         SetText(ProgressStatusText, "Dynamic.Progress.ImportingPackage");
-        AppendLocalizedLog(M("Dynamic.Log.ImportingPackage", source, knownModel));
+        AppendLocalizedLog(M("Dynamic.Log.ImportingPackage", source, UiText.ModelName(knownModel)));
 
         // Core 要求传入的解包根目录已经存在：来源与身份检查已在上方通过，这里才创建。
         Directory.CreateDirectory(workRoot);
@@ -129,8 +129,8 @@ public partial class MainWindow
         if (!validation.IsValid)
         {
             var reasons = string.Join(T("Dynamic.Package.ReasonSeparator"), validation.Reasons);
-            SetText(PackageStatusText, "Dynamic.Package.StatusRejectedForModel", knownModel, reasons);
-            AppendLocalizedLog(M("Dynamic.Log.PackageRejectedForModel", knownModel));
+            SetText(PackageStatusText, "Dynamic.Package.StatusRejectedForModel", UiText.ModelName(knownModel), reasons);
+            AppendLocalizedLog(M("Dynamic.Log.PackageRejectedForModel", UiText.ModelName(knownModel)));
             SetText(ProgressStatusText, "Dynamic.Package.StatusRejectedShort");
         }
         else if (validation.TestOnly)
@@ -138,11 +138,11 @@ public partial class MainWindow
             SetText(
                 PackageStatusText,
                 "Dynamic.Package.StatusTestOnlyForModel",
-                knownModel,
+                UiText.ModelName(knownModel),
                 validation.PackageId,
                 validation.Version);
             AppendLocalizedLog(
-                M("Dynamic.Log.PackageTestOnlyForModel", knownModel, validation.PackageId, validation.Version));
+                M("Dynamic.Log.PackageTestOnlyForModel", UiText.ModelName(knownModel), validation.PackageId, validation.Version));
             SetText(ProgressStatusText, "Dynamic.Progress.PackageValidated");
         }
         else
@@ -150,11 +150,11 @@ public partial class MainWindow
             SetText(
                 PackageStatusText,
                 "Dynamic.Package.StatusValidForModel",
-                knownModel,
+                UiText.ModelName(knownModel),
                 validation.PackageId,
                 validation.Version);
             AppendLocalizedLog(
-                M("Dynamic.Log.PackageValidForModel", knownModel, validation.PackageId, validation.Version));
+                M("Dynamic.Log.PackageValidForModel", UiText.ModelName(knownModel), validation.PackageId, validation.Version));
             SetText(ProgressStatusText, "Dynamic.Progress.PackageValidated");
         }
 

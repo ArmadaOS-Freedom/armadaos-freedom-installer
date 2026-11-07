@@ -143,6 +143,13 @@ public sealed partial class InternalInstallBackend : IDisposable
         RequireInitialProof(initialEdl);
         RequireBoundSession(deviceCheck, initialEdl, backup);
 
+        if (InternalPartitionPlanner.FindReusableBackup(backup.Tables[0]) is not null)
+        {
+            throw Refuse(
+                "retained-backup-requires-direct-install",
+                "Reusing ARMADA_BACKUP requires the direct 9008 image installation route.");
+        }
+
         InternalInstallPreparationContext context = await InternalInstallPreparationContext
             .PrepareAsync(
                 deviceCheck,

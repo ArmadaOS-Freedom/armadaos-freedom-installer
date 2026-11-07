@@ -61,7 +61,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_G4_full_hardware_id_selects_the_builtin_g4_profile_with_one_exact_command()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(
             "[INFO] edl-ng identify started\n" +
             IdentityLine(serial: E003EdlTestData.BusSerialHex.ToLowerInvariant()) +
@@ -93,7 +93,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_G5_full_hardware_id_selects_the_builtin_g5_profile()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(IdentityLine(hwid: G5HardwareId));
 
         EdlDeviceProfile profile = await GlobalEdlDetection.DetectAsync(_clientPath, runner, discovery);
@@ -112,7 +112,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_Tb710fu_full_hardware_id_selects_the_builtin_tb710fu_profile()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(IdentityLine(hwid: Tb710fuHardwareId));
 
         EdlDeviceProfile profile = await GlobalEdlDetection.DetectAsync(_clientPath, runner, discovery);
@@ -130,7 +130,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_hardware_id_case_is_accepted_and_mapped_to_the_g4_profile(string hwid)
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(IdentityLine(hwid: hwid));
 
         EdlDeviceProfile profile = await GlobalEdlDetection.DetectAsync(_clientPath, runner, discovery);
@@ -144,7 +144,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_expected_bus_serial_is_enforced_before_the_command(string expected)
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(IdentityLine());
 
         EdlDeviceProfile profile = await GlobalEdlDetection.DetectAsync(
@@ -162,7 +162,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_expected_bus_serial_mismatch_is_rejected_before_the_command()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => GlobalEdlDetection.DetectAsync(_clientPath, runner, discovery, "DEADBEEF"));
@@ -180,7 +180,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_malformed_expected_bus_serial_is_rejected_before_any_read(string expected)
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => GlobalEdlDetection.DetectAsync(_clientPath, runner, discovery, expected));
@@ -215,7 +215,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_malformed_or_lookalike_identity_line_is_rejected(string output)
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(output);
 
         Exception error = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -232,7 +232,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_missing_marker_is_rejected_even_with_valid_values()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(
             "[INFO] Serial Number: C1D2E3F4\n" +
             "[INFO] HWID: 0028D0E100400000\n" +
@@ -249,7 +249,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_duplicate_identical_identity_lines_are_rejected()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(IdentityLine() + "\n" + IdentityLine());
 
         await Assert.ThrowsAsync<InvalidOperationException>(
@@ -263,7 +263,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_marker_on_standard_error_only_is_rejected()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(
             "[INFO] identify finished",
             standardError: IdentityLine());
@@ -279,7 +279,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_nonzero_exit_is_rejected_even_with_a_valid_identity_line()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(IdentityLine(), exitCode: 3, standardError: "identify failed");
 
         Exception error = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -296,7 +296,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_unknown_hardware_id_is_rejected_without_a_fallback_profile()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(IdentityLine(hwid: UnknownHardwareId));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
@@ -310,7 +310,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_serial_mismatching_the_endpoint_is_rejected()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(IdentityLine(serial: "DEADBEEF"));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
@@ -326,7 +326,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_instance_change_during_the_command_is_rejected()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(
             IdentityLine(),
             sideEffect: _ => discovery.Endpoints = new[]
@@ -345,7 +345,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_bus_serial_change_during_the_command_is_rejected()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(
             IdentityLine(),
             sideEffect: _ => discovery.Endpoints = new[]
@@ -364,7 +364,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_a_second_device_appearing_during_the_command_is_rejected()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.Enqueue(
             IdentityLine(),
             sideEffect: _ => discovery.Endpoints = new[]
@@ -397,7 +397,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
         };
 
         E003ScriptedEndpointDiscovery discovery = Discovery(present);
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => GlobalEdlDetection.DetectAsync(_clientPath, runner, discovery));
@@ -416,7 +416,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(
             E003EdlTestData.Endpoint(description: description));
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => GlobalEdlDetection.DetectAsync(_clientPath, runner, discovery));
@@ -431,7 +431,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
         E003ScriptedEndpointDiscovery discovery = Discovery(
             E003EdlTestData.Endpoint(),
             E003EdlTestData.Endpoint(description: "QUSB_BULK_CID:045A_SN:DEADBEEF"));
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => GlobalEdlDetection.DetectAsync(_clientPath, runner, discovery));
@@ -446,7 +446,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_missing_client_file_is_rejected_before_any_read_or_run()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         string missing = Path.Combine(_caseDirectory, "absent.exe");
 
         await Assert.ThrowsAsync<FileNotFoundException>(
@@ -460,7 +460,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_relative_client_path_is_rejected_before_any_read_or_run()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
 
         await Assert.ThrowsAsync<ArgumentException>(
             () => GlobalEdlDetection.DetectAsync("edl-ng.exe", runner, discovery));
@@ -472,7 +472,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     [Fact]
     public async Task Detect_null_discovery_is_rejected()
     {
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
 
         await Assert.ThrowsAsync<ArgumentNullException>(
             () => GlobalEdlDetection.DetectAsync(_clientPath, runner, null!));
@@ -484,7 +484,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_cancelled_token_is_rejected_before_any_read_or_run()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
 
         using CancellationTokenSource cancellation = new();
         cancellation.Cancel();
@@ -505,7 +505,7 @@ public sealed class GlobalEdlDetectionTests : IDisposable
     public async Task Detect_cancellation_from_the_runner_propagates_unchanged()
     {
         E003ScriptedEndpointDiscovery discovery = Discovery(E003EdlTestData.Endpoint());
-        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003FakeCommandRunner runner = new E003FakeCommandRunner { AutomaticHardwareIdentification = false };
         runner.EnqueueFailure(new OperationCanceledException("cancelled by the caller"));
 
         Exception error = await Assert.ThrowsAnyAsync<OperationCanceledException>(

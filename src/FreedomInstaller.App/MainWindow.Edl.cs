@@ -50,7 +50,7 @@ public partial class MainWindow
         {
             return M(
                 "Dynamic.UninstallFlow.Edl.Unsupported",
-                identity.Model,
+                UiText.ModelName(identity.Model),
                 identity.Firmware?.DisplayId ?? UnknownValue);
         }
 
@@ -291,7 +291,7 @@ public partial class MainWindow
 
                 var connected = M(
                     "Dynamic.UninstallFlow.Edl.Connected",
-                    result.AndroidIdentity.Identity.Model,
+                    UiText.ModelName(result.AndroidIdentity.Identity.Model),
                     result.AndroidIdentity.Identity.Serial,
                     port);
                 _uninstallEdlStatus = connected;

@@ -106,6 +106,14 @@ internal sealed class E003FakeCommandRunner : ICommandRunner
 
     public int CallCount => _commands.Count;
 
+    public IReadOnlyList<ProcessCommand> FirehoseCommands =>
+        _commands.Where(c => !c.Arguments.Contains("identify")).ToArray();
+
+    public int FirehoseCallCount => FirehoseCommands.Count;
+
+    public bool AutomaticHardwareIdentification { get; set; } = true;
+    public string IdentificationHardwareId { get; set; } = E003EdlTestData.HardwareId;
+
     public E003FakeCommandRunner Enqueue(
         string standardOutput,
         int exitCode = 0,
@@ -132,6 +140,12 @@ internal sealed class E003FakeCommandRunner : ICommandRunner
 
         _commands.Add(command);
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (AutomaticHardwareIdentification
+            && command.Arguments.SequenceEqual(new[] { "--pid", "9008", "--loglevel", "Debug", "identify" }))
+            return Task.FromResult(new ProcessResult(0,
+                $"ARMADA_EDL_IDENTITY_V1 serial={E003EdlTestData.BusSerialHex} hwid={IdentificationHardwareId}",
+                string.Empty));
 
         if (_steps.Count == 0)
         {
@@ -303,14 +317,14 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Equal(E003EdlTestData.BusSerialHex, evidence.SaharaSerialHex, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(E003EdlTestData.HardwareId, evidence.HardwareId, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(0, evidence.Command.ExitCode);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
 
         AssertCommand(
-            runner.Commands[0],
+            runner.FirehoseCommands[0],
             _fixture.Toolchain.ClientPath,
             ProbeInitialTimeout,
             WithGlobals("printgpt", "--lun", "0"));
-        Assert.Equal(1, discovery.ReadCount);
+        Assert.Equal(4, discovery.ReadCount);
     }
 
     [Fact]
@@ -337,7 +351,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
     }
 
     [Theory]
@@ -386,7 +400,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -405,7 +419,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         EdlProbeEvidence evidence = await client.ProbeAsync(0, initialLoader: true);
 
         Assert.Equal(E003EdlTestData.BusSerialHex, evidence.BusSerialHex, StringComparer.OrdinalIgnoreCase);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -447,7 +461,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.Equal(E003EdlTestData.BusSerialHex, warm.BusSerialHex, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(new EdlGeometry(4, 4096, E003EdlTestData.WarmLun4TotalSectors), warm.Geometry);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
         Assert.Equal(E003EdlTestData.DeviceInstanceId, binding.Endpoint.DeviceInstanceId);
     }
 
@@ -465,7 +479,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -482,7 +496,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(0, runner.CallCount);
+        Assert.Equal(0, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -502,7 +516,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Equal(E003EdlTestData.BusSerialHex, evidence.BusSerialHex, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(E003EdlTestData.HardwareId, evidence.HardwareId, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(0, evidence.Command.ExitCode);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
 
         Assert.True(client.HasInitialSaharaProof, "the real initial probe must prove the session");
         Assert.Equal(
@@ -537,7 +551,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -559,7 +573,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
     }
 
     [Theory]
@@ -605,7 +619,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -637,19 +651,19 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Equal(2L, read.SectorCount);
         Assert.Equal((long)payload.Length, read.Length);
         Assert.Equal(0, read.Command.ExitCode);
-        Assert.Equal(3, discovery.ReadCount);
+        Assert.Equal(6, discovery.ReadCount);
 
         AssertCommand(
-            runner.Commands[1],
+            runner.FirehoseCommands[1],
             _fixture.Toolchain.ClientPath,
             ProbeWarmTimeout,
             WithGlobals("printgpt", "--lun", "4"));
         AssertCommand(
-            runner.Commands[2],
+            runner.FirehoseCommands[2],
             _fixture.Toolchain.ClientPath,
             ReadTimeout,
             WithGlobals("read-sector", "8", "2", outputPath, "--lun", "4"));
-        Assert.Equal(3, runner.CallCount);
+        Assert.Equal(3, runner.FirehoseCallCount);
     }
 
     [Theory]
@@ -689,7 +703,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -725,10 +739,10 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Equal(expectedSha, read.Sha256, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(new EdlGeometry(0, 4096, E003EdlTestData.InitialTotalSectors), read.Geometry);
         Assert.Equal(0, read.Command.ExitCode);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
 
         AssertCommand(
-            runner.Commands[1],
+            runner.FirehoseCommands[1],
             _fixture.Toolchain.ClientPath,
             ReadTimeout,
             WithGlobals("read-sector", "4", "2", outputPath, "--lun", "0"));
@@ -792,7 +806,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
     }
 
     [Theory]
@@ -840,7 +854,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -867,16 +881,16 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Equal((long)payload.Length, write.Length);
         Assert.Equal(sha, write.Sha256, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(0, write.Command.ExitCode);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
 
         // The CLI has no count positional: start, file, then --lun.
         AssertCommand(
-            runner.Commands[1],
+            runner.FirehoseCommands[1],
             _fixture.Toolchain.ClientPath,
             WriteTimeout,
             WithGlobals("write-sector", "4", sourcePath, "--lun", "0"));
-        Assert.Equal(sourcePath, runner.Commands[1].Arguments[2]);
-        Assert.Equal("--lun", runner.Commands[1].Arguments[3]);
+        Assert.Equal(sourcePath, runner.FirehoseCommands[1].Arguments[2]);
+        Assert.Equal("--lun", runner.FirehoseCommands[1].Arguments[3]);
     }
 
     [Theory]
@@ -928,7 +942,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
     }
 
     [Theory]
@@ -982,7 +996,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.True(
             error.Message.Contains("outcome unknown", StringComparison.OrdinalIgnoreCase),
             "write failure must state that the outcome is unknown: " + error.Message);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -998,11 +1012,13 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         EdlResetEvidence reset = await client.ResetAsync();
 
         Assert.True(reset.CommandAccepted);
+        Assert.False(client.HasInitialSaharaProof);
+        Assert.Null(client.HardwareIdentity);
         Assert.Equal(0, reset.Command.ExitCode);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
 
         AssertCommand(
-            runner.Commands[1],
+            runner.FirehoseCommands[1],
             _fixture.Toolchain.ClientPath,
             ResetTimeout,
             WithGlobals("reset", "--mode", "Reset", "--delay", "1"));
@@ -1043,7 +1059,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.True(
             error.Message.Contains("outcome unknown", StringComparison.OrdinalIgnoreCase),
             "reset failure must state that the outcome is unknown: " + error.Message);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -1058,7 +1074,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         EdlClient client = NewClient(runner, discovery);
         await client.ProbeAsync(0, initialLoader: true);
-        int callsBefore = runner.CallCount;
+        int callsBefore = runner.FirehoseCallCount;
 
         using CancellationTokenSource cancelled = new CancellationTokenSource();
         cancelled.Cancel();
@@ -1066,7 +1082,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => client.ReadAsync(0, 4, 2, outputPath, cancelled.Token));
 
-        Assert.Equal(callsBefore, runner.CallCount);
+        Assert.Equal(callsBefore, runner.FirehoseCallCount);
         Assert.False(File.Exists(outputPath));
     }
 
@@ -1108,7 +1124,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.NotNull(error);
         Assert.IsNotType<NotImplementedException>(error);
-        Assert.Equal(1, runner.CallCount);
+        Assert.Equal(1, runner.FirehoseCallCount);
         Assert.False(File.Exists(outputPath));
     }
 
@@ -1189,7 +1205,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.True(client.HasInitialSaharaProof);
 
         AssertCommand(
-            runner.Commands[0],
+            runner.FirehoseCommands[0],
             _fixture.Toolchain.ClientPath,
             ProbeInitialTimeout,
             WithGlobals("printgpt", "--lun", "0"));
@@ -1203,10 +1219,10 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Equal(outputPath, read.FilePath);
         Assert.Equal(expectedSha, read.Sha256, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(expectedSha, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(outputPath))));
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
 
         AssertCommand(
-            runner.Commands[1],
+            runner.FirehoseCommands[1],
             _fixture.Toolchain.ClientPath,
             ReadTimeout,
             WithGlobals("read-sector", "89992", "256", outputPath, "--lun", "0"));
@@ -1246,10 +1262,10 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.Same(sentinel, error);
         Assert.False(File.Exists(outputPath));
-        Assert.Equal(2, runner.CallCount);
-        Assert.Equal(2, discovery.ReadCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
+        Assert.Equal(5, discovery.ReadCount);
 
-        ProcessCommand read = runner.Commands[1];
+        ProcessCommand read = runner.FirehoseCommands[1];
         Assert.Equal(
             WithGlobals(
                 "read-sector",
@@ -1373,7 +1389,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Equal(sha, write.Sha256, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(0, write.Command.ExitCode);
         Assert.True(client.HasInitialSaharaProof);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
     }
 
     [Fact]
@@ -1427,7 +1443,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
 
         Assert.Equal((long)payload.Length, read.Length);
         Assert.Equal(expectedSha, read.Sha256, StringComparer.OrdinalIgnoreCase);
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
 
         // Ignored frames are still raw log evidence.
         string stdoutLog = logPrefix + ".stdout.log";
@@ -1665,7 +1681,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
             error.Message.Contains("outcome unknown", StringComparison.OrdinalIgnoreCase),
             "a write without the final ACK must stay unknown: " + error.Message);
         Assert.False(client.HasInitialSaharaProof, "an unknown started write invalidates the session proof");
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
 
         // The observed 100 % is real, and still proves nothing about the acknowledgement.
         Assert.Contains(
@@ -1727,7 +1743,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Equal(callerCts.Token, inner.CancellationToken);
 
         Assert.False(client.HasInitialSaharaProof, "an unknown started write invalidates the session proof");
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
 
         string stdoutLog = logPrefix + ".stdout.log";
         Assert.True(File.Exists(stdoutLog), "observed frames must be flushed when the write fails: " + stdoutLog);
@@ -1776,7 +1792,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Same(sentinel, error);
         Assert.False(File.Exists(outputPath));
         Assert.True(client.HasInitialSaharaProof, "a failed read must not clear the initial loader proof");
-        Assert.Equal(2, runner.CallCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
 
         Assert.Contains(
             recorder.Snapshot(),

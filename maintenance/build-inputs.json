@@ -145,6 +145,46 @@
       "bytes": 1573224,
       "sha256": "ad4689b1c52458250d46829ee46a89ec974e69f8e82eee8d4950427919e0b9eb",
       "path": "vendor/qualcomm/tb710fu/firehose.melf"
+    },
+    {
+      "bytes": 6957,
+      "path": "vendor/android/google/android_winusb.inf",
+      "sha256": "cd1ebe134e3ace2b0c20b16ce62ca8369b1c80f497d6fa584f38dfbfc0a65ade"
+    },
+    {
+      "bytes": 12825,
+      "path": "vendor/android/google/androidwinusba64.cat",
+      "sha256": "f099cdf89446b006ecdec9b81b79a6bc1f5ef6fb014578daa88d01fe5aadd90a"
+    },
+    {
+      "bytes": 1721576,
+      "path": "vendor/android/google/amd64/WdfCoInstaller01009.dll",
+      "sha256": "18487b4ff94edccc98ed59d9fca662d4a1331c5f1e14df8db3093256dd9f1c3e"
+    },
+    {
+      "bytes": 1002728,
+      "path": "vendor/android/google/amd64/winusbcoinstaller2.dll",
+      "sha256": "981a17effddbc20377512ddaec9f22c2b7067e17a3e2a8ccf82bb7bb7b2420b6"
+    },
+    {
+      "bytes": 46886,
+      "path": "vendor/android/oplus/android_winusb.inf",
+      "sha256": "1a8f6e5d8d7cde3a7e3e06f6696da6963b59aaf55d96a70422eb0825dd6f30b9"
+    },
+    {
+      "bytes": 39509,
+      "path": "vendor/android/oplus/androidwinusba64.cat",
+      "sha256": "45ab641b65c3de7b4c12840db0e44fb3cc832c1743fd7416a5420b5a8c66036f"
+    },
+    {
+      "bytes": 1741728,
+      "path": "vendor/android/oplus/amd64/WdfCoInstaller01009.dll",
+      "sha256": "c0c372aa37db208c2831de6e2707a814f656a61994742240d5103f4eda258f18"
+    },
+    {
+      "bytes": 1022872,
+      "path": "vendor/android/oplus/amd64/WinUSBCoInstaller2.dll",
+      "sha256": "43970391cc04ccb626f10b4bc8454ac55042e88498c8cf6f672253e1fa198aa9"
     }
   ],
   "sources": [
@@ -193,6 +233,7 @@
     "driver": "Qualcomm 2.1.5.2 AMD64, 2023-08-24; unchanged DriverStore files; vendor terms",
     "g4": "TB322FC_CN_OPEN_USER_Q00041.1_W_ZUXOS_1.5.10.259_ST_260611",
     "g5": "QCTool-2026.3.21-1/lenovo/devprg_legion-y700-5",
-    "tb710fu": "TB710FU ZUXOS_1.5.04.495_WITHOUT_UBL/EDL/xbl_s_devprg_ns.melf"
+    "tb710fu": "TB710FU ZUXOS_1.5.04.495_WITHOUT_UBL/EDL/xbl_s_devprg_ns.melf",
+    "androidDrivers": "Original signed Google r13 and OPLUS 11.0.0000.00000 x64 WinUSB packages; unchanged vendor files and terms."
   }
 }

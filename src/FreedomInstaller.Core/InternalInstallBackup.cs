@@ -72,11 +72,27 @@ public static partial class InternalInstallBackup
     /// </para>
     /// </summary>
     /// <returns>The verified set; its <see cref="InternalBackupSet.Dispose"/> only releases the read locks.</returns>
-    public static async Task<InternalBackupSet> CreateAsync(
+    public static Task<InternalBackupSet> CreateAsync(
         EdlClient client,
         string chosenParent,
         IProgress<InternalBackupProgress>? progress = null,
         CancellationToken token = default)
+        => CreateCoreAsync(client, chosenParent, progress, token, null);
+
+    public static Task<InternalBackupSet> CreatePreparationSnapshotAsync(
+        EdlClient client, InternalBackupSet recovery, string temporaryParent,
+        IProgress<InternalBackupProgress>? progress = null, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(recovery);
+        if (!ReferenceEquals(client.Binding, recovery.Binding))
+            throw new InvalidDataException("Recovery and preparation belong to different device sessions.");
+        return CreateCoreAsync(client, temporaryParent, progress, token, recovery);
+    }
+
+    private static async Task<InternalBackupSet> CreateCoreAsync(
+        EdlClient client, string chosenParent, IProgress<InternalBackupProgress>? progress,
+        CancellationToken token, InternalBackupSet? recovery)
     {
         token.ThrowIfCancellationRequested();
 
@@ -110,7 +126,7 @@ public static partial class InternalInstallBackup
 
         // The install backup belongs to the install route: a model whose install route is not open is refused
         // before any directory or device command exists.
-        DeviceModelRoutes.RequireWriteRoute(profile.Model);
+        DeviceModelRoutes.RequireInstallRoute(profile.Model);
 
         // The contract originates from the loaded toolchain's model, never from a caller-supplied value.
         InternalInstallBackupRoles roles = InternalInstallBackupRoles.ForModel(profile.Model);
@@ -248,7 +264,13 @@ public static partial class InternalInstallBackup
                 PartitionTarget target = targets[name];
                 string fileName = name + ".bin";
 
-                SealedFile sealedFile = await ReadSealedAsync(
+                // Calibration material is reused; current boot/GPT/misc and all boot-chain inputs
+                // are read afresh because installation prepares candidates from the current device.
+                var reuse = recovery is not null && name is
+                    "persist" or "modemst1" or "modemst2" or "fsg" or "fsc" or "ssd" or "keystore" or "frp" or "cdt";
+                SealedFile sealedFile = reuse
+                    ? await CopyRecoveryFileAsync(recovery!, name, target, Path.Combine(directory, fileName), locks, token).ConfigureAwait(false)
+                    : await ReadSealedAsync(
                     client,
                     target.Geometry,
                     target.Partition.StartSector,
@@ -327,6 +349,7 @@ public static partial class InternalInstallBackup
                 BuildLun0Layout(tables[0], geometries[0]),
                 locks);
 
+            if (recovery is not null) BoardRecoveryBackup.ValidateSourceForReuse(set, recovery);
             reporter.Complete(totalBytes);
             return set;
         }
@@ -536,6 +559,31 @@ public static partial class InternalInstallBackup
     /// Reads one whole range into a new file, makes it durable, then verifies length and SHA-256 on the very
     /// read-only handle that stays open for the lifetime of the returned set.
     /// </summary>
+    private static async Task<SealedFile> CopyRecoveryFileAsync(
+        InternalBackupSet recovery, string role, PartitionTarget target, string path,
+        List<FileStream> locks, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (!recovery.Files.TryGetValue(role, out var source)
+            || source.Lun != target.Geometry.Lun
+            || source.StartSector != target.Partition.StartSector
+            || source.SectorCount != target.Partition.SectorCount
+            || source.SectorSize != target.Geometry.SectorSize
+            || source.PartUuid != target.Partition.PartUuid)
+            throw new InvalidDataException("Recovery partition does not match current geometry: " + role);
+        File.Copy(source.FilePath, path, overwrite: false);
+        var (sha256, held) = await OpenHashedSharedAsync(path, token).ConfigureAwait(false);
+        try
+        {
+            if (held.Length != source.Length
+                || !string.Equals(sha256, source.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Recovery file failed verification: " + role);
+            locks.Add(held);
+            return new SealedFile(path, held.Length, sha256, held);
+        }
+        catch { held.Dispose(); throw; }
+    }
+
     private static async Task<SealedFile> ReadSealedAsync(
         EdlClient client,
         EdlGeometry geometry,

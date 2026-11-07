@@ -957,7 +957,8 @@ namespace FreedomInstaller.Core.Tests
                 return ChainDescriptor(name, KeyBlob, location, flags);
             }
 
-            internal VerifiedEdlFile RewriteBootLeaf(string bootPath, int extraAuxPaddingBytes = 0)
+            internal VerifiedEdlFile RewriteBootLeaf(string bootPath, int extraAuxPaddingBytes = 0,
+                bool preserveProperties = false)
             {
                 string fullPath = Path.GetFullPath(bootPath);
 
@@ -996,10 +997,25 @@ namespace FreedomInstaller.Core.Tests
                 }
 
                 byte[] bootDescriptor = HashDescriptor("boot", originalImageSize, PatternBlock(16, 0xB4), bodyPrefix);
+                var descriptors = new List<byte[]> { bootDescriptor };
+                if (preserveProperties)
+                {
+                    var old = new byte[checked((int)ReadU64(originalFooter, 28))];
+                    stream.Position = vbmetaOffset;
+                    stream.ReadExactly(old);
+                    int begin = checked(256 + (int)ReadU64(old, 12) + (int)ReadU64(old, 96));
+                    int end = checked(begin + (int)ReadU64(old, 104));
+                    for (int at = begin; at < end;)
+                    {
+                        int length = checked(16 + (int)ReadU64(old, at + 8));
+                        if (ReadU64(old, at) == 0) descriptors.Add(old.AsSpan(at, length).ToArray());
+                        at += length;
+                    }
+                }
                 byte[] blob = BuildBlob(
                     _sourceKey,
                     KeyBlob,
-                    new[] { bootDescriptor },
+                    descriptors.ToArray(),
                     flags: 0,
                     extraAuxPaddingBytes: extraAuxPaddingBytes);
                 Assert.True(

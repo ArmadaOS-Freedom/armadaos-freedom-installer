@@ -51,6 +51,22 @@ public sealed class InternalInstallDirectPreparationIntegrationTests
         _rawShared = rawShared;
     }
 
+    [Theory]
+    [InlineData("a", "a")]
+    [InlineData("a", "b")]
+    [InlineData("b", "a")]
+    [InlineData("b", "b")]
+    public async Task MixedSystemKeySizesPrepareBothSlots(string currentSlot, string smallSystemSlot)
+    {
+        using var session = await DirectInstallReadyTestSession.CreateAsync(
+            _toolchain.Toolchain, _rawShared, currentSlot: currentSlot, smallSystemSlot: smallSystemSlot);
+        Assert.Equal(InternalInstallStage.Prepared, session.Backend.Snapshot.Stage);
+        Assert.Equal(currentSlot, session.Backend.Prepared.CurrentSlot);
+        Assert.Equal(2, session.Backend.Prepared.CurrentBootSha256.Count);
+        Assert.Empty(session.EdlRunner.Writes);
+        Assert.Equal(0, session.EdlRunner.ResetCount);
+    }
+
     [Fact]
     public async Task FW01_CreatePrepared_CurrentSlotB_ProducesTheFullDirectConfirmationForBothSlots()
     {
@@ -419,7 +435,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         Action<int, int, int>? onPreparationFailure = null,
         DirectAvbSourceKind? slotBAvbSourceKind = null,
         GblDirectSourceFixture? gblSources = null,
-        bool omitEfispBackup = false)
+        bool omitEfispBackup = false,
+        string? smallSystemSlot = null)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -529,7 +546,9 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
 
                 // The AVB metadata is a separate set of real measured claims per slot; slot B keeps its own
                 // original metadata even when its boot set is the all-zero fixture, and nothing is cloned from A.
-                avbSources = new DirectAvbSourceTestFixture(avbSourceKind, slotBAvbSourceKind);
+                avbSources = new DirectAvbSourceTestFixture(avbSourceKind, slotBAvbSourceKind, smallSystemSlot);
+                sources["boot_a"] = avbSources.A.RewriteBootLeaf(slotA.CurrentBoot.Path, preserveProperties: true);
+                sources["boot_b"] = avbSources.B.RewriteBootLeaf(slotB.CurrentBoot.Path, preserveProperties: true);
             }
             else
             {

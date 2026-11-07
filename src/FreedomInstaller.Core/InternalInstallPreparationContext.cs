@@ -147,7 +147,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         long directExecutionSpaceBytes = 0,
         IReadOnlyDictionary<string, EdlRawResignedAvbNode>? directAvbRoots = null,
         IReadOnlyList<DirectAvbMetadataNode>? directAvbNodes = null,
-        VerifiedGblPlan? directGblPlan = null)
+        VerifiedGblPlan? directGblPlan = null,
+        IReadOnlyList<string>? directPreservedAvbRoles = null)
     {
         _package = package;
         _assets = assets;
@@ -184,6 +185,16 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         // can never also carry AOSP roots or candidate nodes; only a direct factory may hand over a plan and
         // every other caller keeps the helper's default null.
         _directGblPlan = directGblPlan;
+        _directPreservedAvbRoles = directPreservedAvbRoles;
+
+        if (directPreservedAvbRoles is not null
+            && (!_isDirect || directGblPlan is not null || _directAvbRoots.Count > 0 || _directAvbNodes.Count > 0
+                || directPreservedAvbRoles.Count == 0))
+        {
+            throw new InvalidOperationException(
+                "An AOSP-preserving preparation is direct only, names its authenticated vbmeta roles and carries no "
+                + "GBL plan, signed roots or metadata nodes.");
+        }
 
         if (directGblPlan is not null)
         {
@@ -375,6 +386,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
             ArtifactFacts artifactFacts = BindArtifacts(
                 artifactSet,
+                backup,
                 backupFacts,
                 identity,
                 firmware,
@@ -569,17 +581,29 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             // wrapper, the child and the current-XBL capacity are completed from the actual builds later, not
             // here. A null result is the old AOSP eligibility only, and that path keeps its exact signed-root
             // preparation below.
-            gblInputs = await PrepareDirectGblInputsAsync(
-                deviceCheck.CurrentSlot,
-                deviceCheck.FastbootLockState,
-                sourceSlots,
-                backupFacts,
-                evidenceDirectory,
-                claims,
-                cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<string>? preservedAvbRoles = null;
+            if (UsesPreservedAospChain(profile.Model))
+            {
+                // Boot-only route: the original AVB metadata stays untouched, so neither the GBL gate nor the
+                // AOSP re-sign roots apply; only the root and boot chain keys are authenticated, and the original
+                // device captures read those roots again.
+                preservedAvbRoles = await RequireDirectPreservedAospChainAsync(sourceSlots, backupFacts, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                gblInputs = await PrepareDirectGblInputsAsync(
+                    deviceCheck.CurrentSlot,
+                    deviceCheck.FastbootLockState,
+                    sourceSlots,
+                    backupFacts,
+                    evidenceDirectory,
+                    claims,
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             IReadOnlyDictionary<string, EdlRawResignedAvbNode> avbRoots;
-            if (gblInputs is null)
+            if (gblInputs is null && preservedAvbRoles is null)
             {
                 avbRoots = await PrepareDirectAvbRootsAsync(
                     deviceCheck.CurrentSlot,
@@ -612,6 +636,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
             ArtifactFacts artifactFacts = BindArtifacts(
                 artifactSet,
+                backup,
                 backupFacts,
                 identity,
                 firmware,
@@ -628,7 +653,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             // build. The plan itself is completed from the actual built boots afterwards.
             IReadOnlyList<DirectAvbMetadataNode> avbNodes;
 
-            if (gblInputs is null)
+            if (gblInputs is null && preservedAvbRoles is null)
             {
                 avbNodes = await PrepareDirectAvbNodesAsync(
                     avbRoots,
@@ -721,6 +746,15 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                         packageSnapshot,
                         backupFacts.Files);
 
+                    if (gblInputs is null && preservedAvbRoles is null && sourceSlot == slot)
+                    {
+                        await EdlRawBootBuilder.VerifyAvbBootChainAsync(
+                            avbRoots[slot].Candidate, built.CandidateBoot,
+                            avbNodes.Single(n => n.Role == "recovery_" + slot).Node.Candidate,
+                            avbNodes.Single(n => n.Role == "vbmeta_system_" + slot).Node.Candidate,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
                     // The actual recovered material of this built slot is the only material fact; the old
                     // pre-build recovery read is never repeated. The key stays the target even when that
                     // material itself was recovered from the opposite source slot.
@@ -785,7 +819,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 maintenanceBoot: null,
                 cancellationToken,
                 directMetadataNodes: avbNodes,
-                directGblGuardRoles: gblPlan is null ? null : GetGblGuardRoles(gblPlan.Inputs)).ConfigureAwait(false);
+                directGblGuardRoles: gblPlan is null ? null : GetGblGuardRoles(gblPlan.Inputs),
+                directPreservedAvbRoles: preservedAvbRoles).ConfigureAwait(false);
 
             context = new InternalInstallPreparationContext(
                 packageSnapshot,
@@ -805,7 +840,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 requiredExecutionBytes,
                 avbRoots,
                 avbNodes,
-                gblPlan);
+                gblPlan,
+                preservedAvbRoles);
 
             // The context owns the plan's wrappers and its staged input files from here on, so the local
             // hand-off is cleared before the remaining factory work can fail and dispose something the
@@ -1680,7 +1716,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             maintenanceBoot: null,
             cancellationToken,
             directMetadataNodes: _isDirect ? _directAvbNodes : null,
-            directGblGuardRoles: _directGblPlan is null ? null : GetGblGuardRoles(_directGblPlan.Inputs)).ConfigureAwait(false);
+            directGblGuardRoles: _directGblPlan is null ? null : GetGblGuardRoles(_directGblPlan.Inputs),
+            directPreservedAvbRoles: _directPreservedAvbRoles).ConfigureAwait(false);
 
         _currentBootSha256 = new ReadOnlyDictionary<string, string>(
             new Dictionary<string, string>(capture.BootSha256, StringComparer.Ordinal));
@@ -2060,7 +2097,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
     private static BackupFacts BindBackup(
         InternalBackupSet backup,
         List<HeldClaim> claims,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireCurrentFirmware = true)
     {
         if (string.IsNullOrWhiteSpace(backup.DirectoryPath))
         {
@@ -2140,7 +2178,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         }
 
         JsonElement firmwareElement = RequireObject(identityElement, "firmware");
-        if (firmware is null
+        if (requireCurrentFirmware && (firmware is null
             || !string.Equals(RequireString(firmwareElement, "displayId"), firmware.DisplayId, StringComparison.Ordinal)
             || !string.Equals(
                 RequireString(firmwareElement, "buildFingerprint"),
@@ -2157,7 +2195,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             || !string.Equals(
                 RequireString(firmwareElement, "androidReportedBootloaderState"),
                 firmware.AndroidReportedBootloaderState.ToString(),
-                StringComparison.Ordinal))
+                StringComparison.Ordinal)))
         {
             throw new InvalidDataException("The backup manifest firmware does not agree with the backup binding.");
         }
@@ -2465,6 +2503,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     private static ArtifactFacts BindArtifacts(
         InternalArtifactSet artifacts,
+        InternalBackupSet currentBackup,
         BackupFacts backup,
         DeviceIdentity identity,
         FirmwareSnapshot firmware,
@@ -2583,15 +2622,25 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             held["board-summary"].Stream.Position = 0;
         }
 
+        var recoveryFacts = backup;
+        if (artifacts.RecoveryBackup is { } recoverySource)
+        {
+            BoardRecoveryBackup.ValidateSource(currentBackup, recoverySource);
+            recoveryFacts = BindBackup(recoverySource, claims, cancellationToken, requireCurrentFirmware: false);
+        }
+        else if (InternalPartitionPlanner.FindReusableBackup(original) is not null)
+        {
+            throw new InvalidDataException("The retained recovery partition has no verified original recovery source.");
+        }
         RequireRecoveryBindings(
             recovery,
             artifacts.InstallationId,
             artifacts.PlanSha256,
-            backup.ManifestSha256,
-            original.SourceFingerprint,
+            recoveryFacts.ManifestSha256,
+            recoveryFacts.Tables[0].SourceFingerprint,
             rewrite.PostTable.SourceFingerprint,
             PlannedOwnedUuids(rewrite),
-            TrustedRecoveryEntries(backup, held));
+            TrustedRecoveryEntries(recoveryFacts, held));
 
         return new ArtifactFacts
         {
@@ -3265,6 +3314,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         foreach (JsonElement entry in element.EnumerateArray())
         {
             NewPartition planned = rewrite.NewPartitions[index++];
+            var postPartition = rewrite.PostTable.Partitions.Single(p => p.Number == planned.Number);
             if (!string.Equals(RequireString(entry, "name"), planned.Name, StringComparison.Ordinal)
                 || RequireInt64(entry, "number") != planned.Number
                 || !string.Equals(
@@ -3272,7 +3322,9 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                     planned.PartUuid.ToString("D").ToUpperInvariant(),
                     StringComparison.Ordinal)
                 || RequireInt64(entry, "startSector") != planned.StartSector
-                || RequireInt64(entry, "sectorCount") != planned.SectorCount)
+                || RequireInt64(entry, "sectorCount") != planned.SectorCount
+                || RequireUInt64(entry, "attributes") != postPartition.Attributes
+                || !string.Equals(RequireString(entry, "typeGuid"), postPartition.TypeGuid, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidDataException("The installation record describes a different new partition.");
             }
@@ -3350,7 +3402,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         VerifiedEdlFile? maintenanceBoot,
         CancellationToken cancellationToken,
         IReadOnlyList<DirectAvbMetadataNode>? directMetadataNodes = null,
-        IReadOnlyList<string>? directGblGuardRoles = null)
+        IReadOnlyList<string>? directGblGuardRoles = null,
+        IReadOnlyList<string>? directPreservedAvbRoles = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(client);
@@ -3473,6 +3526,20 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             if (directGblGuardRoles is not null)
             {
                 foreach (string role in directGblGuardRoles)
+                {
+                    if (!captureRoles.Contains(role))
+                    {
+                        captureRoles.Add(role);
+                    }
+                }
+            }
+
+            // The AOSP-preserving route writes boot only and relies on the original vbmeta roots it authenticated
+            // in the backup, so those roots are read again as full original ranges: a live root that changed after
+            // the backup fails here, before preparation completes and again before the first write.
+            if (directPreservedAvbRoles is not null)
+            {
+                foreach (string role in directPreservedAvbRoles)
                 {
                     if (!captureRoles.Contains(role))
                     {
@@ -4061,7 +4128,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         }
         else
         {
-            json.WriteString("bootTrustMode", nameof(InternalInstallBootTrustMode.AospResigned));
+            json.WriteString("bootTrustMode", DirectBootTrustMode.ToString());
 
             json.WriteStartArray("slots");
             foreach (string slot in SlotOrder)

@@ -395,10 +395,34 @@ public static partial class EdlRawBootBuilder
         }
     }
 
+    /// <summary>
+    /// Read-only authentication for the AOSP-preserving route: the original root vbmeta must be signed by the
+    /// pinned AOSP key and chain boot to that same key, while its recovery and vbmeta_system chains may use any
+    /// key size (they are never rewritten on this route). Nothing is generated or mutated.
+    /// </summary>
+    internal static Task<EdlRawOriginalBootChainFacts> AuthenticatePreservedBootChainAsync(
+        VerifiedEdlFile originalVbmeta,
+        CancellationToken cancellationToken = default)
+    {
+        if (originalVbmeta is null)
+        {
+            throw new ArgumentNullException(nameof(originalVbmeta));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string path = Path.GetFullPath(originalVbmeta.Path);
+
+        return Task.Run(
+            () => GblAuthenticateOriginalChainCore(originalVbmeta, path, cancellationToken, preserved: true),
+            cancellationToken);
+    }
+
     private static EdlRawOriginalBootChainFacts GblAuthenticateOriginalChainCore(
         VerifiedEdlFile originalVbmeta,
         string path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool preserved = false)
     {
         using FileStream stream = new FileStream(
             path,
@@ -435,13 +459,12 @@ public static partial class EdlRawBootBuilder
         }
 
         if (bootKey.KeyOffset < 0 ||
-            bootKey.KeyOffset > metadata.Blob.Length - AvbPublicKeyBytes)
+            bootKey.KeyOffset > metadata.Blob.Length - bootKey.KeyLength)
         {
             throw new InvalidDataException("GBL original boot chain key range is outside the metadata blob.");
         }
 
-        byte[] bootKeyBlob = new byte[AvbPublicKeyBytes];
-        Array.Copy(metadata.Blob, bootKey.KeyOffset, bootKeyBlob, 0, AvbPublicKeyBytes);
+        byte[] bootKeyBlob = AvbNodeSlice(metadata.Blob, bootKey.KeyOffset, bootKey.KeyLength);
         string bootChainPublicKeySha256 = AvbNodeSha256Hex(bootKeyBlob);
 
         string signedVbmetaSha256 = AvbNodeSha256Hex(metadata.Blob);

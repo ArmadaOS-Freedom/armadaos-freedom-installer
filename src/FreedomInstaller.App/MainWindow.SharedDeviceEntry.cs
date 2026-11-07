@@ -114,7 +114,7 @@ public partial class MainWindow
         if (DeviceModelRoutes.IsWriteRoutePending(android.Identity?.Model))
         {
             SetInternalInstallCheckStatus(
-                M("Dynamic.Model.RoutePending", Placeholder(android.Identity?.Model)));
+                M("Dynamic.Model.RoutePending", UiText.ModelName(android.Identity?.Model)));
             return;
         }
 
@@ -128,7 +128,7 @@ public partial class MainWindow
             SetInternalInstallCheckStatus(
                 M(
                     "Dynamic.InternalInstall.Backup.ProfileUnavailable",
-                    Placeholder(android.Identity?.Model),
+                    UiText.ModelName(android.Identity?.Model),
                     Placeholder(android.Identity?.Firmware?.DisplayId)));
             return;
         }
@@ -155,7 +155,7 @@ public partial class MainWindow
         }
 
         var identity = android.Identity;
-        SetText(InternalInstallModelText, "Dynamic.RawValue", Placeholder(identity?.Model));
+        SetText(InternalInstallModelText, UiText.ModelName(identity?.Model));
         SetText(InternalInstallSerialText, "Dynamic.RawValue", Placeholder(identity?.Serial));
         SetText(InternalInstallFirmwareText, "Dynamic.RawValue", Placeholder(identity?.Firmware?.DisplayId));
         SetText(InternalInstallBootloaderText, BootStateKey(BootloaderState.Unknown));

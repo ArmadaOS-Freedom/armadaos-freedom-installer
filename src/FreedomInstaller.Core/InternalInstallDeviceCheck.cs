@@ -199,10 +199,34 @@ public sealed class InternalInstallDeviceCheck
     private static readonly TimeSpan PropertyTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan FastbootQueryTimeout = TimeSpan.FromSeconds(3);
 
+    private async Task<string> ReadFastbootDriverDiagnosticAsync()
+    {
+        if (_fastbootDriverProbe is null) return string.Empty;
+        try
+        {
+            var result = await Task.Run(_fastbootDriverProbe).ConfigureAwait(false);
+            return " " + DescribeFastbootDriver(result);
+        }
+        catch (Exception)
+        {
+            return " Windows 驱动状态查询失败，请在“环境与驱动”重新检查。";
+        }
+    }
+
+    internal static string DescribeFastbootDriver(WindowsDriverCheckResult result) => result.State switch
+    {
+        WindowsDriverCheckState.Missing => "缺少匹配的 Fastboot 驱动，请返回“环境与驱动”安装或修复驱动。",
+        WindowsDriverCheckState.Problem => "Windows 发现 Fastboot 驱动或设备绑定异常，请在“环境与驱动”修复并重新检查。" + " " + result.Detail,
+        WindowsDriverCheckState.Prepared => "Fastboot 驱动已准备，但 Windows 当前未发现相应 USB 接口。请确认平板处于 Fastboot，并使用长边 USB-C 数据接口。",
+        WindowsDriverCheckState.Connected => "Windows 已识别到正常绑定的 Fastboot 接口，但目标平板未通过命令核对。请检查连接记录及是否连接了其他设备。",
+        _ => "暂时无法确认 Windows Fastboot 驱动状态，请在“环境与驱动”重新检查。"
+    };
+
     private readonly string _adbPath;
     private readonly string _fastbootPath;
     private readonly ICommandRunner _runner;
     private readonly TimeProvider _clock;
+    private readonly Func<WindowsDriverCheckResult>? _fastbootDriverProbe;
 
     /// <summary>
     /// Creates the check. The two tool paths must be non-blank and the runner non-null; nothing is
@@ -213,7 +237,8 @@ public sealed class InternalInstallDeviceCheck
         string adbPath,
         string fastbootPath,
         ICommandRunner runner,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        Func<WindowsDriverCheckResult>? fastbootDriverProbe = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(adbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(fastbootPath);
@@ -223,6 +248,7 @@ public sealed class InternalInstallDeviceCheck
         _fastbootPath = fastbootPath;
         _runner = runner;
         _clock = clock ?? TimeProvider.System;
+        _fastbootDriverProbe = fastbootDriverProbe;
     }
 
     /// <summary>
@@ -327,6 +353,15 @@ public sealed class InternalInstallDeviceCheck
                 exception.Message);
         }
 
+        // Fork only: the TB710FU ABL (ZUXOS 495) falls into the 900E crash-dump mode when it is asked to enter
+        // fastboot (reproduced 2026-11-04 with a plain "adb reboot bootloader"), so this model never leaves
+        // Android here. Its boot facts come from the properties the bootloader handed to Android.
+        if (string.Equals(android.Identity.Model, DeviceModelRoutes.Tb710fuModel, StringComparison.Ordinal))
+        {
+            return await CheckFromAndroidBootPropertiesAsync(android, expectedSerial, progress, token)
+                .ConfigureAwait(false);
+        }
+
         var cancelled = false;
         var proven = false;
         var proofTerminal = false;
@@ -388,10 +423,12 @@ public sealed class InternalInstallDeviceCheck
                 if (_clock.GetElapsedTime(pollStart) >= FastbootTimeout)
                 {
                     proofExhausted = true;
+                    var driverDetail = await ReadFastbootDriverDiagnosticAsync().ConfigureAwait(false);
                     RecordFailure(
                         InternalDeviceCheckStage.WaitingFastboot,
                         $"在 {FastbootTimeout.TotalSeconds:0} 秒内未在 fastboot 中确认序列号 {expectedSerial}。"
-                        + (lastPollError is null ? string.Empty : $" 最近一次错误：{lastPollError}"));
+                        + (lastPollError is null ? string.Empty : $" 最近一次错误：{lastPollError}")
+                        + driverDetail);
                     break;
                 }
 
@@ -1053,6 +1090,69 @@ public sealed class InternalInstallDeviceCheck
         return string.IsNullOrWhiteSpace(value)
             ? await ReadShellPropertyAsync(serial, "ro.boot.serialno", token).ConfigureAwait(false)
             : value;
+    }
+
+    /// <summary>
+    /// Fork only (TB710FU): Step 1 without fastboot. The lock state must be reported consistently by both
+    /// ro.boot.flash.locked and ro.boot.vbmeta.device_state; the slot comes from ro.boot.slot_suffix; the
+    /// serial is the actual serial already proven above. The OTA snapshot state cannot be read without
+    /// fastboot or root and is taken as Completed: this tablet's Android is flashed over 9008, never by an OTA.
+    /// No reboot is issued, so the return to Android is trivially verified.
+    /// </summary>
+    private async Task<InternalDeviceCheckResult> CheckFromAndroidBootPropertiesAsync(
+        AndroidMaintenanceIdentity android,
+        string expectedSerial,
+        IProgress<InternalDeviceCheckProgress>? progress,
+        CancellationToken token)
+    {
+        progress?.Report(new InternalDeviceCheckProgress(
+            InternalDeviceCheckStage.CheckingBootloader,
+            "TB710FU：不进入 fastboot，改用 Android 启动属性"));
+
+        string flashLocked = await ReadShellPropertyAsync(expectedSerial, "ro.boot.flash.locked", token)
+            .ConfigureAwait(false);
+        string deviceState = await ReadShellPropertyAsync(expectedSerial, "ro.boot.vbmeta.device_state", token)
+            .ConfigureAwait(false);
+        string slotSuffix = await ReadShellPropertyAsync(expectedSerial, "ro.boot.slot_suffix", token)
+            .ConfigureAwait(false);
+
+        BootloaderState lockState = (flashLocked, deviceState) switch
+        {
+            ("1", "locked") => BootloaderState.Locked,
+            ("0", "unlocked") => BootloaderState.Unlocked,
+            _ => BootloaderState.Unknown,
+        };
+        string? currentSlot = slotSuffix switch
+        {
+            "_a" => "a",
+            "_b" => "b",
+            _ => null,
+        };
+
+        string? error = null;
+        if (lockState == BootloaderState.Unknown)
+        {
+            error = $"Android 报告的锁定状态不一致或未知（ro.boot.flash.locked=「{flashLocked}」，"
+                + $"ro.boot.vbmeta.device_state=「{deviceState}」），拒绝判定通过。";
+        }
+        else if (currentSlot is null)
+        {
+            error = $"Android 报告的 ro.boot.slot_suffix「{slotSuffix}」不是 _a 或 _b，拒绝判定通过。";
+        }
+
+        progress?.Report(new InternalDeviceCheckProgress(InternalDeviceCheckStage.Completed));
+
+        return new InternalDeviceCheckResult(
+            android,
+            expectedSerial,
+            null,
+            lockState,
+            OtaUpdateState.Completed,
+            AndroidReturnState.Verified,
+            false,
+            error is null ? null : InternalDeviceCheckStage.CheckingBootloader,
+            error,
+            currentSlot);
     }
 
     private async Task<string> ReadShellPropertyAsync(string serial, string property, CancellationToken token)

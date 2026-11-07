@@ -68,6 +68,7 @@ public sealed class InternalArtifactSet : IDisposable
         internal string SummaryManifestSha256 = string.Empty;
         internal long SummaryUsedBytes;
         internal Guid InstallationId;
+        internal InternalBackupSet? RecoveryBackup;
         internal List<FileStream> Locks = new List<FileStream>();
     }
 
@@ -87,6 +88,7 @@ public sealed class InternalArtifactSet : IDisposable
     private readonly string _summaryManifestSha256;
     private readonly long _summaryUsedBytes;
     private readonly Guid _installationId;
+    internal InternalBackupSet? RecoveryBackup { get; }
     private readonly List<FileStream> _locks;
     private int _disposed;
 
@@ -115,6 +117,7 @@ public sealed class InternalArtifactSet : IDisposable
         _summaryManifestSha256 = state.SummaryManifestSha256;
         _summaryUsedBytes = state.SummaryUsedBytes;
         _installationId = state.InstallationId;
+        RecoveryBackup = state.RecoveryBackup;
         _locks = new List<FileStream>(state.Locks);
     }
 
@@ -280,11 +283,12 @@ public static class InternalInstallArtifacts
         long androidGiB,
         PackageStorage storage,
         string chosenParent,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        InternalBackupSet? recoveryBackup = null)
     {
         ValidateArguments(backup, androidGiB, storage, chosenParent, token);
 
-        return await Task.Run(() => Prepare(backup, androidGiB, storage, chosenParent, token), CancellationToken.None)
+        return await Task.Run(() => Prepare(backup, androidGiB, storage, chosenParent, token, recoveryBackup), CancellationToken.None)
             .ConfigureAwait(false);
     }
 
@@ -295,7 +299,8 @@ public static class InternalInstallArtifacts
         long androidGiB,
         PackageStorage storage,
         string chosenParent,
-        CancellationToken token)
+        CancellationToken token,
+        InternalBackupSet? recoveryBackup)
     {
         token.ThrowIfCancellationRequested();
 
@@ -356,7 +361,19 @@ public static class InternalInstallArtifacts
             installationId, backup, original, lun0Geometry, allocation, rewrite, uuids);
         var planSha256 = Sha256Hex(recordBytes);
 
-        var payloads = BuildPayloadList(captures, backup, rewrite, recordBytes, planSha256);
+        if (InternalPartitionPlanner.FindReusableBackup(original) is not null && recoveryBackup is null)
+            throw new InvalidDataException("A retained recovery partition requires its original recovery backup before reuse.");
+        var recoverySource = recoveryBackup ?? backup;
+        if (recoveryBackup is not null)
+        {
+            BoardRecoveryBackup.ValidateSource(backup, recoveryBackup);
+            VerifyFileHash(recoveryBackup.ManifestPath, recoveryBackup.ManifestSha256, "the original recovery manifest", token);
+            captures = new Dictionary<string, VerifiedCapture>(
+                VerifyCapturedInputs(recoveryBackup.Files, recoveryBackup.Geometries, recoveryBackup.Tables, recoveryBackup.Model, token)
+                    .Where(p => !BackupPartitionPolicy.IsExcluded(p.Key))
+                    .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal), StringComparer.Ordinal);
+        }
+        var payloads = BuildPayloadList(captures, recoverySource, rewrite, recordBytes, planSha256);
         var payloadLengths = new long[payloads.Count];
         for (var index = 0; index < payloads.Count; index++)
         {
@@ -368,8 +385,8 @@ public static class InternalInstallArtifacts
         var manifestJson = BuildRecoveryManifestJson(
             installationId,
             planSha256,
-            backup.ManifestSha256,
-            original.SourceFingerprint,
+            recoverySource.ManifestSha256,
+            recoverySource.Tables[0].SourceFingerprint,
             rewrite.PostTable.SourceFingerprint,
             uuids,
             payloads,
@@ -519,6 +536,7 @@ public static class InternalInstallArtifacts
             var state = new InternalArtifactSet.State
             {
                 DirectoryPath = directory,
+                RecoveryBackup = recoveryBackup,
                 Allocation = allocation,
                 PostGpt = rewrite.PostTable,
                 LinuxBoot = rewrite.LinuxBoot,
@@ -652,9 +670,13 @@ public static class InternalInstallArtifacts
             throw new InvalidDataException("The planned Android window does not fit inside the original userdata.");
         }
 
+        var retainedBackup = InternalPartitionPlanner.FindReusableBackup(original);
+        var backupLimit = retainedBackup is null ? originalEnd
+            : checked(retainedBackup.StartSector + retainedBackup.SectorCount);
         if (allocation.BackupBytes != BoardArchiveBytes
             || allocation.BackupSectorCount != BoardArchiveBytes / allocation.SectorSize
-            || allocation.BackupEndSectorExclusive > originalEnd)
+            || allocation.BackupEndSectorExclusive > backupLimit
+            || (retainedBackup is not null && allocation.BackupStartSector != retainedBackup.StartSector))
         {
             throw new InvalidDataException("The planned backup tail is not the fixed 2 GiB tail below userdata.");
         }
@@ -1176,6 +1198,12 @@ public static class InternalInstallArtifacts
             throw new InvalidDataException("The planned Android window does not fit inside the original userdata.");
         }
 
+        var retainedBackup = InternalPartitionPlanner.FindReusableBackup(original);
+        if (retainedBackup is not null
+            && (Guid.Parse(retainedBackup.PartUuid) != backupUuid
+                || retainedBackup.StartSector != allocation.BackupStartSector
+                || retainedBackup.SectorCount != allocation.BackupSectorCount))
+            throw new InvalidDataException("The retained backup does not match the planned backup.");
         var freeSlots = new List<int>();
         var existingUuids = new HashSet<Guid>();
         for (var index = 0; index < entryCount; index++)
@@ -1191,17 +1219,19 @@ public static class InternalInstallArtifacts
             existingUuids.Add(new Guid(primaryArray.AsSpan(offset + EntryPartUuidOffset, 16)));
 
             var name = DecodeName(primaryArray, offset + EntryNameOffset);
-            if (name.StartsWith("ARMADA_", StringComparison.OrdinalIgnoreCase))
+            if (name.StartsWith("ARMADA_", StringComparison.OrdinalIgnoreCase)
+                && (retainedBackup is null || index + 1 != retainedBackup.Number || name != "ARMADA_BACKUP"))
             {
                 throw new InvalidDataException(
                     $"The original table already owns a partition named '{name}'.");
             }
         }
 
-        if (freeSlots.Count < 3)
+        var requiredSlots = retainedBackup is null ? 3 : 2;
+        if (freeSlots.Count < requiredSlots)
         {
             throw new InvalidDataException(
-                $"The original table has {freeSlots.Count} free entry slots; the rewrite needs three.");
+                $"The original table has {freeSlots.Count} free entry slots; the rewrite needs {requiredSlots}.");
         }
 
         var newPartitions = new[]
@@ -1219,7 +1249,8 @@ public static class InternalInstallArtifacts
                 throw new ArgumentException("A new partition UUID must not be empty.", nameof(bootUuid));
             }
 
-            if (existingUuids.Contains(partition.PartUuid) || !seenUuids.Add(partition.PartUuid))
+            var isRetained = partition.Name == "ARMADA_BACKUP" && retainedBackup is not null;
+            if ((!isRetained && existingUuids.Contains(partition.PartUuid)) || !seenUuids.Add(partition.PartUuid))
             {
                 throw new InvalidDataException("A new partition UUID repeats a UUID the table already uses.");
             }
@@ -1249,6 +1280,11 @@ public static class InternalInstallArtifacts
         var linuxType = Guid.Parse(LinuxDataGuidText);
         for (var index = 0; index < newPartitions.Length; index++)
         {
+            if (index == 2 && retainedBackup is not null)
+            {
+                newPartitions[index].Number = retainedBackup.Number;
+                continue;
+            }
             var slot = freeSlots[index];
             var offset = slot * GptEntryBytes;
             newPartitions[index].Number = slot + 1;
@@ -1365,7 +1401,8 @@ public static class InternalInstallArtifacts
         InternalAllocationPlan allocation,
         IReadOnlyList<NewPartition> newPartitions)
     {
-        if (post.Partitions.Count != original.Partitions.Count + 3)
+        var retainedBackup = InternalPartitionPlanner.FindReusableBackup(original);
+        if (post.Partitions.Count != original.Partitions.Count + (retainedBackup is null ? 3 : 2))
         {
             throw new InvalidDataException("The rebuilt table does not carry exactly three extra entries.");
         }
@@ -1416,7 +1453,8 @@ public static class InternalInstallArtifacts
                 || !string.Equals(after.PartUuid, planned.PartUuid.ToString("D").ToUpperInvariant(), StringComparison.Ordinal)
                 || after.StartSector != planned.StartSector
                 || after.SectorCount != planned.SectorCount
-                || after.Attributes != 0UL)
+                || after.Attributes != (planned.Name == "ARMADA_BACKUP" && retainedBackup is not null
+                    ? retainedBackup.Attributes : 0UL))
             {
                 throw new InvalidDataException($"The rebuilt table does not carry '{planned.Name}' as planned.");
             }
@@ -1483,7 +1521,8 @@ public static class InternalInstallArtifacts
         {
             Boot = NewUniqueUuid(used),
             Root = NewUniqueUuid(used),
-            Backup = NewUniqueUuid(used),
+            Backup = InternalPartitionPlanner.FindReusableBackup(original) is { } retained
+                ? Guid.Parse(retained.PartUuid) : NewUniqueUuid(used),
         };
     }
 
@@ -1572,7 +1611,7 @@ public static class InternalInstallArtifacts
                 json.WriteNumber("number", partition.Number);
                 json.WriteString("partUuid", partition.PartUuid.ToString("D").ToUpperInvariant());
                 json.WriteString("typeGuid", LinuxDataGuidText);
-                json.WriteNumber("attributes", 0UL);
+                json.WriteNumber("attributes", rewrite.PostTable.Partitions.Single(p => p.Number == partition.Number).Attributes);
                 json.WriteNumber("startSector", partition.StartSector);
                 json.WriteNumber("sectorCount", partition.SectorCount);
                 json.WriteEndObject();

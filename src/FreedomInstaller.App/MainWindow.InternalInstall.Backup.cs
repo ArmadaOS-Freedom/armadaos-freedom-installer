@@ -354,7 +354,7 @@ public partial class MainWindow
     /// 真实只读备份的唯一实现（原「开始备份」正文）：已有 9008 会话时严格复用同一客户端与工具链；
     /// 没有会话时先加载并校验工具链、重新确认同一台平板，然后只自动进入一次 9008。
     /// </summary>
-    private async System.Threading.Tasks.Task BackupInternalInstallCoreAsync()
+    private async System.Threading.Tasks.Task BackupInternalInstallCoreAsync(bool useBoardBackup = false)
     {
         // 共享谓词：安装与维护都从这里发起（全新）备份；维护受保护状态拒绝。
         if (!_ready || _busy || _internalInstallOperationActive || !UsesSharedDevicePreparationPages)
@@ -405,9 +405,18 @@ public partial class MainWindow
             ? CurrentAndroidForBackup
             : _internalInstallDeviceCheck?.Android;
         var parent = _internalInstallBackupParent;
+        if (useBoardBackup)
+        {
+            if (!IsInternalInstallMode || !_internalInstallBoardBackupDetected) return;
+            if (string.IsNullOrWhiteSpace(parent))
+            {
+                parent = DefaultRecoveryOutputDirectory();
+                ApplyInternalInstallBackupParent(parent);
+            }
+        }
 
         // 共享模式只允许全新备份：复用已有备份一律内部安装模式专用；TF 卡安装保持全新。
-        var useExisting = !IsSharedNonInternalDeviceMode && _internalInstallBackupUseExisting;
+        var useExisting = !useBoardBackup && !IsSharedNonInternalDeviceMode && _internalInstallBackupUseExisting;
         var existingDirectory = _internalInstallBackupExistingDirectory;
 
         // 非内部模式按共享事实门槛判定；内部安装保持原有完整检查门槛。
@@ -489,11 +498,11 @@ public partial class MainWindow
         // 或还没有随附工具归档时，一律停在安卓，不发设备命令，也不解包任何工具。
         var selectedIdentity = storedAndroid.Identity;
 
-        // 只开放识别与只读检查的型号（TB710FU）：安装备份属于安装路线，在进入 9008 之前停下。
-        if (DeviceModelRoutes.IsWriteRoutePending(selectedIdentity.Model))
+        // 当前模式的写入路线尚未开放的型号（TB710FU 的维护 / 卸载 / TF 卡）：在进入 9008 之前停下。
+        if (IsCurrentModeRoutePending(selectedIdentity.Model))
         {
             SetInternalInstallBackupStatus(
-                M("Dynamic.Model.RoutePending", Placeholder(selectedIdentity.Model)));
+                M("Dynamic.Model.RoutePending", UiText.ModelName(selectedIdentity.Model)));
             return;
         }
 
@@ -506,7 +515,7 @@ public partial class MainWindow
             SetInternalInstallBackupStatus(
                 M(
                     "Dynamic.InternalInstall.Backup.ProfileUnavailable",
-                    Placeholder(selectedIdentity.Model),
+                    UiText.ModelName(selectedIdentity.Model),
                     Placeholder(selectedIdentity.Firmware?.DisplayId)));
             return;
         }
@@ -578,7 +587,7 @@ public partial class MainWindow
                         if (!ReferenceEquals(loaded.Profile, profile)
                             || !profile.SupportsIdentity(expected.Identity))
                         {
-                            var loadedModel = loaded.Model;
+                            var loadedModel = UiText.ModelName(loaded.Model);
                             var loadedBuild = loaded.AndroidBuild;
 
                             // 尚未切换到任何模式：释放这份刚加载、没有被使用的工具链。
@@ -682,20 +691,27 @@ public partial class MainWindow
                         RenderInternalInstallBackupProgress(report);
                     });
 
-                    // 卸载模式的安卓备份路线：在实际 CreateAsync 之前，先只读校验用户所选原厂恢复备份；
-                    // 已-9008 路线在进入本方法前已做同样校验，此处仅补齐安卓路线。
-                    // 必须 using 持有校验对象，否则会泄露全部输入文件句柄；结果本身不需要保留。
-                    if (!useExisting && IsModernUserdataUninstallMode)
-                    {
-                        using var validation = await InternalInstallBackup.OpenOriginalGptForUninstallAsync(
-                            activeClient,
-                            _bootMaintenanceOriginalDirectory ?? string.Empty,
-                            progress: null,
-                            token);
-                    }
-
                     // 唯一一次真实调用：已有模式只校验原始目录，正常模式才在父目录下新建子目录。
-                    var set = useExisting
+                    InternalBackupSet set;
+                    if (useBoardBackup)
+                    {
+                        SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.ReadingBoard"));
+                        var recoveredDirectory = await BoardRecoveryBackup.ReadDirectoryAsync(
+                            activeClient, parentPath, TemporaryWorkRoot, token)
+                            ?? throw new InvalidDataException(T("Dynamic.RecoverySource.BoardMissing"));
+                        var recovery = await InternalInstallBackup.OpenRecoveryAsync(activeClient, recoveredDirectory, token: token);
+                        try
+                        {
+                            set = await InternalInstallBackup.CreatePreparationSnapshotAsync(
+                                activeClient, recovery, TemporaryWorkRoot, progress, token);
+                        }
+                        catch { recovery.Dispose(); throw; }
+                        _internalInstallRecoverySource = recovery;
+                        _boardRecoveryDiscoveredDirectory = recoveredDirectory;
+                        _boardRecoveryAttemptManifest = set.ManifestSha256;
+                        AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", recoveredDirectory));
+                    }
+                    else set = useExisting
                         ? await InternalInstallBackup.OpenExistingAsync(
                             activeClient,
                             existingDirectory!,
@@ -735,7 +751,14 @@ public partial class MainWindow
                         _internalInstallBackup = set;
                     }
 
-                    RenderInternalInstallBackupSuccess(useExisting ? set : _internalInstallBackup!, useExisting);
+                    if (useBoardBackup)
+                    {
+                        SetInternalInstallBackupProgressIndeterminate(false, 100);
+                        SetInternalInstallBackupVerified(M("Dynamic.InternalInstall.Backup.KeepEdl"));
+                        RenderInternalInstallBackupDetail();
+                        SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.BoardReady", _internalInstallRecoverySource!.DirectoryPath));
+                    }
+                    else RenderInternalInstallBackupSuccess(useExisting ? set : _internalInstallBackup!, useExisting);
                     RefreshInternalInstallActions();
                 }
                 catch (OperationCanceledException)
@@ -912,7 +935,7 @@ public partial class MainWindow
             "Dynamic.InternalInstall.Backup.DetailManifestHashLabel");
 
         // 退出维护后只读锁会释放，但已确认的目录、清单与摘要作为证据继续显示，不丢字符串。
-        var set = _internalInstallBackup;
+        var set = IsInternalInstallMode ? _internalInstallRecoverySource ?? _internalInstallBackup : _internalInstallBackup;
         SetText(
             InternalInstallBackupDirectoryText,
             "Dynamic.RawValue",
@@ -1104,6 +1127,9 @@ public partial class MainWindow
 
         // 备份对象一换，容量规划与旧确认对象都必须作废；有效的系统包可以留到同一型号的下一次备份。
         InvalidateInternalInstallAllocation(clearPackage: false);
+        _internalInstallRecoverySource?.Dispose();
+        _internalInstallRecoverySource = null;
+        _boardRecoveryAttemptManifest = null;
 
         var backup = _internalInstallBackup;
         _internalInstallBackup = null;
@@ -1138,7 +1164,7 @@ public partial class MainWindow
     /// <summary>把当前真实备份对象的位置与摘要复制成显示证据；不保留任何只读句柄。</summary>
     private void RetainInternalInstallBackupEvidence()
     {
-        var set = _internalInstallBackup;
+        var set = IsInternalInstallMode ? _internalInstallRecoverySource ?? _internalInstallBackup : _internalInstallBackup;
         if (set is null)
         {
             return;
