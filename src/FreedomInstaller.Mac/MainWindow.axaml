@@ -703,7 +703,7 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- ================= 支持项目 ================= -->
+            <!-- ================= 关于项目（与 WPF 窗口的关于页一致） ================= -->
             <ScrollViewer x:Name="SupportPage"
                           Grid.Column="0"
                           Grid.ColumnSpan="3"
@@ -712,7 +712,7 @@
                           Padding="0,0,14,0"
                           Margin="0,0,0,12"
                           IsVisible="False">
-                <StackPanel>
+                <StackPanel MaxWidth="1080" HorizontalAlignment="Stretch">
                     <Button Content="{DynamicResource Static.SupportBack}"
                             Theme="{StaticResource GhostButton}"
                             Click="OnCloseSupport"
@@ -720,19 +720,250 @@
                             Padding="0,4"
                             Margin="0,0,0,8" />
                     <TextBlock Text="{DynamicResource Static.SupportTitle}" Classes="H1Text" />
-                    <TextBlock Text="{DynamicResource Static.SupportLead}" Classes="BodyText" Margin="0,8,0,0" />
-                    <TextBlock Text="{DynamicResource Static.SupportSponsor}" Classes="BodyText" Margin="0,10,0,0" />
-                    <Border Classes="CardBorder" Margin="0,16,0,16">
+
+                    <!-- 项目简介与版本 -->
+                    <Border Classes="CardBorder" Padding="16" Margin="0,16,0,16">
                         <StackPanel>
-                            <Image Source="/Assets/sponsor-zh.png"
-                                   MaxWidth="1000"
-                                   Stretch="Uniform"
-                                   StretchDirection="DownOnly"
-                                   HorizontalAlignment="Left" />
-                            <TextBlock Text="{DynamicResource Static.SupportNote}" Classes="BodyInkText" FontWeight="SemiBold" Margin="0,14,0,0" />
-                            <TextBlock Text="{DynamicResource Static.SupportTail}" Classes="CaptionText" Margin="0,6,0,0" />
+                            <TextBlock Text="{DynamicResource Dynamic.AboutIntroTitle}" Classes="H2Text" Margin="0,0,0,8" />
+                            <TextBlock Text="{DynamicResource Dynamic.AboutIntroBody}" Classes="BodyText" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBlock Text="{DynamicResource Dynamic.AboutCurrentVersion}"
+                                           Classes="CaptionText"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0" />
+                                <TextBlock x:Name="AboutVersionText" Classes="BodyInkText" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button Content="{DynamicResource Dynamic.AboutRepository}"
+                                        Theme="{StaticResource SecondaryButton}"
+                                        Click="OnOpenAboutRepository" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
+
+                    <!-- 开发者 -->
+                    <TextBlock Text="{DynamicResource Dynamic.AboutDevelopers}" Classes="H2Text" Margin="0,12,0,8" />
+                    <UniformGrid Columns="3" Rows="1" Margin="0,0,0,4">
+                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="0,0,8,0">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <Image Source="/Assets/about-mydanyi.jpg"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Static.AuthorName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Static.AuthorName}"
+                                               Classes="H2Text"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleAuthor}"
+                                               Classes="CaptionText"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="4,0,4,0">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <Image Source="/Assets/about-lich-wang.jpg"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutLichWangName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutLichWangName}"
+                                               Classes="H2Text"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleDeveloper}"
+                                               Classes="CaptionText"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenLichWangGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenLichWangBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="8,0,0,0">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <Image Source="/Assets/about-h0cheung.png"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutH0CheungName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutH0CheungName}"
+                                               Classes="H2Text"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleDeveloper}"
+                                               Classes="CaptionText"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenH0CheungGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenH0CheungBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </UniformGrid>
+
+                    <!-- 特别感谢 -->
+                    <TextBlock Text="{DynamicResource Dynamic.AboutSpecialThanks}" Classes="H2Text" Margin="0,12,0,8" />
+                    <UniformGrid Columns="2" Rows="1" Margin="0,0,0,4">
+                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="0,0,8,0">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <Image Source="/Assets/about-sunflower2333.png"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutSunflowerName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutSunflowerName}"
+                                               Classes="H2Text"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenSunflowerGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="8,0,0,0">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <Image Source="/Assets/about-bilibili-509773383.jpg"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutBilibiliThanksName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutBilibiliThanksName}"
+                                               Classes="H2Text"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenBilibiliThanks"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </UniformGrid>
+
+                    <!-- 社区与反馈 -->
+                    <TextBlock Text="{DynamicResource Dynamic.AboutCommunity}" Classes="H2Text" Margin="0,16,0,8" />
+                    <Border Classes="CardBorder" Padding="16" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Dynamic.AboutQqGroup}" Classes="BodyInkText" FontWeight="SemiBold" />
+                            <TextBlock Text="{DynamicResource Dynamic.AboutQqNumber}" Classes="BodyInkText" Margin="0,4,0,0" />
+                            <TextBlock Text="{DynamicResource Dynamic.AboutQqInvitation}"
+                                       Classes="BodyText"
+                                       TextWrapping="Wrap"
+                                       Margin="0,6,0,0" />
+                            <Button Content="{DynamicResource Dynamic.AboutCopyQq}"
+                                    Theme="{StaticResource SecondaryButton}"
+                                    Click="OnCopyQqGroup"
+                                    HorizontalAlignment="Left"
+                                    Margin="0,10,0,0" />
+                            <TextBlock x:Name="AboutCopyStatus" Classes="CaptionText" IsVisible="False" Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 支持项目 -->
+                    <TextBlock Text="{DynamicResource Dynamic.AboutSupportSection}" Classes="H2Text" Margin="0,16,0,8" />
+                    <TextBlock Text="{DynamicResource Static.SupportSponsor}"
+                               Classes="BodyText"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,10" />
+                    <WrapPanel>
+                        <Border Classes="CardBorder" Width="300" Padding="20" Margin="0,0,16,16">
+                            <StackPanel>
+                                <TextBlock Text="{DynamicResource Static.SupportAlipayTitle}" Classes="H2Text" />
+                                <TextBlock Text="{DynamicResource Static.SupportAlipayScan}"
+                                           Classes="BodyText"
+                                           TextWrapping="Wrap"
+                                           Margin="0,6,0,8" />
+                                <Border Background="White" Padding="12" CornerRadius="8" HorizontalAlignment="Center">
+                                    <Image Width="200" Height="200" Stretch="Uniform"
+                                           RenderOptions.BitmapInterpolationMode="HighQuality"
+                                           AutomationProperties.Name="{DynamicResource Static.SupportAlipayQrAutomationName}">
+                                        <Image.Source>
+                                            <CroppedBitmap Source="/Assets/sponsor-zh.png" SourceRect="435,432,330,324" />
+                                        </Image.Source>
+                                    </Image>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                        <Border Classes="CardBorder" Width="300" Padding="20" Margin="0,0,16,16">
+                            <StackPanel>
+                                <TextBlock Text="{DynamicResource Static.SupportWeChatTitle}" Classes="H2Text" />
+                                <TextBlock Text="{DynamicResource Static.SupportWeChatScan}"
+                                           Classes="BodyText"
+                                           TextWrapping="Wrap"
+                                           Margin="0,6,0,8" />
+                                <Border Background="White" Padding="12" CornerRadius="8" HorizontalAlignment="Center">
+                                    <Image Width="200" Height="200" Stretch="Uniform"
+                                           RenderOptions.BitmapInterpolationMode="HighQuality"
+                                           AutomationProperties.Name="{DynamicResource Static.SupportWeChatQrAutomationName}">
+                                        <Image.Source>
+                                            <CroppedBitmap Source="/Assets/sponsor-zh.png" SourceRect="950,446,292,292" />
+                                        </Image.Source>
+                                    </Image>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                    </WrapPanel>
+
+                    <TextBlock Text="{DynamicResource Static.SupportNote}" Classes="BodyInkText" FontWeight="SemiBold" Margin="0,14,0,0" />
+                    <TextBlock Text="{DynamicResource Static.SupportTail}" Classes="CaptionText" Margin="0,6,0,0" />
                 </StackPanel>
             </ScrollViewer>
         </Grid>

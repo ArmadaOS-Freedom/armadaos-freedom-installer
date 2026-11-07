@@ -76,6 +76,8 @@
 
   <ItemGroup>
     <AvaloniaResource Include="..\FreedomInstaller.App\Assets\sponsor-zh.png" Link="Assets\sponsor-zh.png" />
+    <!-- The About page shares the WPF window's images: every about-* asset upstream adds is picked up here. -->
+    <AvaloniaResource Include="..\FreedomInstaller.App\Assets\about-*" Link="Assets\%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

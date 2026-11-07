@@ -102,6 +102,8 @@ public partial class MainWindow : Window
         _pageBeforeSupport = EnvironmentPage.IsVisible ? EnvironmentPage
             : HomePage.IsVisible ? HomePage
             : WorkflowScrollViewer;
+        AboutVersionText.Text = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? string.Empty;
+        AboutCopyStatus.IsVisible = false;
         ShowView(SupportPage);
     }
 
