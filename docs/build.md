@@ -31,7 +31,7 @@ python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /w
 python3 -B maintenance/build_installer_macos.py --work-dir "$PWD/artifacts/build-macos" --output-dir "$PWD/artifacts/publish-macos"
 ```
 
-产物为 `artifacts/publish-macos/ArmadaOS Freedom Installer.app`，未签名、未公证，首次打开时需在“系统设置 → 隐私与安全性”中确认。脚本复用 Windows 构建的清单、厂商文件与下载校验：edl-ng 编译为 osx-arm64，打包工具用 `tools/build-boot-packers-macos.sh` 编为通用二进制，libusb 取自同一个已固定哈希的 LibUsbDotNet 包中的 `runtimes/osx-arm64/native/libusb-1.0.dylib`，再按本次产物生成固定哈希，用 `package_edl.py --platform macos-arm64` 制作各型号 9008 工具包（不含 Python）。
+产物为 `artifacts/publish-macos/ArmadaOS Freedom Installer.app`，未签名、未公证，首次打开时需在“系统设置 → 隐私与安全性”中确认。脚本复用 Windows 构建的清单、厂商文件与下载校验：edl-ng 编译为 osx-arm64，打包工具用 `tools/build-boot-packers-macos.sh` 编为通用二进制，libusb 取自同一个已固定哈希的 LibUsbDotNet 包中的 `runtimes/osx-arm64/native/libusb-1.0.dylib`，再按本次产物生成固定哈希，用 `package_edl.py --platform macos-arm64` 制作各型号（TB322FC、TB323FU、TB710FU）9008 工具包（不含 Python）。adb 和 fastboot 取自清单中固定哈希的 Google macOS 版 platform-tools（`platformToolsMacos`），嵌入程序，首次运行时解压到 `~/Library/Application Support/FreedomInstaller/platform-tools`。
 
 ## 构建流程
 
