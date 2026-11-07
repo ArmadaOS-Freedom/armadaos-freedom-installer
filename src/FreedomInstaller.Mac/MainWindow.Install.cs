@@ -796,7 +796,7 @@ public partial class MainWindow
         {
             try
             {
-                SetText(InternalInstallPackageStatusText, "Dynamic.InternalInstall.Capacity.Validating");
+                SetText(InternalInstallPackageStatusText, "Dynamic.InternalInstall.Capacity.Importing");
                 var packageWork = Path.Combine(_internalInstallBackupParent!, "package");
                 Directory.CreateDirectory(packageWork);
                 var imported = await PackageImporter.ImportAsync(path, backup.Model, InstallationTarget.Internal, packageWork, token);

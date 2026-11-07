@@ -48,6 +48,11 @@ internal sealed class Localization
             resources[pair.Key] = pair.Value;
         }
 
+        // As in the WPF window, the title carries the installer version, which the project takes from the WPF one.
+        resources["Static.Title"] = _text.Get(
+            "Static.Title",
+            typeof(Localization).Assembly.GetName().Version?.ToString(3) ?? string.Empty);
+
         foreach (var (target, message) in _texts)
         {
             target.Text = _text.Format(message);

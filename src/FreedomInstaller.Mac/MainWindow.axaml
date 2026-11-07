@@ -654,18 +654,6 @@
                         <Button IsEnabled="False" Theme="{StaticResource FunctionCard}" Margin="0,0,12,12">
                             <Grid ColumnDefinitions="Auto,*">
                                 <Border Grid.Column="0" Classes="FunctionCardIcon">
-                                    <Path Data="M 5 10 H 14 C 17 10 17 16 14 16 H 9 M 5 10 L 9 6 M 5 10 L 9 14" Width="18" Height="18" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.8" />
-                                </Border>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="{DynamicResource Static.Function.Restore.Title}" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource InkBrush}" TextWrapping="Wrap" />
-                                    <TextBlock Text="{DynamicResource Static.Function.Restore.Desc}" FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                                    <TextBlock Text="{DynamicResource Static.Mac.WindowsOnly}" FontSize="11" Foreground="{DynamicResource WarnBrush}" Margin="0,6,0,0" />
-                                </StackPanel>
-                            </Grid>
-                        </Button>
-                        <Button IsEnabled="False" Theme="{StaticResource FunctionCard}" Margin="0,0,12,12">
-                            <Grid ColumnDefinitions="Auto,*">
-                                <Border Grid.Column="0" Classes="FunctionCardIcon">
                                     <Path Data="M 4 12 H 15 M 11 8 L 15 12 L 11 16 M 19 5 V 19" Width="18" Height="18" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.8" />
                                 </Border>
                                 <StackPanel Grid.Column="1">

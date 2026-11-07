@@ -1,5 +1,5 @@
 {
-  "Static.Title": "ArmadaOS Freedom Installer 0.7.6 (macOS)",
+  "Static.Title": "ArmadaOS Freedom Installer {0} (macOS)",
   "Static.Environment.Title": "Environment check",
   "Static.Environment.Lead": "Check this Mac first, then choose an operation.",
   "Static.Environment.System": "macOS",
