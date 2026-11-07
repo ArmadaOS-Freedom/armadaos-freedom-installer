@@ -40,7 +40,7 @@ python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /w
 | 组件 | 来源与处理方式 |
 | --- | --- |
 | 修改版 edl-ng | 源码在 `tools/edl-ng`，基于 strongtz/edl-ng v1.6.0、提交 `834f91ea2d2dfc7b6337af0e8e54d5ea93e037f4`；包含 Firehose 数据边界处理、Sahara 多镜像加载及 identify 命令。构建脚本为 `tools/build-edl-ng.sh`。 |
-| 修改版 boot 打包／解包工具 | 源码在 `tools/boot-packers`，基于 Project-Aloha/DualBootKernelPatcher 提交 `2276163d066596cb0750e76cbfeec5c193b1779f`；包含 PayloadFrom 别名和 DTB 对齐支持。构建脚本为 `tools/build-boot-packers.sh`，inih 源码已包含。 |
+| 修改版 boot 打包／解包工具 | 源码在 `tools/boot-packers`，基于 Project-Aloha/DualBootKernelPatcher 提交 `2276163d066596cb0750e76cbfeec5c193b1779f`；包含 PayloadFrom 别名、DTB 对齐和 Windows Unicode 长路径支持。构建脚本为 `tools/build-boot-packers.sh`，inih 源码已包含。 |
 | AVB / GPT 脚本 | 直接使用仓库 `maintenance/` 中的四份 Python 源文件。 |
 | platform-tools | Google 官方固定版本 37.0.1 Windows ZIP。 |
 | Python | python.org 官方 3.14.8 Windows AMD64 嵌入式 ZIP。 |
@@ -84,3 +84,11 @@ python3 -B -m unittest discover -s maintenance/tests -p test_android_driver_pack
 ```
 
 Core 的工具测试需要使用本次 `build-record.json` 中的工具和两个包，并传入同一份 `BundledBuildInputsProps`。涉及真实历史日志的测试仍需其声明的外部输入。编译与合成测试不代替平板安装、签名链和系统启动的真机验收。
+
+Windows 原生打包与解包路径回归（使用本次构建出的两个 EXE；只生成合成测试文件）：
+
+```powershell
+python -B tools/boot-packers/tests/windows_paths.py --packer <MultiBootKernelPatcher.exe路径> --unpacker <UnpackTool.exe路径> --work-root <测试目录>
+```
+
+覆盖长路径、中文名称、绝对路径和网络共享路径；每个成功用例都会逐字节比较重打包结果。网络共享路径需将测试目录放在实际可用的共享中。失败现场保留在测试目录下。

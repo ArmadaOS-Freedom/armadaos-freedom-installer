@@ -1,3 +1,4 @@
+#include "file_io.h"
 #include "image_format.h"
 #include "log.h"
 #include "manifest.h"
@@ -5,11 +6,6 @@
 #include <stdbool.h>
 #include <string.h>
 #include <sys/stat.h>
-
-#ifdef _WIN32
-#include <direct.h>
-#define mkdir(path, mode) _mkdir(path)
-#endif
 
 #define UNPACK_PATH_SIZE 4096U
 
@@ -30,9 +26,13 @@ join_path(char *result, size_t size, const char *directory, const char *name)
 
 static bool make_directory(const char *path)
 {
-  if (mkdir(path, 0777) == 0)
+  if (make_directory_utf8(path) == 0)
     return true;
-  return errno == EEXIST;
+  if (errno != EEXIST) {
+    fprintf(stderr, "mkdir failed: %s: errno=%d\n", path ? path : "(null)", errno);
+    return false;
+  }
+  return true;
 }
 
 static bool write_buffer(const char *path, const uint8_t *buffer, size_t size)
@@ -436,9 +436,14 @@ static bool write_config(const PackedImage *packed, const char *directory)
   char path[UNPACK_PATH_SIZE * 2];
   if (!join_path(path, sizeof(path), directory, "config.cfg"))
     return false;
-  FILE *file = fopen(path, "w");
-  if (file == NULL)
+  FILE *file = open_file_utf8(path, "w");
+  if (file == NULL) {
+    int openError = errno;
+    log_err(
+        "Failed to open %s for writing: errno=%d (%s)", path, openError,
+        strerror(openError));
     return false;
+  }
 
   const Manifest *manifest = packed->manifest;
   fprintf(file, "[Pack]\nShim=Shim.bin\nOutput=RepackedKernel\n");
@@ -486,7 +491,7 @@ static bool write_config(const PackedImage *packed, const char *directory)
   return fclose(file) == 0;
 }
 
-int main(int argc, char **argv)
+static int unpack_entry(int argc, char **argv)
 {
   if (argc != 3) {
     log_err("Usage: UnpackTool <PatchedKernel> <OutputDir>");
@@ -507,3 +512,15 @@ int main(int argc, char **argv)
   free(packed.buffer);
   return 0;
 }
+
+#ifdef WINDOWS_UTF8_ENTRY
+int wmain(int argc, wchar_t **argv)
+{
+  return run_utf8_main(unpack_entry, argc, argv);
+}
+#else
+int main(int argc, char **argv)
+{
+  return unpack_entry(argc, argv);
+}
+#endif

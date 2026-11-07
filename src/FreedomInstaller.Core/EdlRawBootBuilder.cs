@@ -1483,36 +1483,28 @@ public static partial class EdlRawBootBuilder
         string subject,
         CancellationToken cancellationToken)
     {
-        var command = new ProcessCommand(executable, arguments, NativeCommandTimeout)
+        ProcessCommand command = CreateNativeCommand(executable, arguments, workingDirectory);
+        ProcessResult result;
+        try
         {
-            WorkingDirectory = workingDirectory,
-        };
-
-        ProcessResult result = await runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
-        if (result.ExitCode == 0)
-        {
-            return;
+            result = await runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
         }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            string? report = TrySaveNativeFailure(command, workingDirectory, subject, null, exception);
+            throw new IOException(subject + ": " + exception.Message
+                + (report is null ? "" : " Diagnostic record: " + report), exception);
+        }
+        if (result.ExitCode == 0) return;
 
-        string diagnostic = result.StandardError.Trim();
+        string? receipt = TrySaveNativeFailure(command, workingDirectory, subject, result, null);
+        string diagnostic = CleanNativeDiagnostic(result.StandardError, DiagnosticTextLimit).Trim();
         if (diagnostic.Length == 0)
-        {
-            diagnostic = result.StandardOutput.Trim();
-        }
-
-        if (diagnostic.Length > DiagnosticTextLimit)
-        {
-            diagnostic = diagnostic.Substring(0, DiagnosticTextLimit);
-        }
-
-        if (diagnostic.Length == 0)
-        {
-            diagnostic = "(no diagnostic output)";
-        }
-
+            diagnostic = CleanNativeDiagnostic(result.StandardOutput, DiagnosticTextLimit).Trim();
+        if (diagnostic.Length == 0) diagnostic = "(no diagnostic output)";
         throw new IOException(
-            subject + " failed with exit code "
-            + result.ExitCode.ToString(CultureInfo.InvariantCulture) + ": " + diagnostic);
+            subject + " failed with exit code " + result.ExitCode.ToString(CultureInfo.InvariantCulture)
+            + ": " + diagnostic + (receipt is null ? "" : " Diagnostic record: " + receipt));
     }
 
     // ------------------------------------------------------------------ leases and files
@@ -1739,7 +1731,10 @@ public static partial class EdlRawBootBuilder
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            throw new IOException(subject + ": cannot create the owned output file", exception);
+            string reason = File.Exists(path) ? "file already exists; refusing to overwrite" : exception.Message;
+            throw new IOException(subject + ": cannot create the owned output file '" + path
+                + "' (path characters: " + path.Length.ToString(CultureInfo.InvariantCulture)
+                + "): " + reason, exception);
         }
     }
 

@@ -1,3 +1,4 @@
+#include "file_io.h"
 #include "image_format.h"
 #include "log.h"
 #include "pack.h"
@@ -25,14 +26,36 @@ static bool copy_text(char *destination, size_t size, const char *value)
   return true;
 }
 
+/* True if the path is already rooted / absolute on the current host. */
+static bool path_is_absolute(const char *path)
+{
+  if (path[0] == '/')
+    return true;
+#ifdef _WIN32
+  if (path[0] == '\\')
+    return true;
+  if (path[0] != '\0' && path[1] == ':') {
+    /* Windows drive form (C:, C:foo, C:\foo) is passed to WinAPI as-is. */
+    return true;
+  }
+#endif
+  return false;
+}
+
 static bool resolve_path(
     char *destination, size_t size, const char *configDirectory,
     const char *value)
 {
-  if (value[0] == '/')
+  if (path_is_absolute(value))
     return copy_text(destination, size, value);
 
-  int written = snprintf(destination, size, "%s/%s", configDirectory, value);
+#ifdef _WIN32
+  #define PACK_PATH_SEP '\\'
+#else
+  #define PACK_PATH_SEP '/'
+#endif
+  int written = snprintf(destination, size, "%s%c%s", configDirectory, PACK_PATH_SEP, value);
+#undef PACK_PATH_SEP
   return written >= 0 && (size_t)written < size;
 }
 
@@ -282,6 +305,11 @@ static bool
 get_config_directory(const char *configPath, char *directory, size_t size)
 {
   const char *separator = strrchr(configPath, '/');
+#ifdef _WIN32
+  const char *backslash = strrchr(configPath, '\\');
+  if (backslash != NULL && (separator == NULL || backslash > separator))
+    separator = backslash;
+#endif
   if (separator == NULL)
     return copy_text(directory, size, ".");
 
@@ -579,7 +607,18 @@ int PackConfigFile(const char *configPath)
     return -EINVAL;
   }
 
-  int parseStatus = ini_parse(configPath, config_handler, &parser);
+  int parseStatus = -1;
+  FILE *configFile = open_file_utf8(configPath, "rb");
+  if (configFile == NULL) {
+    int openError = errno;
+    log_err(
+        "Cannot open config %s: errno=%d (%s)", configPath, openError,
+        strerror(openError));
+  }
+  else {
+    parseStatus = ini_parse_file(configFile, config_handler, &parser);
+    fclose(configFile);
+  }
   if (parseStatus != 0) {
     if (parseStatus == -1)
       log_err("Cannot open config: %s", configPath);
