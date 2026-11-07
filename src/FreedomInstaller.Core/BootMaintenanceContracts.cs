@@ -68,7 +68,8 @@ public sealed record BootMaintenanceSources(
     string? OriginalBackupDirectory = null,
     ImportedPackage? RepairPackage = null,
     EdlRawBootTools? BootTools = null,
-    string? ProjectBackupDirectory = null);
+    string? ProjectBackupDirectory = null,
+    bool RepairInstallation = false);
 
 /// <summary>
 /// Immutable facts about one A/B slot of a prepared boot-maintenance pass.

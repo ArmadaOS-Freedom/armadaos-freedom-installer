@@ -458,9 +458,20 @@ public partial class MainWindow : Window
             return;
         }
 
-        // 维护模式优先：来源页（第 2 步）的「下一步」是真实准备；其余维护步骤纯导航。
+        // 维护 / 修复模式：修复模式第 0 步先导航到第 2 步来源页，导航成功后再真实准备；
+        // 其他维护步骤纯导航，来源页「下一步」是真实准备。
         if (IsBootMaintenanceMode)
         {
+            if (_internalInstallStep == 0 && IsRepairInstallationMode)
+            {
+                NavigateBootMaintenanceStep(2);
+                if (IsRepairInstallationMode && _internalInstallStep == 2)
+                {
+                    await PrepareBootMaintenanceConfirmationAsync();
+                }
+                return;
+            }
+
             if (_internalInstallStep == 2)
             {
                 await PrepareBootMaintenanceConfirmationAsync();
@@ -521,9 +532,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        // 维护模式优先：上一步走维护自己的导航入口。
+        // 维护模式优先：上一步走维护自己的导航入口；修复模式从第 2 步回第 0 步。
         if (IsBootMaintenanceMode)
         {
+            if (IsRepairInstallationMode && _internalInstallStep == 2)
+            {
+                NavigateBootMaintenanceStep(0);
+                return;
+            }
+
             NavigateBootMaintenanceStep(_internalInstallStep - 1);
             return;
         }
@@ -738,6 +755,7 @@ public partial class MainWindow : Window
         "install-tf" => "Dynamic.Mode.InstallTf",
         "prepare" => "Dynamic.Mode.Prepare",
         "repair" => "Dynamic.Mode.Repair",
+        "repair-install" => "Dynamic.Mode.RepairInstall",
         "uninstall" => "Dynamic.Mode.Uninstall",
         _ => null,
     };
@@ -748,6 +766,7 @@ public partial class MainWindow : Window
         "install-tf" => "Dynamic.ModeHint.InstallTf",
         "prepare" => "Dynamic.ModeHint.Prepare",
         "repair" => "Dynamic.ModeHint.Repair",
+        "repair-install" => "Dynamic.ModeHint.RepairInstall",
         _ => "Dynamic.ModeHint.Uninstall",
     };
 
@@ -757,6 +776,7 @@ public partial class MainWindow : Window
         "install-tf" => "Dynamic.ConfirmTitle.InstallTf",
         "prepare" => "Dynamic.ConfirmTitle.Prepare",
         "repair" => "Dynamic.ConfirmTitle.Repair",
+        "repair-install" => "Dynamic.ConfirmTitle.RepairInstall",
         _ => "Dynamic.ConfirmTitle.Uninstall",
     };
 
@@ -766,6 +786,7 @@ public partial class MainWindow : Window
         "install-tf" => "Dynamic.Action.InstallTf",
         "prepare" => "Dynamic.Action.Prepare",
         "repair" => "Dynamic.Action.Repair",
+        "repair-install" => "Dynamic.Action.RepairInstall",
         _ => "Dynamic.Action.Uninstall",
     };
 

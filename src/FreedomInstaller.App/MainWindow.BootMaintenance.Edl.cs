@@ -47,7 +47,8 @@ public partial class MainWindow
             || (IsBootMaintenanceMode && ProtectedBootMaintenanceState)
             || (IsModernUserdataUninstallMode && ProtectedModernUserdataUninstallState)
             || (HasInternalInstallLiveEdlState
-                && !(IsModernUserdataUninstallMode && _internalInstallEdlClient?.Binding.OfflineIdentity is not null)))
+                && !((IsModernUserdataUninstallMode || IsRepairInstallationMode)
+                    && _internalInstallEdlClient?.Binding.OfflineIdentity is not null)))
         {
             return;
         }
@@ -60,6 +61,14 @@ public partial class MainWindow
         }
 
         if (IsModernUserdataUninstallMode)
+        {
+            await CheckUninstallBoardRecoveryEdlAsync();
+            return;
+        }
+
+        // 修复模式：自动读取板内恢复备份并绑定真实身份，避免强制选择原厂目录；
+        // 卸载路径与修复共用同一只读核对 / 绑定实现，方法不执行任何卸载写操作。
+        if (IsRepairInstallationMode && IsBootMaintenanceMode)
         {
             await CheckUninstallBoardRecoveryEdlAsync();
             return;
@@ -337,12 +346,21 @@ public partial class MainWindow
                         }
                     });
 
-                    // 唯一一次真实调用：维护模式只做全新备份，绝不 OpenExisting。
-                    var set = await InternalInstallBackup.CreateAsync(
-                        activeClient,
-                        parentPath,
-                        progress,
-                        token);
+                    // 修复模式使用修复专用助手（先读尾部恢复材料，再捕获新鲜当前引导）；
+                    // 其他维护 / 卸载 / TF 模式保持全新备份，绝不 OpenExisting。
+                    InternalBackupSet set;
+                    if (IsRepairInstallationMode)
+                    {
+                        set = await CaptureRepairCurrentAsync(activeClient, parentPath, progress, token);
+                    }
+                    else
+                    {
+                        set = await InternalInstallBackup.CreateAsync(
+                            activeClient,
+                            parentPath,
+                            progress,
+                            token);
+                    }
 
                     _internalInstallBackup = set;
                     RenderInternalInstallBackupSuccess(set, useExisting: false);

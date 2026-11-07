@@ -233,11 +233,12 @@ public partial class MainWindow
 
                     SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Started", target.Serial));
 
-                    // 卸载需要为保留项目引导取得当前锁状态；其他维护模式默认只读安卓身份。
+                    // 卸载需要为保留项目引导取得当前锁状态；修复需要当前已验证的 AOSP 签名 BL 事实；
+                    // 两者都改走下方已有的完整自动检查（安卓->Fastboot->安卓），其他维护模式默认只读安卓身份。
                     // 「高级：核验Bootloader」按钮（SharedFastbootCheckButton）的 sender 保留原有完整检查。
                     var fromSharedAdvancedButton = sender is Button sharedButton
                         && string.Equals(sharedButton.Name, "SharedFastbootCheckButton", StringComparison.Ordinal);
-                    if (IsSharedNonInternalDeviceMode && !IsModernUserdataUninstallMode && !fromSharedAdvancedButton)
+                    if (IsSharedNonInternalDeviceMode && !IsModernUserdataUninstallMode && !IsRepairInstallationMode && !fromSharedAdvancedButton)
                     {
                         await CheckSharedAndroidTargetAsync(target.Serial, token);
                         return;
@@ -646,8 +647,12 @@ public partial class MainWindow
 
         if (HasCheckedInternalInstallDevice)
         {
-            SetText(InternalInstallRouteText, "Dynamic.InternalInstall.Check.RoutePassed");
-            SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Passed"));
+            SetText(InternalInstallRouteText, IsRepairInstallationMode
+                ? "Dynamic.BootMaintenance.Repair.CheckPassed"
+                : "Dynamic.InternalInstall.Check.RoutePassed");
+            SetInternalInstallCheckStatus(M(IsRepairInstallationMode
+                ? "Dynamic.BootMaintenance.Repair.CheckPassed"
+                : "Dynamic.InternalInstall.Check.Passed"));
             return;
         }
 

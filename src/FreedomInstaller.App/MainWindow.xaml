@@ -2133,7 +2133,8 @@
                         <!-- ================= 02 系统备份 ================= -->
                         <StackPanel x:Name="InternalInstallBackupPage" Grid.Row="0" Visibility="Collapsed">
                             <TextBlock Text="{DynamicResource Static.InternalInstall.Backup.Title}" Style="{StaticResource H1Text}" />
-                            <TextBlock Text="{DynamicResource Static.InternalInstall.Backup.Warning}"
+                            <TextBlock x:Name="InternalInstallBackupWarningText"
+                                       Text="{DynamicResource Static.InternalInstall.Backup.Warning}"
                                        Style="{StaticResource BodyText}"
                                        Foreground="{DynamicResource WarnBrush}"
                                        FontWeight="SemiBold"
@@ -2273,7 +2274,8 @@
                                 <StackPanel>
                                     <TextBlock Text="{DynamicResource Static.InternalInstall.Backup.CoverageTitle}"
                                                Style="{StaticResource H2Text}" />
-                                    <TextBlock Text="{DynamicResource Static.InternalInstall.Backup.Coverage}"
+                                    <TextBlock x:Name="InternalInstallBackupCoverageText"
+                                               Text="{DynamicResource Static.InternalInstall.Backup.Coverage}"
                                                Style="{StaticResource BodyText}"
                                                Margin="0,8,0,0" />
                                 </StackPanel>
@@ -2723,7 +2725,7 @@
                                                Text="{DynamicResource Dynamic.BootMaintenance.OriginalSource}"
                                                Style="{StaticResource FieldLabelText}"
                                                Margin="0,0,0,6" />
-                                    <Grid>
+                                    <Grid x:Name="BootMaintenanceOriginalGrid">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
@@ -2777,10 +2779,11 @@
                                     <StackPanel x:Name="BootMaintenanceRepairSourcesRow"
                                                 Visibility="Collapsed"
                                                 Margin="0,14,0,0">
-                                        <TextBlock Text="{DynamicResource Dynamic.BootMaintenance.ProjectSource}"
+                                        <TextBlock x:Name="BootMaintenanceProjectLabel"
+                                                   Text="{DynamicResource Dynamic.BootMaintenance.ProjectSource}"
                                                    Style="{StaticResource FieldLabelText}"
                                                    Margin="0,0,0,6" />
-                                        <Grid>
+                                        <Grid x:Name="BootMaintenanceProjectGrid">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
@@ -2800,10 +2803,23 @@
                                         <TextBlock Text="{DynamicResource Dynamic.BootMaintenance.Package}"
                                                    Style="{StaticResource FieldLabelText}"
                                                    Margin="0,12,0,6" />
-                                        <TextBox x:Name="BootMaintenancePackageBox"
-                                                 Style="{StaticResource InputTextBox}"
-                                                 VerticalContentAlignment="Center"
-                                                 TextChanged="OnBootMaintenancePackagePathChanged" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox x:Name="BootMaintenancePackageBox"
+                                                     Grid.Column="0"
+                                                     Style="{StaticResource InputTextBox}"
+                                                     VerticalContentAlignment="Center"
+                                                     TextChanged="OnBootMaintenancePackagePathChanged" />
+                                            <Button x:Name="BootMaintenancePackageBrowseButton"
+                                                    Grid.Column="1"
+                                                    Content="{DynamicResource Static.Browse}"
+                                                    Click="OnBrowseBootMaintenancePackage"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Margin="10,0,0,0" />
+                                        </Grid>
                                         <TextBlock x:Name="BootMaintenancePackageHint"
                                                    Text="{DynamicResource Dynamic.BootMaintenance.PackageHint}"
                                                    Style="{StaticResource CaptionText}"
@@ -3524,6 +3540,40 @@
                                                    Foreground="{DynamicResource InkBrush}"
                                                    TextWrapping="Wrap" />
                                         <TextBlock Text="{DynamicResource Static.Function.Install.Desc}"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource MutedBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,6,0,0" />
+                                    </StackPanel>
+                                </Grid>
+                            </Button>
+
+                            <Button Tag="repair-install"
+                                    Click="OnSelectOperation"
+                                    Style="{StaticResource FunctionCard}"
+                                    Margin="0,0,12,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0" Style="{StaticResource FunctionCardIcon}">
+                                        <Path Data="M 4 12 C 4 7.6 7.6 4 12 4 M 4 8 V 12 H 8 M 20 12 C 20 16.4 16.4 20 12 20 M 20 16 V 12 H 16"
+                                              Width="18"
+                                              Height="18"
+                                              Stretch="Uniform"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Stroke="{DynamicResource AccentBrush}"
+                                              StrokeThickness="1.8" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{DynamicResource Static.Function.RepairInstall.Title}"
+                                                   FontSize="16"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource InkBrush}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Text="{DynamicResource Static.Function.RepairInstall.Desc}"
                                                    FontSize="12"
                                                    Foreground="{DynamicResource MutedBrush}"
                                                    TextWrapping="Wrap"

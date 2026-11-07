@@ -95,7 +95,7 @@ namespace FreedomInstaller.Core.Gbl
     /// <summary>
     /// Raw-PE efisp loader detector.
     /// </summary>
-    internal static class EfispLoadDetector
+    internal static partial class EfispLoadDetector
     {
         /// <summary>Legacy scaffold text, retained for source compatibility; never returned.</summary>
         internal const string StubReason = "RED scaffold: raw-PE detection not implemented";

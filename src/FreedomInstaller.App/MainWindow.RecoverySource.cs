@@ -56,7 +56,8 @@ public partial class MainWindow
                         }
                         catch { tools.Dispose(); throw; }
                     }
-                    if (!string.IsNullOrWhiteSpace(_bootMaintenanceOriginalDirectory))
+                    // 修复模式不使用 PC 原厂来源：始终优先板内恢复材料，再由自动回滚捕获建立来源。
+                    if (!IsRepairInstallationMode && !string.IsNullOrWhiteSpace(_bootMaintenanceOriginalDirectory))
                     {
                         var chosen = UninstallBackupDirectorySelection.Resolve(_bootMaintenanceOriginalDirectory);
                         if (chosen.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || chosen.DirectoryPath is null)
@@ -101,6 +102,13 @@ public partial class MainWindow
                     }
                     if (source is null)
                     {
+                        // 修复模式下绝不弹原厂目录选择器；板内恢复材料缺失时必须清晰失败，
+                        // 不允许回退到 PC 备份或编造身份。
+                        if (IsRepairInstallationMode)
+                        {
+                            throw new InvalidOperationException(T("Dynamic.BootMaintenance.Repair.NeedAndroidIdentity"));
+                        }
+
                         var selected = _bootMaintenanceOriginalDirectory
                             ?? PickExistingDirectory(null, "Dynamic.RecoverySource.PickOriginal");
                         if (selected is null) throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
@@ -142,6 +150,11 @@ public partial class MainWindow
         _internalInstallEdlClient = rebound;
         _internalInstallEdlEntry = savedEntry;
         _bootMaintenanceHistoricalIdentity = history;
+        // 板内恢复材料绑定成功后发布自动原厂来源：修复回滚捕获将据此建立真实来源。
+        if (IsRepairInstallationMode)
+        {
+            _bootMaintenanceOriginalDirectory = source;
+        }
         SetInternalInstallCheckStatus(M("Dynamic.RecoverySource.Connected", UiText.ModelName(history.Model)));
     }
 

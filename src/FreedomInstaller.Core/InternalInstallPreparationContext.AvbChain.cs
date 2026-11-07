@@ -143,7 +143,8 @@ internal sealed partial class InternalInstallPreparationContext
         IReadOnlyDictionary<string, EdlCapturedRegion> files,
         string evidenceDirectory,
         List<HeldClaim> claims,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BootMaintenanceAblRecovery? ablRecovery = null)
     {
         ArgumentNullException.ThrowIfNull(sourceSlots);
         ArgumentNullException.ThrowIfNull(files);
@@ -203,7 +204,7 @@ internal sealed partial class InternalInstallPreparationContext
                 .ConfigureAwait(false);
 
             HoldAvbCandidate("avb-vbmeta_" + target, node.Candidate, claims, cancellationToken);
-            RequireDirectAvbRootTrust(target, fastbootLockState, node);
+            RequireDirectAvbRootTrust(target, fastbootLockState, node, ablRecovery);
 
             roots.Add(target, node);
         }
@@ -419,7 +420,8 @@ internal sealed partial class InternalInstallPreparationContext
     private static void RequireDirectAvbRootTrust(
         string target,
         BootloaderState fastbootLockState,
-        EdlRawResignedAvbNode node)
+        EdlRawResignedAvbNode node,
+        BootMaintenanceAblRecovery? ablRecovery = null)
     {
         if (fastbootLockState == BootloaderState.Unlocked)
         {
@@ -427,7 +429,8 @@ internal sealed partial class InternalInstallPreparationContext
         }
 
         if (fastbootLockState == BootloaderState.Locked
-            && SameSha(node.OriginalPublicKeySha256, EdlRawBootBuilder.SigningPublicKeySha256))
+            && (SameSha(node.OriginalPublicKeySha256, EdlRawBootBuilder.SigningPublicKeySha256)
+                || ablRecovery?.AuthorizesRoot(target, node) == true))
         {
             return;
         }
