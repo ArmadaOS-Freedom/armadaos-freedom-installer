@@ -182,6 +182,18 @@ internal sealed partial class InternalInstallPreparationContext
                 continue;
             }
 
+            try
+            {
+                await EdlRawBootBuilder.VerifyAvbBootChainAsync(
+                    Claim(files, "vbmeta_" + target), Claim(files, "boot_" + target),
+                    Claim(files, "recovery_" + target), Claim(files, "vbmeta_system_" + target),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidDataException exception)
+            {
+                throw new InvalidDataException("AVB source chain, slot " + target + ": " + exception.Message, exception);
+            }
+
             EdlRawResignedAvbNode node = await EdlRawBootBuilder
                 .ResignAvbNodeAsync(
                     Claim(files, "vbmeta_" + target),

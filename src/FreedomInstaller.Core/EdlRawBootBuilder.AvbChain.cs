@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -13,10 +15,8 @@ public static partial class EdlRawBootBuilder
 {
     internal static string SigningPublicKeySha256 => AvbPublicKeySha256;
 
-    // P1-GREEN-B: bounded AVB re-sign. The source partition metadata is validated
-    // in place, cloned at the same length, rekeyed and re-signed with the fixed
-    // compiled AOSP key. Only the declared auth hash/signature ranges and the
-    // 1032-byte key slots change; every other byte is copied unchanged.
+    // Authenticate each source with its declared algorithm, then sign with the
+    // pinned output key. A different key width requires a new metadata layout.
     internal static Task<EdlRawResignedAvbNode> ResignAvbNodeAsync(
         VerifiedEdlFile originalPartition,
         EdlRawAvbNodeKind kind,
@@ -57,6 +57,7 @@ public static partial class EdlRawBootBuilder
     {
         public string Name = string.Empty;
         public int KeyOffset;
+        public int KeyLength;
         public uint Location;
         public uint Flags;
     }
@@ -126,14 +127,17 @@ public static partial class EdlRawBootBuilder
                 }
 
                 patched = AvbNodeCloneAndPatch(metadata, targetPublicKey);
-                byte[] patchedDigest = AvbNodeDigest(patched, VbmetaHeaderBytes + metadata.AuthSize, metadata.AuxSize);
+                AvbNodeCheckGrowth(source, metadata, patched.Length, kind, cancellationToken);
+                byte[] patchedDigest = AvbNodeDigest(patched,
+                    VbmetaHeaderBytes + AvbNodeReadBeU64AsInt(patched, 12),
+                    AvbNodeReadBeU64AsInt(patched, 20));
 
                 // Write only the declared auth hash and signature ranges.
                 Array.Copy(
                     patchedDigest,
                     0,
                     patched,
-                    VbmetaHeaderBytes + AvbNodeReadBeU64AsInt(metadata.Blob, 32),
+                    VbmetaHeaderBytes + AvbNodeReadBeU64AsInt(patched, 32),
                     AvbHashBytes);
 
                 byte[] signature = signingKey.SignHash(
@@ -150,7 +154,7 @@ public static partial class EdlRawBootBuilder
                     signature,
                     0,
                     patched,
-                    VbmetaHeaderBytes + AvbNodeReadBeU64AsInt(metadata.Blob, 48),
+                    VbmetaHeaderBytes + AvbNodeReadBeU64AsInt(patched, 48),
                     AvbSignatureBytes);
 
                 cancellationToken.ThrowIfCancellationRequested();
@@ -177,13 +181,20 @@ public static partial class EdlRawBootBuilder
                         throw new InvalidDataException("AVB source bytes changed while copying.");
                     }
 
-                    if (patched.Length != metadata.VbmetaSize)
-                    {
-                        throw new InvalidDataException("AVB patched metadata length changed.");
-                    }
-
                     candidate.Seek(metadata.VbmetaOffset, SeekOrigin.Begin);
                     candidate.Write(patched, 0, patched.Length);
+                    if (patched.Length < metadata.VbmetaSize)
+                    {
+                        candidate.Write(new byte[metadata.VbmetaSize - patched.Length]);
+                    }
+                    if (kind == EdlRawAvbNodeKind.Recovery)
+                    {
+                        byte[] footer = new byte[AvbFooterBytes];
+                        ReadExactly(source, footer, sourceLength - AvbFooterBytes, AvbFooterBytes);
+                        WriteBeU64(footer, 28, (ulong)patched.Length);
+                        candidate.Seek(sourceLength - AvbFooterBytes, SeekOrigin.Begin);
+                        candidate.Write(footer);
+                    }
                     candidate.Flush(true);
                 }
             }
@@ -207,8 +218,8 @@ public static partial class EdlRawBootBuilder
                     throw new InvalidDataException("AVB candidate length differs from the source partition.");
                 }
 
-                byte[] physical = new byte[metadata.VbmetaSize];
-                ReadExactly(check, physical, metadata.VbmetaOffset, metadata.VbmetaSize);
+                byte[] physical = new byte[patched.Length];
+                ReadExactly(check, physical, metadata.VbmetaOffset, patched.Length);
 
                 if (!physical.AsSpan().SequenceEqual(patched))
                 {
@@ -217,10 +228,11 @@ public static partial class EdlRawBootBuilder
 
                 candidateLength = check.Length;
 
-                verified = AvbNodeParse(physical, metadata.VbmetaOffset, kind == EdlRawAvbNodeKind.Vbmeta);
+                verified = AvbNodeReadMetadata(check, kind, check.Length, cancellationToken);
                 candidatePublicKeySha256 = verified.SourcePublicKeySha256;
 
-                if (verified.VbmetaSize != metadata.VbmetaSize ||
+                if (verified.VbmetaSize != patched.Length ||
+                    verified.VbmetaOffset != metadata.VbmetaOffset ||
                     verified.RollbackIndex != metadata.RollbackIndex ||
                     verified.RollbackIndexLocation != metadata.RollbackIndexLocation ||
                     verified.Flags != metadata.Flags ||
@@ -231,7 +243,7 @@ public static partial class EdlRawBootBuilder
                         metadata.NonChainDescriptorsSha256,
                         StringComparison.Ordinal))
                 {
-                    throw new InvalidDataException("AVB candidate metadata is not layout-preserving.");
+                    throw new InvalidDataException("AVB candidate changed protected metadata fields or descriptors.");
                 }
 
                 if (!string.Equals(candidatePublicKeySha256, AvbPublicKeySha256, StringComparison.OrdinalIgnoreCase))
@@ -251,7 +263,7 @@ public static partial class EdlRawBootBuilder
                 foreach (AvbNodeChainKey chainKey in verified.ChainKeys)
                 {
                     string chainKeySha256 = AvbNodeSha256Hex(
-                        AvbNodeSlice(verified.Blob, chainKey.KeyOffset, AvbPublicKeyBytes));
+                        AvbNodeSlice(verified.Blob, chainKey.KeyOffset, chainKey.KeyLength));
 
                     if (!string.Equals(chainKeySha256, AvbPublicKeySha256, StringComparison.OrdinalIgnoreCase))
                     {
@@ -276,7 +288,7 @@ public static partial class EdlRawBootBuilder
                 AvbPublicKeySha256,
                 chainPublicKeysView,
                 metadata.VbmetaOffset,
-                metadata.VbmetaSize,
+                verified.VbmetaSize,
                 metadata.RollbackIndex,
                 metadata.RollbackIndexLocation,
                 metadata.Flags,
@@ -300,8 +312,7 @@ public static partial class EdlRawBootBuilder
         FileStream source,
         EdlRawAvbNodeKind kind,
         long sourceLength,
-        CancellationToken cancellationToken,
-        bool allowForeignNonBootChainKeys = false)
+        CancellationToken cancellationToken)
     {
         if (sourceLength < AvbFooterBytes)
         {
@@ -343,7 +354,7 @@ public static partial class EdlRawBootBuilder
         byte[] blob = new byte[vbmetaSize];
         ReadExactly(source, blob, vbmetaOffset, vbmetaSize);
 
-        return AvbNodeParse(blob, vbmetaOffset, kind == EdlRawAvbNodeKind.Vbmeta, allowForeignNonBootChainKeys);
+        return AvbNodeParse(blob, vbmetaOffset, kind == EdlRawAvbNodeKind.Vbmeta);
     }
 
     // P1 common footer leaf reader: bounded footer read plus the shared AVB0
@@ -403,11 +414,8 @@ public static partial class EdlRawBootBuilder
         return AvbNodeParse(blob, vbmetaOffset, false);
     }
 
-    // allowForeignNonBootChainKeys is the read-only preserved-chain authentication only: a recovery or
-    // vbmeta_system chain may then carry another key size (TB710FU's vbmeta_system chain is RSA2048). Such a
-    // chain is recorded with KeyOffset -1 and can never be rekeyed; the boot chain keeps every check.
     private static AvbNodeMetadata AvbNodeParse(
-        byte[] blob, long vbmetaOffset, bool requireRootChains, bool allowForeignNonBootChainKeys = false)
+        byte[] blob, long vbmetaOffset, bool requireRootChains)
     {
         if (blob.Length < VbmetaHeaderBytes)
         {
@@ -428,10 +436,7 @@ public static partial class EdlRawBootBuilder
             throw new InvalidDataException("AVB metadata major version is unsupported.");
         }
 
-        if (algorithm != AvbAlgorithmRsa4096)
-        {
-            throw new InvalidDataException("AVB metadata algorithm is not SHA256_RSA4096.");
-        }
+        var algorithmInfo = AvbNodeAlgorithm(algorithm);
 
         ulong authSize64 = ReadBeU64(blob, 12);
         ulong auxSize64 = ReadBeU64(blob, 20);
@@ -466,14 +471,14 @@ public static partial class EdlRawBootBuilder
         ulong descriptorOffset = ReadBeU64(blob, 96);
         ulong descriptorSize = ReadBeU64(blob, 104);
 
-        if (hashSize != AvbHashBytes || signatureSize != AvbSignatureBytes)
+        if (hashSize != (ulong)algorithmInfo.HashBytes || signatureSize != (ulong)algorithmInfo.ModulusBytes)
         {
             throw new InvalidDataException("AVB authentication hash or signature size is unsupported.");
         }
 
-        if (publicKeySize != AvbPublicKeyBytes)
+        if (publicKeySize != (ulong)(8 + 2 * algorithmInfo.ModulusBytes))
         {
-            throw new InvalidDataException("AVB public key size is not 1032 bytes.");
+            throw new InvalidDataException("AVB public key size does not match its algorithm.");
         }
 
         if (keyMetadataSize != 0)
@@ -481,22 +486,22 @@ public static partial class EdlRawBootBuilder
             throw new InvalidDataException("AVB key metadata is not supported.");
         }
 
-        if (!AvbNodeRangeFits(hashOffset, AvbHashBytes, authSize64) ||
-            !AvbNodeRangeFits(signatureOffset, AvbSignatureBytes, authSize64))
+        if (!AvbNodeRangeFits(hashOffset, hashSize, authSize64) ||
+            !AvbNodeRangeFits(signatureOffset, signatureSize, authSize64))
         {
             throw new InvalidDataException("AVB auth hash or signature range exceeds the auth block.");
         }
 
         if (AvbNodeRangesOverlap(
                 hashOffset,
-                AvbHashBytes,
+                hashSize,
                 signatureOffset,
-                AvbSignatureBytes))
+                signatureSize))
         {
             throw new InvalidDataException("AVB auth hash and signature ranges overlap.");
         }
 
-        if (!AvbNodeRangeFits(publicKeyOffset, AvbPublicKeyBytes, auxSize64))
+        if (!AvbNodeRangeFits(publicKeyOffset, publicKeySize, auxSize64))
         {
             throw new InvalidDataException("AVB main public key exceeds the aux block.");
         }
@@ -513,7 +518,7 @@ public static partial class EdlRawBootBuilder
 
         if (AvbNodeRangesOverlap(
                 publicKeyOffset,
-                AvbPublicKeyBytes,
+                publicKeySize,
                 descriptorOffset,
                 descriptorSize))
         {
@@ -587,38 +592,12 @@ public static partial class EdlRawBootBuilder
 
                     string name = AvbNodeReadAsciiName(blob, nameStart, (int)nameLength);
 
-                    bool standardKey = keyLength == AvbPublicKeyBytes
-                        && keyLength >= 4
-                        && ReadBeU32(blob, keyStart) == 4096;
-
-                    if (!standardKey
-                        && allowForeignNonBootChainKeys
-                        && !string.Equals(name, "boot", StringComparison.Ordinal))
-                    {
-                        chainKeys.Add(new AvbNodeChainKey
-                        {
-                            Name = name,
-                            KeyOffset = -1,
-                            Location = ReadBeU32(blob, position + 16),
-                            Flags = ReadBeU32(blob, position + 28)
-                        });
-                        position += total;
-                        continue;
-                    }
-
-                    if (keyLength != AvbPublicKeyBytes)
-                    {
-                        throw new InvalidDataException("AVB chain partition key is not 1032 bytes.");
-                    }
-
-                    if (ReadBeU32(blob, keyStart) != 4096)
-                    {
-                        throw new InvalidDataException("AVB chain partition key is not 4096 bits.");
-                    }
+                    AvbNodeValidatePublicKey(AvbNodeSlice(blob, keyStart, (int)keyLength));
                     chainKeys.Add(new AvbNodeChainKey
                     {
                         Name = name,
                         KeyOffset = keyStart,
+                        KeyLength = (int)keyLength,
                         Location = ReadBeU32(blob, position + 16),
                         Flags = ReadBeU32(blob, position + 28)
                     });
@@ -725,33 +704,29 @@ public static partial class EdlRawBootBuilder
         List<AvbNodeChainKey> chainKeys,
         string nonChainSha256)
     {
-        if (ReadBeU32(blob, publicKeyStart) != 4096)
-        {
-            throw new InvalidDataException("AVB main public key is not 4096 bits.");
-        }
-
-        byte[] sourcePublicKey = new byte[AvbPublicKeyBytes];
-        Array.Copy(blob, publicKeyStart, sourcePublicKey, 0, AvbPublicKeyBytes);
+        var algorithmInfo = AvbNodeAlgorithm(algorithm);
+        byte[] sourcePublicKey = AvbNodeSlice(blob, publicKeyStart, 8 + 2 * algorithmInfo.ModulusBytes);
+        AvbNodeValidatePublicKey(sourcePublicKey);
+        if (ReadBeU32(sourcePublicKey, 0) != algorithmInfo.ModulusBytes * 8)
+            throw new InvalidDataException("AVB public key bit count differs from its algorithm.");
         string sourcePublicKeySha256 = AvbNodeSha256Hex(sourcePublicKey);
 
-        byte[] digest = AvbNodeDigest(blob, auxOffset, auxSize);
+        byte[] digest = AvbNodeDigest(blob, auxOffset, auxSize, algorithmInfo.Hash);
 
-        var storedHash = new byte[AvbHashBytes];
-        Array.Copy(blob, VbmetaHeaderBytes + (int)hashOffset, storedHash, 0, AvbHashBytes);
+        var storedHash = AvbNodeSlice(blob, VbmetaHeaderBytes + (int)hashOffset, algorithmInfo.HashBytes);
 
         if (!CryptographicOperations.FixedTimeEquals(digest, storedHash))
         {
             throw new InvalidDataException("AVB source authentication hash does not match.");
         }
 
-        var signature = new byte[AvbSignatureBytes];
-        Array.Copy(blob, VbmetaHeaderBytes + (int)signatureOffset, signature, 0, AvbSignatureBytes);
+        var signature = AvbNodeSlice(blob, VbmetaHeaderBytes + (int)signatureOffset, algorithmInfo.ModulusBytes);
 
         try
         {
             var parameters = new RSAParameters
             {
-                Modulus = AvbNodeSlice(sourcePublicKey, 8, AvbRsaModulusBytes),
+                Modulus = AvbNodeSlice(sourcePublicKey, 8, algorithmInfo.ModulusBytes),
                 Exponent = new byte[] { 1, 0, 1 }
             };
 
@@ -761,7 +736,7 @@ public static partial class EdlRawBootBuilder
             if (!verifier.VerifyHash(
                     digest,
                     signature,
-                    HashAlgorithmName.SHA256,
+                    algorithmInfo.Hash,
                     RSASignaturePadding.Pkcs1))
             {
                 throw new InvalidDataException("AVB source signature does not verify.");
@@ -797,6 +772,8 @@ public static partial class EdlRawBootBuilder
         AvbNodeMetadata metadata,
         byte[] targetPublicKey)
     {
+        if (metadata.Algorithm != AvbAlgorithmRsa4096 || metadata.ChainKeys.Any(k => k.KeyLength != AvbPublicKeyBytes))
+            return AvbNodeRebuild(metadata, targetPublicKey);
         byte[] clone = (byte[])metadata.Blob.Clone();
         int auxOffset = VbmetaHeaderBytes + metadata.AuthSize;
         int publicKeyStart = auxOffset + AvbNodeReadBeU64AsInt(metadata.Blob, 64);
@@ -817,9 +794,9 @@ public static partial class EdlRawBootBuilder
         return clone;
     }
 
-    private static byte[] AvbNodeDigest(byte[] blob, int auxOffset, int auxSize)
+    private static byte[] AvbNodeDigest(byte[] blob, int auxOffset, int auxSize, HashAlgorithmName? algorithm = null)
     {
-        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using IncrementalHash hash = IncrementalHash.CreateHash(algorithm ?? HashAlgorithmName.SHA256);
         hash.AppendData(blob, 0, VbmetaHeaderBytes);
         hash.AppendData(blob, auxOffset, auxSize);
         return hash.GetHashAndReset();

@@ -746,6 +746,15 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                         packageSnapshot,
                         backupFacts.Files);
 
+                    if (gblInputs is null && preservedAvbRoles is null && sourceSlot == slot)
+                    {
+                        await EdlRawBootBuilder.VerifyAvbBootChainAsync(
+                            avbRoots[slot].Candidate, built.CandidateBoot,
+                            avbNodes.Single(n => n.Role == "recovery_" + slot).Node.Candidate,
+                            avbNodes.Single(n => n.Role == "vbmeta_system_" + slot).Node.Candidate,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
                     // The actual recovered material of this built slot is the only material fact; the old
                     // pre-build recovery read is never repeated. The key stays the target even when that
                     // material itself was recovered from the opposite source slot.

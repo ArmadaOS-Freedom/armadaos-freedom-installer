@@ -439,8 +439,7 @@ public static partial class EdlRawBootBuilder
             stream,
             EdlRawAvbNodeKind.Vbmeta,
             length,
-            cancellationToken,
-            allowForeignNonBootChainKeys: preserved);
+            cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -460,13 +459,12 @@ public static partial class EdlRawBootBuilder
         }
 
         if (bootKey.KeyOffset < 0 ||
-            bootKey.KeyOffset > metadata.Blob.Length - AvbPublicKeyBytes)
+            bootKey.KeyOffset > metadata.Blob.Length - bootKey.KeyLength)
         {
             throw new InvalidDataException("GBL original boot chain key range is outside the metadata blob.");
         }
 
-        byte[] bootKeyBlob = new byte[AvbPublicKeyBytes];
-        Array.Copy(metadata.Blob, bootKey.KeyOffset, bootKeyBlob, 0, AvbPublicKeyBytes);
+        byte[] bootKeyBlob = AvbNodeSlice(metadata.Blob, bootKey.KeyOffset, bootKey.KeyLength);
         string bootChainPublicKeySha256 = AvbNodeSha256Hex(bootKeyBlob);
 
         string signedVbmetaSha256 = AvbNodeSha256Hex(metadata.Blob);
