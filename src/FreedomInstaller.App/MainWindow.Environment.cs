@@ -148,6 +148,25 @@ public partial class MainWindow
         _environmentDriverResult = null;
         _environmentAdbResult = null;
         _environmentFastbootResult = null;
+        // 复核开始时先把六项标记复位为「检查中 / 运行组件恒为就绪」，并同步清零状态与版本文字，
+        // 避免在上一次结论仍显示时就等待新一轮结果。
+        SetEnvironmentIndicator(EnvironmentSystemIndicator, null);
+        SetEnvironmentIndicator(EnvironmentRuntimeIndicator, true);
+        SetEnvironmentIndicator(EnvironmentToolsIndicator, null);
+        SetEnvironmentIndicator(EnvironmentDriverIndicator, null);
+        SetEnvironmentIndicator(EnvironmentAdbIndicator, null);
+        SetEnvironmentIndicator(EnvironmentFastbootIndicator, null);
+        if (!_closed)
+        {
+            SetText(EnvironmentSystemStatusText, "Dynamic.Environment.Checking");
+            SetText(EnvironmentToolsStatusText, "Dynamic.Environment.Checking");
+            SetText(EnvironmentDriverStatusText, "Dynamic.Environment.DriverState.Unknown");
+            SetText(EnvironmentDriverVersionText, "Dynamic.Environment.VersionUnknown");
+            SetText(EnvironmentAdbStatusText, "Dynamic.Environment.DriverState.Unknown");
+            SetText(EnvironmentAdbVersionText, "Dynamic.Environment.VersionUnknown");
+            SetText(EnvironmentFastbootStatusText, "Dynamic.Environment.DriverState.Unknown");
+            SetText(EnvironmentFastbootVersionText, "Dynamic.Environment.VersionUnknown");
+        }
         ReportEnvironment(M("Dynamic.Environment.Checking"));
 
         // 1. 原生系统：64 位且不低于 Windows 10。
@@ -156,6 +175,7 @@ public partial class MainWindow
         SetText(EnvironmentSystemStatusText, _environmentSystemSupported
             ? "Dynamic.Environment.SystemReady"
             : "Dynamic.Environment.SystemUnsupported");
+        SetEnvironmentIndicator(EnvironmentSystemIndicator, _environmentSystemSupported);
 
         // 2. 随附工具：复用现有解包入口，它只解包，不执行设备命令。
         var bundledToolsPrepared = await InitializeBundledToolsAsync();
@@ -165,6 +185,7 @@ public partial class MainWindow
         SetText(EnvironmentToolsStatusText, _environmentToolsReady
             ? "Dynamic.Environment.ToolsReady"
             : "Dynamic.Environment.ToolsFailed");
+        SetEnvironmentIndicator(EnvironmentToolsIndicator, _environmentToolsReady);
 
         // 3. 启动标识：读取失败时保留上一次确认过的值，并明确标为未核实。
         var bootIdentity = await ReadBootIdentityAsync(cancellationToken);
@@ -211,23 +232,28 @@ public partial class MainWindow
     }
 
     private void RenderDriverState(WindowsDriverCheckResult? result)
-        => RenderDriverState(result, EnvironmentDriverStatusText, EnvironmentDriverVersionText, "9008");
+        => RenderDriverState(result, EnvironmentDriverStatusText, EnvironmentDriverVersionText, EnvironmentDriverIndicator, "9008");
 
     private void RenderAndroidDriverStates()
     {
-        RenderDriverState(_environmentAdbResult, EnvironmentAdbStatusText, EnvironmentAdbVersionText, "ADB");
-        RenderDriverState(_environmentFastbootResult, EnvironmentFastbootStatusText, EnvironmentFastbootVersionText, "Fastboot");
+        RenderDriverState(_environmentAdbResult, EnvironmentAdbStatusText, EnvironmentAdbVersionText, EnvironmentAdbIndicator, "ADB");
+        RenderDriverState(_environmentFastbootResult, EnvironmentFastbootStatusText, EnvironmentFastbootVersionText, EnvironmentFastbootIndicator, "Fastboot");
     }
 
     private void RenderDriverState(WindowsDriverCheckResult? result,
-        System.Windows.Controls.TextBlock statusText, System.Windows.Controls.TextBlock versionText, string mode)
+        System.Windows.Controls.TextBlock statusText, System.Windows.Controls.TextBlock versionText,
+        System.Windows.Controls.TextBlock indicator, string mode)
     {
         if (result is null)
         {
             SetText(statusText, "Dynamic.Environment.DriverState.Unknown");
             SetText(versionText, "Dynamic.Environment.VersionUnknown");
+            SetEnvironmentIndicator(indicator, false);
             return;
         }
+
+        // 就绪判定只信 IsReady（Prepared / Connected 才算就绪），不因版本号或设备连接推断。
+        SetEnvironmentIndicator(indicator, result.IsReady);
 
         SetText(statusText, DriverStateKey(result.State.ToString()));
         var version = result.DriverVersion?.ToString();
@@ -269,8 +295,32 @@ public partial class MainWindow
         // 清零后不能继续显示上一次的 Ready / 版本结论。
         RenderDriverState(null);
         RenderAndroidDriverStates();
+        // 失败路径上把仍然 pending 的系统 / 工具标记按已知布尔值（无则 false）落定，运行组件恒为就绪。
+        SetEnvironmentIndicator(EnvironmentSystemIndicator, _environmentSystemSupported);
+        SetEnvironmentIndicator(EnvironmentToolsIndicator, _environmentToolsReady);
+        SetEnvironmentIndicator(EnvironmentRuntimeIndicator, true);
         ReportEnvironment(M("Dynamic.Environment.CheckFailed"));
         RefreshEnvironmentActions();
+    }
+
+    /// <summary>统一设置 ✓ / ✗ / … 标记；用 SetResourceReference 让浅色 / 深色切换时前景随之刷新。</summary>
+    private static void SetEnvironmentIndicator(System.Windows.Controls.TextBlock indicator, bool? ready)
+    {
+        if (ready == true)
+        {
+            indicator.Text = "\u2713";
+            indicator.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "AccentBrush");
+        }
+        else if (ready == false)
+        {
+            indicator.Text = "\u2717";
+            indicator.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "DangerBrush");
+        }
+        else
+        {
+            indicator.Text = "…";
+            indicator.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "MutedBrush");
+        }
     }
 
     // ---------- 启动标识与重启标记 ----------
