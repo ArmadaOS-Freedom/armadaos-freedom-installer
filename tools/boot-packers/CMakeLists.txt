@@ -62,6 +62,7 @@ add_executable(MultiBootKernelPatcher
     src/image_format.c
     src/pack_config.c
     src/utils.c
+    src/file_io.c
 )
 target_include_directories(MultiBootKernelPatcher PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/inc
@@ -75,6 +76,7 @@ add_executable(UnpackTool
     src/unpack.c
     src/image_format.c
     src/utils.c
+    src/file_io.c
 )
 target_include_directories(UnpackTool PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/inc
@@ -82,6 +84,16 @@ target_include_directories(UnpackTool PRIVATE
 if (MSVC)
     set_property(TARGET UnpackTool PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif ()
+
+if (WIN32)
+    # Both native executables use wmain via a UTF-8 argv bridge.
+    target_compile_definitions(MultiBootKernelPatcher PRIVATE WINDOWS_UTF8_ENTRY=1)
+    target_compile_definitions(UnpackTool PRIVATE WINDOWS_UTF8_ENTRY=1)
+    if (MINGW)
+        target_link_options(MultiBootKernelPatcher PRIVATE -municode)
+        target_link_options(UnpackTool PRIVATE -municode)
+    endif ()
 endif ()
 
 if (BUILD_SHIMS)

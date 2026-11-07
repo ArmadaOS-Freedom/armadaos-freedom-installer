@@ -6,13 +6,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "file_io.h"
 #include "log.h"
 #include "pack.h"
 
 #include <errno.h>
 #include <stdio.h>
 
-int main(int argc, char *argv[])
+static int packer_entry(int argc, char *argv[])
 {
   log_info("Multi-Boot Kernel Patcher v2.0.0.0");
   log_info("Copyright (c) The DuoWoA & The AlohaWoA authors");
@@ -22,3 +23,15 @@ int main(int argc, char *argv[])
   }
   return PackConfigFile(argv[1]);
 }
+
+#ifdef WINDOWS_UTF8_ENTRY
+int wmain(int argc, wchar_t *argv[])
+{
+  return run_utf8_main(packer_entry, argc, argv);
+}
+#else
+int main(int argc, char *argv[])
+{
+  return packer_entry(argc, argv);
+}
+#endif
