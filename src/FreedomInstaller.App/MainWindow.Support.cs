@@ -43,6 +43,12 @@ public partial class MainWindow
     private void OnOpenLichWangGithub(object sender, RoutedEventArgs e)
         => OpenExternalLink("Dynamic.Link.AboutLichWangName", "https://github.com/lich-wang");
 
+    private void OnOpenH0CheungGithub(object sender, RoutedEventArgs e)
+        => OpenExternalLink("Dynamic.Link.AboutH0CheungName", "https://github.com/h0cheung");
+
+    private void OnOpenH0CheungBilibili(object sender, RoutedEventArgs e)
+        => OpenExternalLink(BilibiliLabelKey, "https://space.bilibili.com/33282562");
+
     private void OnOpenLichWangBilibili(object sender, RoutedEventArgs e)
         => OpenExternalLink(BilibiliLabelKey, "https://space.bilibili.com/170842457");
 
