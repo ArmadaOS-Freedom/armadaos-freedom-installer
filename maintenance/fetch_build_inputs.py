@@ -26,6 +26,7 @@ SCHEMA_VERSION = 2
 
 REQUIRED_IDS = (
     "platformTools",
+    "platformToolsMacos",
     "python",
     "libusbPackage",
     "libusbLicense",

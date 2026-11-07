@@ -118,7 +118,22 @@ class MacPrepareTests(unittest.TestCase):
         self.assertIn("<BundledToolPinsSource>", props)
         for prop in build_installer_macos._PROPERTY_NAMES:
             self.assertIn(f"<{prop}>", props)
-        self.assertNotIn("BundledPlatformToolsArchive", props)
+
+    def test_props_embed_the_macos_platform_tools(self):
+        record, _ = self._prepare()
+        path = Path(record["inputs"]["BundledPlatformToolsArchive"])
+        self.assertEqual(path.read_bytes(), b"platformToolsMacos\n")
+        props = Path(record["propsPath"]).read_text(encoding="utf-8")
+        self.assertIn(
+            f"<BundledPlatformToolsArchive>{build_installer._xml_escape(str(path))}</BundledPlatformToolsArchive>",
+            props)
+
+    def test_missing_macos_platform_tools_fails(self):
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["downloads"] = [dl for dl in manifest["downloads"] if dl["id"] != "platformToolsMacos"]
+        self.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaises(fetch_build_inputs.FetchError):
+            self._prepare()
 
     def test_props_forward_the_fetched_gbl_efi_files(self):
         record, _ = self._prepare()

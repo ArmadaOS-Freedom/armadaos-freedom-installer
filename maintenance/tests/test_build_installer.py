@@ -116,6 +116,15 @@ def _build_fixture_repo(root):
                 "version": "x",
             },
             {
+                "id": "platformToolsMacos",
+                "name": "platform-tools-macos.zip",
+                "url": "https://example.invalid/platform-tools-darwin.zip",
+                "source": "https://developer.android.com/tools/releases/platform-tools",
+                "bytes": 11,
+                "sha256": "9" * 64,
+                "version": "x",
+            },
+            {
                 "id": "python",
                 "name": "python-embed.zip",
                 "url": "https://example.invalid/python.zip",

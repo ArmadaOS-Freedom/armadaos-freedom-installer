@@ -6,7 +6,9 @@ vendor and download checks and its pin generator, and runs on a Mac with the
 .NET SDK and the Xcode command line tools:
 
 1. manifest load + strict vendor file validation;
-2. official input fetch (the same pinned downloads);
+2. official input fetch (the same pinned downloads), including Google's
+   macOS platform-tools, which the app embeds so adb and fastboot need no
+   separate install;
 3. compile edl-ng for osx-arm64 and the universal boot packers from the
    checked-in sources;
 4. take the osx-arm64 libusb dylib out of the same pinned LibUsbDotNet package
@@ -50,6 +52,7 @@ _PROPERTY_NAMES = (
     "BundledAvbSigningKey",
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
+    "BundledPlatformToolsArchive",
 )
 
 # (profile, archive file name, MSBuild property)
@@ -98,7 +101,7 @@ def prepare(repo_root, work_dir, manifest_path=None):
 
     # --- Phase 2: official inputs -----------------------------------------
     fetched = fetch_build_inputs.fetch_all(manifest, str(downloads_root))
-    for dl_id in ("libusbPackage", "libusbLicense", "gblPrc", "gblRow"):
+    for dl_id in ("platformToolsMacos", "libusbPackage", "libusbLicense", "gblPrc", "gblRow"):
         if dl_id not in fetched:
             raise SystemExit(f"fetch error: missing download id {dl_id!r}")
 
@@ -162,6 +165,9 @@ def prepare(repo_root, work_dir, manifest_path=None):
         # GblPreserveOem stages these embedded EFI files; Core embeds them only when the props name them.
         "BundledGblPrcEfi": str(Path(fetched["gblPrc"]).resolve()),
         "BundledGblRowEfi": str(Path(fetched["gblRow"]).resolve()),
+        # Step 1 needs adb and fastboot; the window extracts this archive on first use instead of asking the
+        # user to install platform-tools.
+        "BundledPlatformToolsArchive": str(Path(fetched["platformToolsMacos"]).resolve()),
     }
     packages = {}
     for profile, archive_name, prop in _PROFILES:

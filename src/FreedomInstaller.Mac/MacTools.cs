@@ -99,6 +99,12 @@ internal static class MacTools
         return new VerifiedEdlFile(destination, staged.Length, sha256);
     }
 
+    /// <summary>
+    /// Extracts the embedded platform-tools archive (Google's macOS build, pinned in build-inputs.json) once per
+    /// archive, so adb and fastboot need no separate install. The extracted copy is keyed by the archive's
+    /// SHA-256: a different bundled version, or an earlier extraction that is missing adb or fastboot, is
+    /// replaced. Extraction goes to a fresh directory that is moved into place only when complete.
+    /// </summary>
     private static string? EnsureBundledPlatformTools()
     {
         using var archive = Assembly.GetExecutingAssembly().GetManifestResourceStream(PlatformToolsResource);
@@ -107,25 +113,58 @@ internal static class MacTools
             return null;
         }
 
-        var root = Path.Combine(
+        var parent = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "FreedomInstaller",
-            "platform-tools");
-        var adb = Path.Combine(root, "platform-tools", "adb");
-        if (!File.Exists(adb))
+            "FreedomInstaller");
+        var root = Path.Combine(parent, "platform-tools");
+        var tools = Path.Combine(root, "platform-tools");
+        var marker = Path.Combine(root, ".archive-sha256");
+        var sha256 = Convert.ToHexStringLower(SHA256.HashData(archive));
+
+        bool Current() =>
+            File.Exists(marker)
+            && string.Equals(File.ReadAllText(marker).Trim(), sha256, StringComparison.Ordinal)
+            && File.Exists(Path.Combine(tools, "adb"))
+            && File.Exists(Path.Combine(tools, "fastboot"));
+
+        if (Current())
         {
-            Directory.CreateDirectory(root);
-            ZipFile.ExtractToDirectory(archive, root, overwriteFiles: true);
+            return tools;
+        }
+
+        Directory.CreateDirectory(parent);
+        var staging = Path.Combine(parent, "platform-tools." + Guid.NewGuid().ToString("N"));
+        try
+        {
+            archive.Position = 0;
+            ZipFile.ExtractToDirectory(archive, staging);
             foreach (var tool in new[] { "adb", "fastboot" })
             {
-                var path = Path.Combine(root, "platform-tools", tool);
-                if (File.Exists(path))
+                var path = Path.Combine(staging, "platform-tools", tool);
+                if (!File.Exists(path))
                 {
-                    File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                    throw new IOException($"The bundled platform-tools archive has no {tool}.");
                 }
+
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+
+            File.WriteAllText(Path.Combine(staging, ".archive-sha256"), sha256);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+
+            Directory.Move(staging, root);
+        }
+        finally
+        {
+            if (Directory.Exists(staging))
+            {
+                Directory.Delete(staging, recursive: true);
             }
         }
 
-        return Path.Combine(root, "platform-tools");
+        return tools;
     }
 }
