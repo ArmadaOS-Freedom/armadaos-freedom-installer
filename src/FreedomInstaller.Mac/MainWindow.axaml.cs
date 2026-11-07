@@ -247,6 +247,7 @@ public partial class MainWindow : Window
     // ---------- 关闭 ----------
 
     private bool _closeConfirmed;
+    private bool _closePromptActive;
 
     /// <summary>
     /// While a write runs the window refuses to close; while only a 9008 session is open it asks first, like
@@ -273,17 +274,59 @@ public partial class MainWindow : Window
         if (_internalInstallClient is not null && !_internalInstallExitVerified)
         {
             e.Cancel = true;
-            var leave = await MessageDialog.AskAsync(
-                this,
-                T("Dynamic.InternalInstall.Exit.ConfirmTitle"),
-                T("Dynamic.InternalInstall.Exit.StatusIdle"),
-                T("Dynamic.Mac.Dialog.Yes"),
-                T("Dynamic.Mac.Dialog.No"));
-            if (leave)
+            if (_busy || _closePromptActive)
             {
-                _closeConfirmed = true;
-                DisposeInternalInstall();
-                Close();
+                return;
+            }
+
+            _closePromptActive = true;
+            try
+            {
+                bool leave;
+                if (HasInternalInstallWriteIssued)
+                {
+                    // A write was issued: the backend owns the 9008 session and its reset, so closing never
+                    // resets; it only releases this window's resources, after the same warning as the WPF window.
+                    leave = await MessageDialog.AskAsync(
+                        this,
+                        T("Dynamic.InternalInstall.Execution.CloseWarning.TerminalTitle"),
+                        T("Dynamic.InternalInstall.Execution.CloseWarning.TerminalBody"),
+                        T("Dynamic.Mac.Dialog.Yes"),
+                        T("Dynamic.Mac.Dialog.No"));
+                }
+                else
+                {
+                    // Nothing was written: leaving means the exit the prompt describes (one reset, then the same
+                    // tablet verified in Android), and the window closes once that return is verified. If it cannot
+                    // be verified (no loader proof, no return, another device), the exit card keeps the reason and
+                    // the window only closes after a second, explicit "close anyway", so it is never a trap.
+                    leave = await MessageDialog.AskAsync(
+                        this,
+                        T("Dynamic.InternalInstall.Exit.ConfirmTitle"),
+                        T("Dynamic.InternalInstall.Exit.StatusIdle"),
+                        T("Dynamic.Mac.Dialog.Yes"),
+                        T("Dynamic.Mac.Dialog.No"));
+                    if (leave && !await ExitInternalInstallMaintenanceAsync())
+                    {
+                        leave = await MessageDialog.AskAsync(
+                            this,
+                            T("Dynamic.InternalInstall.Exit.ConfirmTitle"),
+                            T("Dynamic.Global.Dialog.CloseWarning"),
+                            T("Dynamic.Mac.Dialog.Yes"),
+                            T("Dynamic.Mac.Dialog.No"));
+                    }
+                }
+
+                if (leave)
+                {
+                    _closeConfirmed = true;
+                    DisposeInternalInstall();
+                    Close();
+                }
+            }
+            finally
+            {
+                _closePromptActive = false;
             }
 
             return;

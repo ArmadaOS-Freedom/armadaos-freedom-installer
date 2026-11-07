@@ -1536,16 +1536,8 @@ public partial class MainWindow
     /// </summary>
     private async void OnExitInternalInstallMaintenance(object? sender, RoutedEventArgs e)
     {
-        var client = _internalInstallClient;
-        var expected = _internalInstallDeviceCheck?.Android;
-        if (_busy || client is null || !CanReleaseInternalInstallBackend)
+        if (_busy || _internalInstallClient is null || !CanReleaseInternalInstallBackend)
         {
-            return;
-        }
-
-        if (expected is null)
-        {
-            SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.NeedIdentity");
             return;
         }
 
@@ -1555,15 +1547,53 @@ public partial class MainWindow
             T("Dynamic.InternalInstall.Exit.ConfirmBody"),
             T("Dynamic.Mac.Dialog.Yes"),
             T("Dynamic.Mac.Dialog.No"));
-        if (!confirmed)
+        if (confirmed)
         {
-            return;
+            await ExitInternalInstallMaintenanceAsync();
+        }
+    }
+
+    /// <summary>
+    /// The one exit implementation, shared by the exit card and the window close: at most one reset per 9008
+    /// session, sent only after the initial loader probe of the same client has succeeded (as the WPF exit does),
+    /// then a read-only wait for the same tablet in Android. Returns whether that return was verified.
+    /// </summary>
+    private async Task<bool> ExitInternalInstallMaintenanceAsync()
+    {
+        var client = _internalInstallClient;
+        var expected = _internalInstallDeviceCheck?.Android;
+        if (_busy || client is null || !CanReleaseInternalInstallBackend)
+        {
+            return false;
+        }
+
+        if (expected is null)
+        {
+            SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.NeedIdentity");
+            return false;
         }
 
         await RunBusyAsync(async token =>
         {
             if (!_internalInstallResetSent)
             {
+                if (!client.HasInitialSaharaProof)
+                {
+                    // A step-2 failure can leave a client that never finished its initial loader probe, and
+                    // ResetAsync refuses such a client before sending anything. Prove it first, read-only, and
+                    // keep the one reset attempt for when it can actually be sent.
+                    SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.CheckingProof");
+                    try
+                    {
+                        await client.ProbeAsync(0, initialLoader: true, cancellationToken: token);
+                    }
+                    catch (Exception exception) when (exception is not OutOfMemoryException)
+                    {
+                        SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ProofFailed", exception.Message);
+                        return;
+                    }
+                }
+
                 _internalInstallResetSent = true;
                 SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.Resetting");
                 try
@@ -1636,6 +1666,8 @@ public partial class MainWindow
 
             SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ReturnUnconfirmed", lastError ?? UnknownValue);
         });
+
+        return _internalInstallExitVerified;
     }
 
     /// <summary>Releases read locks and staged tools; backups, plans and evidence on disk are never deleted.</summary>
