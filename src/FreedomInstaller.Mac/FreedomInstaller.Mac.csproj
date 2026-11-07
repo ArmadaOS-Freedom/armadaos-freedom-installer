@@ -14,8 +14,10 @@
     <SupportedOSPlatformVersion>12.0</SupportedOSPlatformVersion>
     <Authors>danyi (mydanyi)</Authors>
     <Product>ArmadaOS Freedom 安装助手</Product>
-    <Version>0.7.6</Version>
-    <InformationalVersion>0.7.6</InformationalVersion>
+    <!-- The installer version has one source, the WPF window's project: upstream version bumps carry over. -->
+    <FreedomInstallerVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\FreedomInstaller.App\FreedomInstaller.App.csproj')), '&lt;Version&gt;([^&lt;]+)&lt;/Version&gt;').Groups[1].Value)</FreedomInstallerVersion>
+    <Version>$(FreedomInstallerVersion)</Version>
+    <InformationalVersion>$(FreedomInstallerVersion)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 

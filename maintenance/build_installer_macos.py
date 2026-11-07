@@ -244,14 +244,16 @@ def publish(repo_root, record, output_dir, env):
         ["dotnet", "publish", str(project), "-c", "Release", "-r", RUNTIME, "--self-contained", "true",
          "-p:UseSharedCompilation=false", f"-p:BundledBuildInputsProps={record['propsPath']}", "-o", str(publish_dir)],
         cwd=repo_root, env=env, phase="publish")
+    # The Mac project takes its version from the WPF project, so the bundle does too.
+    version_source = repo_root / "src" / "FreedomInstaller.App" / "FreedomInstaller.App.csproj"
     version = None
-    for line in project.read_text(encoding="utf-8").splitlines():
+    for line in version_source.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line.startswith("<Version>") and line.endswith("</Version>"):
             version = line[len("<Version>"):-len("</Version>")]
             break
     if not version:
-        raise SystemExit("publish error: FreedomInstaller.Mac.csproj declares no <Version>")
+        raise SystemExit("publish error: FreedomInstaller.App.csproj declares no <Version>")
     (app / "Contents" / "Resources").mkdir(parents=True)
     shutil.copytree(publish_dir, app / "Contents" / "MacOS")
     bi._atomic_write_text(app / "Contents" / "Info.plist", _info_plist(version))
