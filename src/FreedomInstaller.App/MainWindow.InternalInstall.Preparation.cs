@@ -252,7 +252,7 @@ public partial class MainWindow
                     T("Dynamic.InternalInstall.Execution.ReleaseBlocked"));
             }
 
-            bool preserveRecovery = backend.Snapshot.ExecutionStarted;
+            bool preserveRecovery = HasInternalInstallExecutionStarted;
             backend.Dispose();
             _internalInstallBackend = null;
             DiscardInternalInstallPreparation(_internalInstallBackendWorkDirectory, preserveRecovery);
