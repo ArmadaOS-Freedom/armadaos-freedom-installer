@@ -144,71 +144,87 @@ internal static class Program
             await EnterEdlAndBackupAsync(options, check, tools, work, discovery, runner, transport, token);
         using InternalBackupSet backup = backupSet;
 
-        // Step 3: the system package and the partition plan.
-        Console.WriteLine("第 3 步：导入系统包…");
-        string packageWork = Path.Combine(work, "package");
-        Directory.CreateDirectory(packageWork);
-        using ImportedPackage imported = await PackageImporter.ImportAsync(
-            package, expected.Identity.Model, InstallationTarget.Internal, packageWork, token);
-        if (!imported.Validation.IsValid || imported.Validation.Storage is null)
+        // From here until a write is issued the tablet sits in 9008 with nothing written. Every way out of that
+        // window (a declined confirmation, an invalid package, a failed preparation, a refused execution) resets
+        // it, as the window's exit does; after an issued or unknown write the backend owns the session.
+        bool executeCalled = false;
+        InternalInstallResult? result = null;
+        try
         {
-            throw new InvalidOperationException(
-                "系统包校验未通过: " + string.Join("；", imported.Validation.Reasons));
-        }
+            // Step 3: the system package and the partition plan.
+            Console.WriteLine("第 3 步：导入系统包…");
+            string packageWork = Path.Combine(work, "package");
+            Directory.CreateDirectory(packageWork);
+            using ImportedPackage imported = await PackageImporter.ImportAsync(
+                package, expected.Identity.Model, InstallationTarget.Internal, packageWork, token);
+            if (!imported.Validation.IsValid || imported.Validation.Storage is null)
+            {
+                throw new InvalidOperationException(
+                    "系统包校验未通过: " + string.Join("；", imported.Validation.Reasons));
+            }
 
-        PackageStorage storage = imported.Validation.Storage;
-        AndroidAllocationRange range = InternalPartitionPlanner.GetAndroidRange(backup.Tables[0], storage);
-        long androidGiB = options.AndroidGiB ?? AskAndroidGiB(range);
-        if (androidGiB < range.MinimumGiB || androidGiB > range.MaximumGiB)
+            PackageStorage storage = imported.Validation.Storage;
+            AndroidAllocationRange range = InternalPartitionPlanner.GetAndroidRange(backup.Tables[0], storage);
+            long androidGiB = options.AndroidGiB ?? AskAndroidGiB(range);
+            if (androidGiB < range.MinimumGiB || androidGiB > range.MaximumGiB)
+            {
+                throw new ArgumentException($"Android 大小必须在 {range.MinimumGiB}–{range.MaximumGiB} GiB 之间。");
+            }
+
+            Console.WriteLine($"  Android 保留 {androidGiB} GiB，生成分区方案…");
+            using InternalArtifactSet artifacts = await InternalInstallArtifacts.PrepareAsync(
+                backup, androidGiB, storage, work, token);
+
+            // Step 4: the native boot tools and the direct preparation.
+            Console.WriteLine("第 4 步：准备（构建 boot、核对全部输入，不写设备）…");
+            using EdlRawBootTools nativeTools = await LoadNativeToolsAsync(packer, unpacker, work, token);
+            using InternalInstallDirectAssets assets = await InternalInstallDirectAssets.LoadAsync(nativeTools, token);
+            var services = new InternalInstallServices(new EdlEntry(options.Adb, runner, discovery), runner, discovery, options.Adb);
+            using InternalInstallBackend backend = await InternalInstallBackend.CreatePreparedAsync(
+                check, client, backup, artifacts, imported, assets, services, work, token);
+
+            InternalInstallPrepared prepared = backend.Prepared;
+            PrintPrepared(prepared);
+
+            // Step 5: the same two confirmations the install page asks for.
+            Console.WriteLine();
+            Console.WriteLine("将要写入设备：分区表、boot_b、boot_a、misc 与 Linux 分区；Android 的 userdata 会被清空。");
+            Console.Write($"输入确认码 {prepared.ConfirmationId} 以继续（其他任何输入都会退出）: ");
+            if (!string.Equals(Console.ReadLine()?.Trim(), prepared.ConfirmationId, StringComparison.Ordinal))
+            {
+                Console.WriteLine("未确认，没有写入任何内容。");
+                return 1;
+            }
+
+            Console.Write("确认清空 Android 用户数据？输入 ERASE: ");
+            if (!string.Equals(Console.ReadLine()?.Trim(), "ERASE", StringComparison.Ordinal))
+            {
+                Console.WriteLine("未确认，没有写入任何内容。");
+                return 1;
+            }
+
+            var installProgress = new Progress<InternalInstallProgress>(report => Console.WriteLine($"  [写入] {report}"));
+            executeCalled = true;
+            result = await backend.ExecuteAsync(
+                prepared.ConfirmationId, userdataEraseConfirmed: true, installProgress, token);
+
+            Console.WriteLine($"结果: {result.Outcome}，写入状态 {result.WriteState}，" +
+                              $"最后确认的阶段 {result.LastVerifiedStage?.ToString() ?? "无"}，" +
+                              $"已校验的槽位 {string.Join(",", result.VerifiedSlots)}");
+            Console.WriteLine($"证据目录: {prepared.EvidenceDirectory}");
+            // The direct route ends in InstallationCompleted (every write read back, slots verified, normal reset
+            // accepted); Completed is the both-OS acceptance of the other routes. Anything else is a failure.
+            return result.Outcome is InternalInstallOutcome.Completed or InternalInstallOutcome.InstallationCompleted
+                ? 0
+                : 1;
+        }
+        finally
         {
-            throw new ArgumentException($"Android 大小必须在 {range.MinimumGiB}–{range.MaximumGiB} GiB 之间。");
+            if (!executeCalled || result?.WriteState == InternalInstallWriteState.NoneIssued)
+            {
+                await ResetWithoutWriteAsync(client);
+            }
         }
-
-        Console.WriteLine($"  Android 保留 {androidGiB} GiB，生成分区方案…");
-        using InternalArtifactSet artifacts = await InternalInstallArtifacts.PrepareAsync(
-            backup, androidGiB, storage, work, token);
-
-        // Step 4: the native boot tools and the direct preparation.
-        Console.WriteLine("第 4 步：准备（构建 boot、核对全部输入，不写设备）…");
-        using EdlRawBootTools nativeTools = await LoadNativeToolsAsync(packer, unpacker, work, token);
-        using InternalInstallDirectAssets assets = await InternalInstallDirectAssets.LoadAsync(nativeTools, token);
-        var services = new InternalInstallServices(new EdlEntry(options.Adb, runner, discovery), runner, discovery, options.Adb);
-        using InternalInstallBackend backend = await InternalInstallBackend.CreatePreparedAsync(
-            check, client, backup, artifacts, imported, assets, services, work, token);
-
-        InternalInstallPrepared prepared = backend.Prepared;
-        PrintPrepared(prepared);
-
-        // Step 5: the same two confirmations the install page asks for.
-        Console.WriteLine();
-        Console.WriteLine("将要写入设备：分区表、boot_b、boot_a、misc 与 Linux 分区；Android 的 userdata 会被清空。");
-        Console.Write($"输入确认码 {prepared.ConfirmationId} 以继续（其他任何输入都会退出）: ");
-        if (!string.Equals(Console.ReadLine()?.Trim(), prepared.ConfirmationId, StringComparison.Ordinal))
-        {
-            Console.WriteLine("未确认，没有写入任何内容。");
-            return 1;
-        }
-
-        Console.Write("确认清空 Android 用户数据？输入 ERASE: ");
-        if (!string.Equals(Console.ReadLine()?.Trim(), "ERASE", StringComparison.Ordinal))
-        {
-            Console.WriteLine("未确认，没有写入任何内容。");
-            return 1;
-        }
-
-        var installProgress = new Progress<InternalInstallProgress>(report => Console.WriteLine($"  [写入] {report}"));
-        InternalInstallResult result = await backend.ExecuteAsync(
-            prepared.ConfirmationId, userdataEraseConfirmed: true, installProgress, token);
-
-        Console.WriteLine($"结果: {result.Outcome}，写入状态 {result.WriteState}，" +
-                          $"最后确认的阶段 {result.LastVerifiedStage?.ToString() ?? "无"}，" +
-                          $"已校验的槽位 {string.Join(",", result.VerifiedSlots)}");
-        Console.WriteLine($"证据目录: {prepared.EvidenceDirectory}");
-        // The direct route ends in InstallationCompleted (every write read back, slots verified, normal reset
-        // accepted); Completed is the both-OS acceptance of the other routes. Anything else is a failure.
-        return result.Outcome is InternalInstallOutcome.Completed or InternalInstallOutcome.InstallationCompleted
-            ? 0
-            : 1;
     }
 
     // ------------------------------------------------------------------ helpers
@@ -257,9 +273,42 @@ internal static class Program
 
         Console.WriteLine("  读取安装备份（只读）…");
         var backupProgress = new Progress<InternalBackupProgress>(report => Console.WriteLine($"  [备份] {report}"));
-        InternalBackupSet backup = await InternalInstallBackup.CreateAsync(client, work, backupProgress, token);
+        InternalBackupSet backup;
+        try
+        {
+            backup = await InternalInstallBackup.CreateAsync(client, work, backupProgress, token);
+        }
+        catch
+        {
+            await ResetWithoutWriteAsync(client);
+            throw;
+        }
+
         Console.WriteLine($"  备份目录: {backup.DirectoryPath}");
         return (client, backup);
+    }
+
+    /// <summary>
+    /// Leaves 9008 when nothing was written: completes the initial loader probe first if the session never did
+    /// (ResetAsync refuses a client without it), then sends one reset. Never throws, so it cannot hide the
+    /// reason the run stopped; a failure only tells the user to restart the tablet by hand.
+    /// </summary>
+    private static async Task ResetWithoutWriteAsync(EdlClient client)
+    {
+        try
+        {
+            if (!client.HasInitialSaharaProof)
+            {
+                await client.ProbeAsync(0, initialLoader: true, CancellationToken.None);
+            }
+
+            Console.WriteLine("没有写入任何内容，复位，退出 9008…");
+            await client.ResetAsync(CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"  复位未完成（{exception.Message}）；没有写入任何内容，请长按电源键手动重启平板。");
+        }
     }
 
     /// <summary>Read-only run of steps 1 and 2; the tablet is reset out of 9008 afterwards.</summary>
@@ -280,8 +329,7 @@ internal static class Program
             await EnterEdlAndBackupAsync(options, check, tools, work, discovery, runner, transport, token);
         using (backup)
         {
-            Console.WriteLine("复位，退出 9008…");
-            await client.ResetAsync(token);
+            await ResetWithoutWriteAsync(client);
         }
 
         Console.WriteLine("完成：没有写入任何分区。");
