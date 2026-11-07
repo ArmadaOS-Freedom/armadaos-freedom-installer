@@ -194,6 +194,13 @@ public partial class MainWindow : Window
                 missing.Add("adb");
             }
 
+            // Step 1 reboots into fastboot to read the lock state and reboots back with it, so a missing fastboot
+            // would only show after the tablet has left Android.
+            if (_fastbootPath is null)
+            {
+                missing.Add("fastboot");
+            }
+
             // 9008 工具按型号各一份归档：至少找到一份才能继续，备份那一步再按平板型号取用。
             var edlModels = EdlDeviceProfiles.Models
                 .Where(model => EdlDeviceProfiles.FindByModel(model)?.ArchiveLogicalName is { } name && MacTools.Exists(name))

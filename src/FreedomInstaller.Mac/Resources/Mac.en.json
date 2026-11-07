@@ -10,7 +10,7 @@
   "Dynamic.Mac.Environment.SystemReady": "macOS {0} ({1}) is supported.",
   "Dynamic.Mac.Environment.SystemUnsupported": "This system is not supported. macOS 12 or later on Apple silicon is required.",
   "Dynamic.Mac.Environment.ToolsReady": "Connection tools ready: adb {0}; 9008 tools {1}; boot packers {2}.",
-  "Dynamic.Mac.Environment.ToolsMissing": "Missing connection tools: {0}. adb can be installed with Homebrew (brew install android-platform-tools).",
+  "Dynamic.Mac.Environment.ToolsMissing": "Missing connection tools: {0}. adb and fastboot can be installed with Homebrew (brew install android-platform-tools).",
   "Dynamic.Mac.Environment.DriverReady": "macOS reaches 9008 devices directly through libusb; no driver is needed.",
   "Dynamic.Mac.Environment.Bundled": "bundled",
   "Dynamic.Mac.Environment.Missing": "not found",

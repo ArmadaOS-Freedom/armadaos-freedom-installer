@@ -10,7 +10,7 @@
   "Dynamic.Mac.Environment.SystemReady": "支持当前 macOS {0}（{1}）。",
   "Dynamic.Mac.Environment.SystemUnsupported": "当前系统不受支持，需要 Apple 芯片的 macOS 12 或更高版本。",
   "Dynamic.Mac.Environment.ToolsReady": "连接工具已准备：adb {0}；9008 工具 {1}；boot 打包工具 {2}。",
-  "Dynamic.Mac.Environment.ToolsMissing": "缺少连接工具：{0}。adb 可用 Homebrew 安装（brew install android-platform-tools）。",
+  "Dynamic.Mac.Environment.ToolsMissing": "缺少连接工具：{0}。adb 和 fastboot 可用 Homebrew 安装（brew install android-platform-tools）。",
   "Dynamic.Mac.Environment.DriverReady": "macOS 通过 libusb 直接访问 9008 设备，不需要安装驱动。",
   "Dynamic.Mac.Environment.Bundled": "内置",
   "Dynamic.Mac.Environment.Missing": "未找到",
