@@ -7,10 +7,90 @@ namespace FreedomInstaller.App;
 public partial class MainWindow
 {
     private InstallerWorkSession? _workSession;
-    private string TemporaryWorkRoot => (_workSession ??= new InstallerWorkSession(
-        Environment.GetEnvironmentVariable("FREEDOM_WORK_ROOT")
-        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ArmadaOS Freedom", "Work"))).DirectoryPath;
+    private InstallerWorkDirectoryResult? _workDirectory;
+    private string? _manualWorkRoot = Environment.GetEnvironmentVariable("FREEDOM_WORK_ROOT");
+    private bool _workDirectoryReady;
+
+    private string TemporaryWorkRoot
+    {
+        get
+        {
+            if (_workSession is not null) return _workSession.DirectoryPath;
+            if (!_workDirectoryReady || _workDirectory is null)
+                throw new InvalidOperationException("Choose a writable temporary work directory in environment preparation first.");
+            return (_workSession = new InstallerWorkSession(_workDirectory.RootPath)).DirectoryPath;
+        }
+    }
+
+    private async System.Threading.Tasks.Task CheckTemporaryWorkDirectoryAsync(
+        System.Threading.CancellationToken cancellationToken)
+    {
+        _workDirectoryReady = false;
+        SetText(EnvironmentWorkStatusText, "Dynamic.Environment.Checking");
+        SetEnvironmentIndicator(EnvironmentWorkIndicator, null);
+        // An active session must keep its files on the original volume.
+        var requestedRoot = _workSession is null ? _manualWorkRoot : _workDirectory?.RootPath;
+        try
+        {
+            var result = await System.Threading.Tasks.Task.Run(
+                () => InstallerWorkDirectory.Resolve(requestedRoot), cancellationToken);
+            if (_closed) return;
+            cancellationToken.ThrowIfCancellationRequested();
+            _workDirectory = result;
+            _workDirectoryReady = true;
+            SetText(EnvironmentWorkPathText, "Dynamic.Environment.WorkPath", result.RootPath);
+            SetText(EnvironmentWorkStatusText, "Dynamic.Environment.WorkSpace",
+                result.AvailableFreeBytes / (1024d * 1024 * 1024));
+            SetEnvironmentIndicator(EnvironmentWorkIndicator, true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or System.Security.SecurityException or ArgumentException or NotSupportedException)
+        {
+            if (_closed) return;
+            SetText(EnvironmentWorkPathText, string.IsNullOrWhiteSpace(requestedRoot)
+                ? M("Dynamic.Environment.WorkUnselected")
+                : M("Dynamic.Environment.WorkPath", requestedRoot));
+            SetText(EnvironmentWorkStatusText, "Dynamic.Environment.WorkFailed", exception.Message);
+            SetEnvironmentIndicator(EnvironmentWorkIndicator, false);
+        }
+    }
+
+    private bool CanChangeTemporaryWorkDirectory =>
+        _ready && !_closed && !_busy && !_environmentDriverInstalling && _workSession is null;
+
+    private async void OnChooseTemporaryWorkDirectory(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (!CanChangeTemporaryWorkDirectory) return;
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = T("Static.Environment.WorkChooseTitle")
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        _manualWorkRoot = Path.Combine(dialog.FolderName, "ArmadaOS Freedom", "Work");
+        await RecheckTemporaryWorkDirectoryAsync();
+    }
+
+    private async void OnAutoTemporaryWorkDirectory(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (!CanChangeTemporaryWorkDirectory) return;
+        _manualWorkRoot = null;
+        await RecheckTemporaryWorkDirectoryAsync();
+    }
+
+    private System.Threading.Tasks.Task RecheckTemporaryWorkDirectoryAsync() =>
+        RunBusyAsync(async token =>
+        {
+            await CheckTemporaryWorkDirectoryAsync(token);
+            if (!_closed) RenderEnvironmentStatus();
+        });
+
+    private void RefreshTemporaryWorkDirectoryActions()
+    {
+        EnvironmentWorkChooseButton.IsEnabled = CanChangeTemporaryWorkDirectory;
+        EnvironmentWorkAutoButton.IsEnabled = CanChangeTemporaryWorkDirectory;
+        EnvironmentWorkLockedText.Visibility = _workSession is null
+            ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
+    }
 
     private void SaveWorkLogOnClose()
     {

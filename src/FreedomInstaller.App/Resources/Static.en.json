@@ -266,5 +266,11 @@
   "Static.SupportAlipayQrAutomationName": "Alipay payment QR code",
   "Static.SupportWeChatTitle": "WeChat Pay",
   "Static.SupportWeChatScan": "Scan the QR code below with WeChat",
-  "Static.SupportWeChatQrAutomationName": "WeChat Pay payment QR code"
+  "Static.SupportWeChatQrAutomationName": "WeChat Pay payment QR code",
+  "Static.Environment.WorkTitle": "Temporary files",
+  "Static.Environment.WorkChooseTitle": "Choose a location for temporary work files",
+  "Static.Environment.WorkChoose": "Change folder",
+  "Static.Environment.WorkAuto": "Choose automatically",
+  "Static.Environment.WorkHint": "Automatically chooses the local drive with the most available space, or choose a folder yourself. Backups are stored separately. Installation also checks space against the actual image size.",
+  "Static.Environment.WorkLocked": "Work has started and this session uses a fixed directory. To change it, finish or exit the current operation and reopen the installer."
 }
