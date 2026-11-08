@@ -1245,5 +1245,10 @@
   "Dynamic.Link.AboutH0CheungName": "h0cheung",
   "Dynamic.Link.AboutSunflowerName": "sunflower2333",
   "Dynamic.AboutBilibiliThanksName": "滴滴滴耶耶",
-  "Dynamic.Link.AboutBilibiliThanks": "Bilibili page"
+  "Dynamic.Link.AboutBilibiliThanks": "Bilibili page",
+  "Dynamic.Environment.WorkPath": "{0}",
+  "Dynamic.Environment.WorkUnselected": "No temporary file location selected.",
+  "Dynamic.Environment.WorkSpace": "Available space: {0:N1} GiB",
+  "Dynamic.Environment.WorkFailed": "Temporary file location unavailable. Choose another folder or free up space. Details: {0}",
+  "Dynamic.Environment.WorkNotReady": "Temporary file location is not ready. Choose another folder or free up space and check again."
 }
