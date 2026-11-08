@@ -102,8 +102,9 @@ def prepare(repo_root, work_dir, manifest_path=None):
     env = bi._make_controlled_env(work_dir)
 
     # --- Phase 2: official inputs -----------------------------------------
-    fetched = fetch_build_inputs.fetch_all(manifest, str(downloads_root))
-    for dl_id in ("platformToolsMacos", "libusbPackage", "libusbLicense", "gblPrc", "gblRow"):
+    fetched = fetch_build_inputs.fetch_all(
+        manifest, str(downloads_root), ids=fetch_build_inputs.BUILDER_IDS["macos"])
+    for dl_id in fetch_build_inputs.BUILDER_IDS["macos"]:
         if dl_id not in fetched:
             raise SystemExit(f"fetch error: missing download id {dl_id!r}")
 

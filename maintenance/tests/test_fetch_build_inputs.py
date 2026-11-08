@@ -233,6 +233,38 @@ class FetchTests(unittest.TestCase):
             result = fetch.fetch_all(manifest, self.out, verify_only=True)
         self.assertEqual(len(result), len(fetch.REQUIRED_IDS))
 
+    def test_builder_selection_fetches_only_its_ids(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        for platform, ids in fetch.BUILDER_IDS.items():
+            with self.subTest(platform=platform):
+                with mock.patch.object(fetch.urllib.request, "urlopen", self._mock_urlopen()):
+                    result = fetch.fetch_all(manifest, self.out, ids=ids)
+                self.assertEqual(sorted(result), sorted(ids))
+        self.assertEqual(
+            sorted(set(fetch.BUILDER_IDS["windows"]) | set(fetch.BUILDER_IDS["macos"])),
+            sorted(fetch.REQUIRED_IDS))
+
+    def test_verify_only_windows_ignores_missing_macos_input(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        with mock.patch.object(fetch.urllib.request, "urlopen", self._mock_urlopen()):
+            fetch.fetch_all(manifest, self.out, ids=fetch.BUILDER_IDS["windows"])
+        self.assertFalse(os.path.exists(os.path.join(self.out, FIXTURES["platformToolsMacos"][1])))
+        with mock.patch.object(fetch.urllib.request, "urlopen", side_effect=AssertionError("no network")):
+            result = fetch.fetch_all(manifest, self.out, verify_only=True, ids=fetch.BUILDER_IDS["windows"])
+        self.assertNotIn("platformToolsMacos", result)
+        with self.assertRaises(fetch.FetchError):
+            fetch.fetch_all(manifest, self.out, verify_only=True)
+
+    def test_reject_invalid_id_selection(self) -> None:
+        manifest = fetch.load_manifest(self.manifest_path)
+        for ids in ((), ("nope",), ("python", "python")):
+            with self.subTest(ids=ids), self.assertRaises(fetch.FetchError):
+                fetch.fetch_all(manifest, self.out, verify_only=True, ids=ids)
+
+    def test_cli_defaults_to_windows_inputs(self) -> None:
+        self.assertEqual(fetch._parse_args(["--output-dir", self.out]).platform, "windows")
+        self.assertEqual(fetch._parse_args(["--output-dir", self.out, "--platform", "macos"]).platform, "macos")
+
     def test_verify_only_rejects_corrupt(self) -> None:
         manifest = fetch.load_manifest(self.manifest_path)
         with mock.patch.object(fetch.urllib.request, "urlopen", self._mock_urlopen()):

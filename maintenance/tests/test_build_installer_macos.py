@@ -35,11 +35,13 @@ def _nupkg():
     return buf.getvalue()
 
 
-def _fetch(manifest, output_dir):
+def _fetch(manifest, output_dir, ids=None):
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     files = {}
     for dl in manifest["downloads"]:
+        if ids is not None and dl["id"] not in ids:
+            continue
         data = _nupkg() if dl["id"] == "libusbPackage" else (
             b"libusb license text\n" if dl["id"] == "libusbLicense" else f"{dl['id']}\n".encode())
         path = out / dl["name"]
@@ -127,6 +129,17 @@ class MacPrepareTests(unittest.TestCase):
         self.assertIn(
             f"<BundledPlatformToolsArchive>{build_installer._xml_escape(str(path))}</BundledPlatformToolsArchive>",
             props)
+
+    def test_fetches_only_the_macos_inputs(self):
+        with mock.patch.object(fetch_build_inputs, "fetch_all", side_effect=_fetch) as fetch_mock, \
+             mock.patch.object(build_installer, "_run", side_effect=_compile), \
+             mock.patch.object(build_installer_macos.package_edl, "package",
+                               side_effect=lambda ns: Path(ns.output).write_bytes(b"zip") and {}):
+            build_installer_macos.prepare(self.repo_root, self.work_dir, manifest_path=self.manifest_path)
+        ids = fetch_mock.call_args.kwargs["ids"]
+        self.assertEqual(ids, fetch_build_inputs.BUILDER_IDS["macos"])
+        self.assertNotIn("platformTools", ids)
+        self.assertNotIn("python", ids)
 
     def test_missing_macos_platform_tools_fails(self):
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))

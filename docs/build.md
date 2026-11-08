@@ -84,6 +84,8 @@ python3 -B maintenance/fetch_build_inputs.py --output-dir /work/downloads
 python3 -B maintenance/fetch_build_inputs.py --output-dir /work/downloads --verify-only
 ```
 
+默认只处理 Windows 构建用到的组件；`--platform macos` 处理 macOS 构建的组件，`--platform all` 处理清单中的全部组件。两个构建脚本各自只下载自己用到的组件。
+
 构建相关 Python 测试：
 
 ```sh
