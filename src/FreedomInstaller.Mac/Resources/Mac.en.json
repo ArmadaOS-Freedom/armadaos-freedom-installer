@@ -19,5 +19,7 @@
   "Dynamic.Mac.Dialog.Ok": "OK",
   "Dynamic.Mac.Check.InEdl": "The tablet is in 9008 mode (SN:{0}) and has no adb. Step 1 reads the lock state and slot from Android, so restart the tablet into Android first (hold the power key for about 15 seconds), then click “Check tablet” again. If step 1 already passed, you can go on with the backup in step 2.",
   "Dynamic.Mac.Backup.AlreadyInEdl": "The tablet is already in 9008; checking its USB serial against the tablet from step 1 (SoC serial {0})…",
-  "Dynamic.Mac.Backup.AlreadyInEdlLog": "The tablet is already in 9008 and its USB serial {0} matches the SoC serial read in step 1; backing up directly."
+  "Dynamic.Mac.Backup.AlreadyInEdlLog": "The tablet is already in 9008 and its USB serial {0} matches the SoC serial read in step 1; backing up directly.",
+  "Dynamic.Mac.Close.BusyTitle": "A step is still running",
+  "Dynamic.Mac.Close.BusyBody": "The current step is still talking to the tablet (fastboot, entering 9008, backup or exit). Keep USB connected and close the window after it has finished."
 }

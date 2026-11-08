@@ -252,8 +252,8 @@ public partial class MainWindow : Window
     private bool _closePromptActive;
 
     /// <summary>
-    /// While a write runs the window refuses to close; while only a 9008 session is open it asks first, like
-    /// the WPF window. Backups and evidence are never deleted on close.
+    /// While a write or any other device step runs the window refuses to close; while only a 9008 session is
+    /// open it asks first, like the WPF window. Backups and evidence are never deleted on close.
     /// </summary>
     private async void OnWindowClosing(object? sender, WindowClosingEventArgs e)
     {
@@ -273,10 +273,38 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_busy)
+        {
+            // A device step is still running: step 1's fastboot round-trip, the 9008 entry before any client
+            // exists, a backup or an exit wait. Closing now would skip that step's own return or recovery and can
+            // leave the tablet in fastboot or 9008, so the window stays open until the step has finished.
+            e.Cancel = true;
+            if (_closePromptActive)
+            {
+                return;
+            }
+
+            _closePromptActive = true;
+            try
+            {
+                await MessageDialog.ShowAsync(
+                    this,
+                    T("Dynamic.Mac.Close.BusyTitle"),
+                    T("Dynamic.Mac.Close.BusyBody"),
+                    T("Dynamic.Mac.Dialog.Ok"));
+            }
+            finally
+            {
+                _closePromptActive = false;
+            }
+
+            return;
+        }
+
         if (_internalInstallClient is not null && !_internalInstallExitVerified)
         {
             e.Cancel = true;
-            if (_busy || _closePromptActive)
+            if (_closePromptActive)
             {
                 return;
             }
