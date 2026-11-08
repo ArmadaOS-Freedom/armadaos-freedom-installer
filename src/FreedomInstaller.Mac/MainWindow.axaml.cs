@@ -131,7 +131,17 @@ public partial class MainWindow : Window
         SupportProjectButton.IsEnabled = !_busy;
     }
 
-    private void OnShowEnvironment(object? sender, RoutedEventArgs e) => ShowView(EnvironmentPage);
+    /// <summary>
+    /// Like the WPF window, the environment page stays closed while this window has the tablet in (or possibly in)
+    /// 9008: a re-check that lost a tool would lock the wizard, and with it the exit card, out.
+    /// </summary>
+    private void OnShowEnvironment(object? sender, RoutedEventArgs e)
+    {
+        if (!_busy && !HasLiveDeviceSession)
+        {
+            ShowView(EnvironmentPage);
+        }
+    }
 
     private void OnEnvironmentContinue(object? sender, RoutedEventArgs e)
     {
@@ -162,7 +172,15 @@ public partial class MainWindow : Window
 
     // ---------- 运行环境 ----------
 
-    private async void OnEnvironmentCheck(object? sender, RoutedEventArgs e) => await CheckEnvironmentAsync();
+    private async void OnEnvironmentCheck(object? sender, RoutedEventArgs e)
+    {
+        if (_busy || HasLiveDeviceSession)
+        {
+            return;
+        }
+
+        await CheckEnvironmentAsync();
+    }
 
     /// <summary>
     /// Read-only host check, the Mac counterpart of the WPF environment page: the system, the connection tools
@@ -292,6 +310,41 @@ public partial class MainWindow : Window
                     T("Dynamic.Mac.Close.BusyTitle"),
                     T("Dynamic.Mac.Close.BusyBody"),
                     T("Dynamic.Mac.Dialog.Ok"));
+            }
+            finally
+            {
+                _closePromptActive = false;
+            }
+
+            return;
+        }
+
+        if (HasUnconfirmedEdlEntry)
+        {
+            // The 9008 entry was sent but produced no client: the tablet may be in 9008 and this window can neither
+            // reset it nor verify its return, so closing only goes ahead after an explicit confirmation.
+            e.Cancel = true;
+            if (_closePromptActive)
+            {
+                return;
+            }
+
+            _closePromptActive = true;
+            try
+            {
+                var leave = await MessageDialog.AskAsync(
+                    this,
+                    T("Dynamic.InternalInstall.Exit.ConfirmTitle"),
+                    T("Dynamic.InternalInstall.Backup.EntryUnconfirmed") + Environment.NewLine + Environment.NewLine
+                        + T("Dynamic.Global.Dialog.CloseWarning"),
+                    T("Dynamic.Mac.Dialog.Yes"),
+                    T("Dynamic.Mac.Dialog.No"));
+                if (leave)
+                {
+                    _closeConfirmed = true;
+                    DisposeInternalInstall();
+                    Close();
+                }
             }
             finally
             {

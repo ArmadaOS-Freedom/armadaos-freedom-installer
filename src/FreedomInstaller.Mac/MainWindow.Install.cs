@@ -35,6 +35,12 @@ public partial class MainWindow
     private bool _internalInstallExitVerified;
     private bool _internalInstallResetSent;
 
+    /// <summary>
+    /// Set just before step 2 sends the tablet to 9008 (or starts waiting for it there) and cleared once the client
+    /// is bound: while set without a client, the tablet may be in 9008 with nothing in this window to reset it.
+    /// </summary>
+    private bool _internalInstallEntryAttempted;
+
     // 03 空间
     private ImportedPackage? _internalInstallPackage;
     private AndroidAllocationRange? _internalInstallRange;
@@ -99,14 +105,22 @@ public partial class MainWindow
     /// <summary>A backend that issued no write can be released and prepared again; one that wrote is kept.</summary>
     private bool CanReleaseInternalInstallBackend => !_internalInstallExecutionActive && !HasInternalInstallWriteIssued;
 
+    /// <summary>The tablet is (or may be) in 9008 for this window: a bound client not yet verified back, or an unconfirmed entry.</summary>
+    private bool HasLiveDeviceSession =>
+        (_internalInstallClient is not null && !_internalInstallExitVerified)
+        || (_internalInstallClient is null && _internalInstallEntryAttempted);
+
+    /// <summary>An entry to 9008 was attempted but produced no client, so neither a reset nor a verified return is possible here.</summary>
+    private bool HasUnconfirmedEdlEntry => _internalInstallClient is null && _internalInstallEntryAttempted;
+
     // ================================================================ 导航
 
     private bool CanEnterStep(int step) => step switch
     {
         0 => true,
         1 => HasCheckedDevice,
-        2 => HasBackup,
-        3 => HasPrepared,
+        2 => HasCheckedDevice && HasBackup,
+        3 => HasCheckedDevice && HasPrepared,
         _ => false,
     };
 
@@ -193,7 +207,7 @@ public partial class MainWindow
         InternalInstallNavCheck.IsEnabled = idle;
         BackToFunctionsButton.IsEnabled = idle;
         SupportProjectButton.IsEnabled = idle;
-        HomeEnvironmentButton.IsEnabled = idle;
+        HomeEnvironmentButton.IsEnabled = idle && !HasLiveDeviceSession;
 
         var noLiveSession = _internalInstallClient is null || _internalInstallExitVerified;
         InternalInstallCheckButton.IsEnabled = idle && noLiveSession;
@@ -297,7 +311,6 @@ public partial class MainWindow
             return;
         }
 
-        ResetAfterCheck();
         var previousSerial = SelectedDevice()?.Serial;
         await RunBusyAsync(async token =>
         {
@@ -311,8 +324,14 @@ public partial class MainWindow
                 if (devices.Count == 0)
                 {
                     // A tablet sitting in 9008 has no adb; say so instead of "no device". The check reads the
-                    // lock state and slot from Android, so it cannot run from 9008.
+                    // lock state and slot from Android, so it cannot run from 9008. The earlier step-1 result is
+                    // kept in that case: step 2 needs its SoC serial to recognise the same tablet in 9008.
                     var edl = await ReadEdlPresentAsync(token);
+                    if (edl.Count == 0)
+                    {
+                        ResetAfterCheck();
+                    }
+
                     SetText(
                         InternalInstallCheckStatusText,
                         edl.Count > 0 ? "Dynamic.Mac.Check.InEdl" : "Dynamic.InternalInstall.Check.NoDevices",
@@ -320,6 +339,8 @@ public partial class MainWindow
                     return;
                 }
 
+                // The tablet answers in Android: every earlier result, including an unconfirmed 9008 entry, is void.
+                ResetAfterCheck();
                 var target = devices.Count == 1 ? devices[0] : SelectedDevice();
                 if (target is null)
                 {
@@ -454,6 +475,7 @@ public partial class MainWindow
         _internalInstallPower = null;
         _internalInstallExitVerified = false;
         _internalInstallResetSent = false;
+        _internalInstallEntryAttempted = false;
         _internalInstallExecuteAttempted = false;
         _internalInstallExecutionError = null;
         InternalInstallBackupProgressBar.Value = 0;
@@ -617,15 +639,6 @@ public partial class MainWindow
         }
 
         var expected = _internalInstallDeviceCheck!.Android!;
-        if (_internalInstallExitVerified)
-        {
-            // The earlier 9008 session ended with the same tablet verified back in Android: its client is gone
-            // with it, so a new backup starts a new session from Android.
-            DisposeInternalInstall();
-            _internalInstallExitVerified = false;
-            _internalInstallResetSent = false;
-        }
-
         SetText(InternalInstallBackupVerifiedText, "Dynamic.InternalInstall.Backup.RunningNote");
         await RunBusyAsync(async token =>
         {
@@ -680,9 +693,20 @@ public partial class MainWindow
                     // sent here; a different or ambiguous endpoint fails at once.
                     SetText(InternalInstallBackupStatusText, "Dynamic.Mac.Backup.AlreadyInEdl", expected.SocSerial);
                     InternalInstallBackupProgressBar.IsIndeterminate = true;
-                    entered = await new EdlEntry(transport.AdbPath, _runner, Discovery)
-                        .WaitForPresentAsync(expected, pendingTools.Profile, token);
+                    _internalInstallEntryAttempted = true;
+                    var waitTools = pendingTools;
+                    entered = await Task.Run(
+                        () => new EdlEntry(transport.AdbPath, _runner, Discovery)
+                            .WaitForPresentAsync(expected, waitTools.Profile, token),
+                        token);
                     AppendLog(M("Dynamic.Mac.Backup.AlreadyInEdlLog", entered.BusSerialHex));
+                }
+                else if (_internalInstallEntryAttempted)
+                {
+                    // An earlier entry was sent but never confirmed, and the tablet is not in 9008 now: never enter
+                    // a second time on our own. A new step-1 check that finds it in Android clears this.
+                    SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.EntryUnconfirmed");
+                    return;
                 }
                 else
                 {
@@ -698,12 +722,17 @@ public partial class MainWindow
 
                     SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.EnteringEdl");
                     InternalInstallBackupProgressBar.IsIndeterminate = true;
-                    entered = await new EdlEntry(transport.AdbPath, _runner, Discovery).EnterAsync(fresh, pendingTools.Profile, token);
+                    _internalInstallEntryAttempted = true;
+                    var entryTools = pendingTools;
+                    entered = await Task.Run(
+                        () => new EdlEntry(transport.AdbPath, _runner, Discovery).EnterAsync(fresh, entryTools.Profile, token),
+                        token);
                 }
 
                 _internalInstallTools = pendingTools;
                 pendingTools = null;
                 _internalInstallClient = new EdlClient(_internalInstallTools, entered, _runner, Discovery);
+                _internalInstallEntryAttempted = false;
                 AppendLog(M("Dynamic.RawValue", $"9008: {entered.Endpoint.DeviceInstanceId}  SN {entered.BusSerialHex}"));
 
                 SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.Reading");
@@ -727,7 +756,9 @@ public partial class MainWindow
     private async Task RunInternalInstallBackupAsync(EdlClient client, string parent, CancellationToken token)
     {
         var progress = new Progress<InternalBackupProgress>(RenderBackupProgress);
-        var set = await InternalInstallBackup.CreateAsync(client, parent, progress, token);
+        // Core reads the 9008 endpoint (ioreg, synchronous) before its first await, so the call runs on a worker
+        // thread; the Progress<T> made here still posts back to the UI thread.
+        var set = await Task.Run(() => InternalInstallBackup.CreateAsync(client, parent, progress, token), token);
         _internalInstallBackup = set;
         InternalInstallBackupProgressBar.IsIndeterminate = false;
         InternalInstallBackupProgressBar.Value = 100;
@@ -824,7 +855,7 @@ public partial class MainWindow
 
     private void OnInternalInstallPackagePathChanged(object? sender, TextChangedEventArgs e)
     {
-        if (_busy)
+        if (_busy || !CanReleaseInternalInstallBackend)
         {
             return;
         }
@@ -843,7 +874,7 @@ public partial class MainWindow
     {
         var path = InternalInstallPackageBox.Text?.Trim();
         var backup = _internalInstallBackup;
-        if (_busy || backup is null || string.IsNullOrWhiteSpace(path))
+        if (_busy || backup is null || string.IsNullOrWhiteSpace(path) || !CanReleaseInternalInstallBackend)
         {
             return;
         }
@@ -943,7 +974,8 @@ public partial class MainWindow
 
     private void OnInternalInstallCapacityChanged(object? sender, RangeBaseValueChangedEventArgs e)
     {
-        if (_suppressCapacitySync || _busy || _internalInstallBackup is null || _internalInstallPackage is null)
+        if (_suppressCapacitySync || _busy || _internalInstallBackup is null || _internalInstallPackage is null
+            || !CanReleaseInternalInstallBackend)
         {
             return;
         }
@@ -992,7 +1024,21 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Clears the package and plan, unless the backend that holds them has issued a write (it is kept, and so are
+    /// they); like <see cref="ResetConfirmation"/>, every caller must also refuse to go on in that state.
+    /// </summary>
     private void ResetCapacity()
+    {
+        if (!CanReleaseInternalInstallBackend)
+        {
+            return;
+        }
+
+        ClearCapacity();
+    }
+
+    private void ClearCapacity()
     {
         _internalInstallPackage?.Dispose();
         _internalInstallPackage = null;
@@ -1013,6 +1059,24 @@ public partial class MainWindow
     /// </summary>
     private async Task PrepareConfirmationAsync()
     {
+        if (_busy)
+        {
+            return;
+        }
+
+        if (!CanReleaseInternalInstallBackend)
+        {
+            // A write was issued (or an execution is running): the backend owns the 9008 session and is kept, so
+            // it is never replaced by a new preparation. Show its state on the confirmation page instead.
+            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Execution.ReleaseBlocked");
+            if (HasPrepared)
+            {
+                NavigateInternalInstallStep(3);
+            }
+
+            return;
+        }
+
         var backup = _internalInstallBackup;
         var package = _internalInstallPackage;
         var storage = package?.Validation.Storage;
@@ -1048,6 +1112,12 @@ public partial class MainWindow
             try
             {
                 ResetConfirmation();
+                if (_internalInstallBackend is not null)
+                {
+                    // Never replace a backend that could not be released.
+                    throw new InvalidOperationException(T("Dynamic.InternalInstall.Execution.ReleaseBlocked"));
+                }
+
                 SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Prepared.PreparingArtifacts");
                 _internalInstallArtifacts = await InternalInstallArtifacts.PrepareAsync(backup, _internalInstallAndroidGiB, storage, parent, token);
 
@@ -1063,8 +1133,12 @@ public partial class MainWindow
                 var transport = Transport;
                 var services = new InternalInstallServices(
                     new EdlEntry(transport.AdbPath, _runner, Discovery), _runner, Discovery, transport.AdbPath);
-                _internalInstallBackend = await InternalInstallBackend.CreatePreparedAsync(
-                    check, client, backup, _internalInstallArtifacts, package, _internalInstallAssets, services, parent, token);
+                var artifacts = _internalInstallArtifacts;
+                var assets = _internalInstallAssets;
+                _internalInstallBackend = await Task.Run(
+                    () => InternalInstallBackend.CreatePreparedAsync(
+                        check, client, backup, artifacts, package, assets, services, parent, token),
+                    token);
                 RenderPreparedSummary(_internalInstallArtifacts, _internalInstallBackend.Prepared);
                 rendered = true;
             }
@@ -1275,7 +1349,10 @@ public partial class MainWindow
             using var pump = new ProgressPump(RenderInstallProgress);
             try
             {
-                await backend.ExecuteAsync(prepared.ConfirmationId, userdataEraseConfirmed: true, pump, token);
+                // Off the UI thread like every Core device call; the pump is thread-safe and drains on a UI timer.
+                await Task.Run(
+                    () => backend.ExecuteAsync(prepared.ConfirmationId, userdataEraseConfirmed: true, pump, token),
+                    token);
             }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
@@ -1646,7 +1723,7 @@ public partial class MainWindow
                     SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.CheckingProof");
                     try
                     {
-                        await client.ProbeAsync(0, initialLoader: true, cancellationToken: token);
+                        await Task.Run(() => client.ProbeAsync(0, initialLoader: true, cancellationToken: token), token);
                     }
                     catch (Exception exception) when (exception is not OutOfMemoryException)
                     {
@@ -1659,7 +1736,7 @@ public partial class MainWindow
                 SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.Resetting");
                 try
                 {
-                    await client.ResetAsync(token);
+                    await Task.Run(() => client.ResetAsync(token), token);
                     SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ResetAccepted");
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
@@ -1715,7 +1792,6 @@ public partial class MainWindow
                         AppendLog(M("Dynamic.InternalInstall.Exit.BackupRetainedLog", backup.DirectoryPath, backup.ManifestPath, backup.ManifestSha256));
                     }
 
-                    SetText(InternalInstallCheckStatusText, "Dynamic.InternalInstall.Exit.VerifiedState");
                     return;
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
@@ -1728,7 +1804,18 @@ public partial class MainWindow
             SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ReturnUnconfirmed", lastError ?? UnknownValue);
         });
 
-        return _internalInstallExitVerified;
+        if (!_internalInstallExitVerified)
+        {
+            return false;
+        }
+
+        // As the WPF exit: once the same tablet is verified in Android this 9008 session is over, so its client,
+        // backup lock, plan and backend are released and the wizard starts again from step 1 (the computer backup
+        // stays on disk). Nothing that depended on the old session stays reachable.
+        ResetAfterCheck();
+        SetText(InternalInstallCheckStatusText, "Dynamic.InternalInstall.Exit.VerifiedState");
+        NavigateInternalInstallStep(0);
+        return true;
     }
 
     /// <summary>Releases read locks and staged tools; backups, plans and evidence on disk are never deleted.</summary>
@@ -1740,7 +1827,7 @@ public partial class MainWindow
         }
 
         ClearConfirmation();
-        ResetCapacity();
+        ClearCapacity();
         _internalInstallBackup?.Dispose();
         _internalInstallBackup = null;
         _internalInstallClient = null;
