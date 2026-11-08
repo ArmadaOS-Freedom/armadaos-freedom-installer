@@ -312,7 +312,7 @@ public partial class MainWindow
                 {
                     // A tablet sitting in 9008 has no adb; say so instead of "no device". The check reads the
                     // lock state and slot from Android, so it cannot run from 9008.
-                    var edl = Discovery.ReadPresent();
+                    var edl = await ReadEdlPresentAsync(token);
                     SetText(
                         InternalInstallCheckStatusText,
                         edl.Count > 0 ? "Dynamic.Mac.Check.InEdl" : "Dynamic.InternalInstall.Check.NoDevices",
@@ -672,7 +672,7 @@ public partial class MainWindow
 
                 var transport = Transport;
                 EdlEntryResult entered;
-                if (Discovery.ReadPresent().Count > 0)
+                if ((await ReadEdlPresentAsync(token)).Count > 0)
                 {
                     // The tablet is already in 9008 (for example after an earlier attempt failed once it had
                     // rebooted). Android cannot be asked again, so the 9008 endpoint itself is the proof: its
@@ -785,6 +785,16 @@ public partial class MainWindow
         var description = endpoint.BusReportedDeviceDescription ?? string.Empty;
         var at = description.IndexOf("SN:", StringComparison.OrdinalIgnoreCase);
         return at < 0 ? "?" : description.Substring(at + 3).Split(' ', '_')[0];
+    }
+
+    /// <summary>
+    /// The 9008 endpoints present now. The IOKit read runs ioreg synchronously (up to its timeout, with a retry),
+    /// so it goes to a worker thread to keep the window responsive.
+    /// </summary>
+    private Task<IReadOnlyList<EdlEndpoint>> ReadEdlPresentAsync(CancellationToken token)
+    {
+        var discovery = Discovery;
+        return Task.Run(() => discovery.ReadPresent(), token);
     }
 
     private static bool SameAndroid(AndroidMaintenanceIdentity expected, AndroidMaintenanceIdentity fresh) =>
