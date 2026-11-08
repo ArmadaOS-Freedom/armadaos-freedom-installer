@@ -15,7 +15,7 @@
     <Authors>danyi (mydanyi)</Authors>
     <Product>ArmadaOS Freedom 安装助手</Product>
     <!-- The installer version has one source, the WPF window's project: upstream version bumps carry over. -->
-    <FreedomInstallerVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\FreedomInstaller.App\FreedomInstaller.App.csproj')), '&lt;Version&gt;([^&lt;]+)&lt;/Version&gt;').Groups[1].Value)</FreedomInstallerVersion>
+    <FreedomInstallerVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../FreedomInstaller.App/FreedomInstaller.App.csproj')), '&lt;Version&gt;([^&lt;]+)&lt;/Version&gt;').Groups[1].Value)</FreedomInstallerVersion>
     <Version>$(FreedomInstallerVersion)</Version>
     <InformationalVersion>$(FreedomInstallerVersion)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
@@ -74,6 +74,17 @@
   </ItemGroup>
   <ItemGroup Condition="'$(BundledPlatformToolsArchive)' != '' and Exists('$(BundledPlatformToolsArchive)')">
     <EmbeddedResource Include="$(BundledPlatformToolsArchive)" LogicalName="FreedomInstaller.PlatformTools.zip" />
+  </ItemGroup>
+
+  <!-- The same third-party notices the WPF installer embeds, byte-for-byte and under the same logical names:
+       SharpCompress (MIT), the two boot packers (GPL-3) and inih (BSD-3), all shipped in this app too. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\docs\SharpCompress-LICENSE.txt"
+                      LogicalName="FreedomInstaller.Licenses.SharpCompress.txt" />
+    <EmbeddedResource Include="..\..\docs\Packer-LICENSE.txt"
+                      LogicalName="FreedomInstaller.Licenses.Packer.GPL3.txt" />
+    <EmbeddedResource Include="..\..\docs\Inih-LICENSE.txt"
+                      LogicalName="FreedomInstaller.Licenses.Inih.BSD3.txt" />
   </ItemGroup>
 
   <ItemGroup>

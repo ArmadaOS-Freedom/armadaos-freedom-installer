@@ -261,6 +261,11 @@ def publish(repo_root, record, output_dir, env):
     (app / "Contents" / "Resources").mkdir(parents=True)
     shutil.copytree(publish_dir, app / "Contents" / "MacOS")
     bi._atomic_write_text(app / "Contents" / "Info.plist", _info_plist(version))
+    # dotnet signs only the apphost (ad hoc), before the bundle exists. Sign the finished bundle ad hoc so its
+    # Info.plist and resources are sealed; otherwise a downloaded copy is reported as damaged by Gatekeeper
+    # instead of offering "Open Anyway". Then verify the seal strictly.
+    bi._run(["codesign", "--force", "--deep", "--sign", "-", str(app)], cwd=output_dir, env=env, phase="sign")
+    bi._run(["codesign", "--verify", "--strict", "--deep", str(app)], cwd=output_dir, env=env, phase="sign")
     return app
 
 

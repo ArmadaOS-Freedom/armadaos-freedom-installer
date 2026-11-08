@@ -141,6 +141,33 @@ class MacPrepareTests(unittest.TestCase):
         self.assertNotIn("platformTools", ids)
         self.assertNotIn("python", ids)
 
+    def test_publish_signs_and_verifies_the_finished_bundle(self):
+        record, _ = self._prepare()
+        (self.repo_root / "src" / "FreedomInstaller.App" / "FreedomInstaller.App.csproj").write_text(
+            "<Project>\n  <PropertyGroup>\n    <Version>9.8.7</Version>\n  </PropertyGroup>\n</Project>\n",
+            encoding="utf-8")
+        out = Path(self._tmp.name) / "publish out"
+        calls = []
+
+        def fake_run(argv, cwd, env, phase):
+            calls.append([str(a) for a in argv])
+            if argv[0] == "dotnet":
+                target = Path(argv[argv.index("-o") + 1])
+                target.mkdir(parents=True)
+                (target / "FreedomInstaller.Mac").write_bytes(b"apphost")
+            elif argv[0] == "codesign" and "--force" in argv:
+                # the bundle must be complete before it is sealed
+                app = Path(argv[-1])
+                assert (app / "Contents" / "Info.plist").is_file()
+                assert (app / "Contents" / "MacOS" / "FreedomInstaller.Mac").is_file()
+
+        with mock.patch.object(build_installer, "_run", side_effect=fake_run):
+            app = build_installer_macos.publish(self.repo_root, record, out, env={})
+        self.assertEqual(calls[0][0], "dotnet")
+        self.assertEqual(calls[1], ["codesign", "--force", "--deep", "--sign", "-", str(app)])
+        self.assertEqual(calls[2], ["codesign", "--verify", "--strict", "--deep", str(app)])
+        self.assertIn("<string>9.8.7</string>", (app / "Contents" / "Info.plist").read_text(encoding="utf-8"))
+
     def test_missing_macos_platform_tools_fails(self):
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         manifest["downloads"] = [dl for dl in manifest["downloads"] if dl["id"] != "platformToolsMacos"]

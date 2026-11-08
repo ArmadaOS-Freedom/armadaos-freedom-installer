@@ -102,8 +102,23 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>A backend that issued no write can be released and prepared again; one that wrote is kept.</summary>
-    private bool CanReleaseInternalInstallBackend => !_internalInstallExecutionActive && !HasInternalInstallWriteIssued;
+    /// <summary>Core reported a successful terminal outcome: the writes were read back and the tablet was reset.</summary>
+    private bool HasInternalInstallSucceeded =>
+        _internalInstallBackend?.Snapshot is { ExecutionStarted: true } snapshot
+        && snapshot.Outcome is InternalInstallOutcome.Completed or InternalInstallOutcome.InstallationCompleted;
+
+    /// <summary>
+    /// The WPF release gate: a backend that issued no write can be released and prepared again; one that wrote is
+    /// kept until Core reports a successful terminal outcome.
+    /// </summary>
+    private bool CanReleaseInternalInstallBackend =>
+        !_internalInstallExecutionActive && (!HasInternalInstallWriteIssued || HasInternalInstallSucceeded);
+
+    /// <summary>
+    /// The 9008 session is over (the install completed and Core reset the tablet): its client, backup and plan only
+    /// describe what was done. Nothing is prepared or changed on it again; a new step-1 check starts over.
+    /// </summary>
+    private bool IsInternalInstallSessionEnded => _internalInstallExitVerified;
 
     /// <summary>The tablet is (or may be) in 9008 for this window: a bound client not yet verified back, or an unconfirmed entry.</summary>
     private bool HasLiveDeviceSession =>
@@ -220,7 +235,8 @@ public partial class MainWindow
             && !IsInternalInstallResetPending
             && !string.IsNullOrWhiteSpace(_internalInstallBackupParent);
 
-        var packageEditable = idle && HasBackup && CanReleaseInternalInstallBackend;
+        var packageEditable = idle && HasBackup && CanReleaseInternalInstallBackend && !IsInternalInstallSessionEnded
+            && !IsInternalInstallResetPending;
         InternalInstallPackageBox.IsEnabled = packageEditable;
         InternalInstallPackageBrowseButton.IsEnabled = packageEditable;
         InternalInstallPackageValidateButton.IsEnabled = packageEditable
@@ -242,6 +258,7 @@ public partial class MainWindow
             && onConfirm
             && HasPrepared
             && !_internalInstallExecuteAttempted
+            && !IsInternalInstallResetPending
             && InternalInstallEraseRiskCheck.IsChecked == true;
 
         // Once a write has been issued the backend owns the 9008 session (and resets the tablet itself), so the
@@ -327,8 +344,10 @@ public partial class MainWindow
                     // lock state and slot from Android, so it cannot run from 9008. The earlier step-1 result is
                     // kept in that case: step 2 needs its SoC serial to recognise the same tablet in 9008.
                     var edl = await ReadEdlPresentAsync(token);
-                    if (edl.Count == 0)
+                    if (edl.Count == 0 && !HasUnconfirmedEdlEntry)
                     {
+                        // Nothing anywhere, and no 9008 entry pending: the old result is void. With an entry
+                        // pending the tablet may still be rebooting, so its record (and the SoC serial) stays.
                         ResetAfterCheck();
                     }
 
@@ -339,7 +358,16 @@ public partial class MainWindow
                     return;
                 }
 
-                // The tablet answers in Android: every earlier result, including an unconfirmed 9008 entry, is void.
+                // An unconfirmed 9008 entry stays recorded until the same tablet (step 1's serial) answers in Android;
+                // another device on the bus proves nothing about it.
+                var pendingSerial = HasUnconfirmedEdlEntry ? _internalInstallDeviceCheck?.Android?.Identity.Serial : null;
+                if (pendingSerial is not null
+                    && !devices.Any(device => string.Equals(device.Serial, pendingSerial, StringComparison.Ordinal)))
+                {
+                    SetText(InternalInstallCheckStatusText, "Dynamic.InternalInstall.Backup.EntryUnconfirmed");
+                    return;
+                }
+
                 ResetAfterCheck();
                 var target = devices.Count == 1 ? devices[0] : SelectedDevice();
                 if (target is null)
@@ -855,7 +883,7 @@ public partial class MainWindow
 
     private void OnInternalInstallPackagePathChanged(object? sender, TextChangedEventArgs e)
     {
-        if (_busy || !CanReleaseInternalInstallBackend)
+        if (_busy || !CanReleaseInternalInstallBackend || IsInternalInstallSessionEnded)
         {
             return;
         }
@@ -874,7 +902,8 @@ public partial class MainWindow
     {
         var path = InternalInstallPackageBox.Text?.Trim();
         var backup = _internalInstallBackup;
-        if (_busy || backup is null || string.IsNullOrWhiteSpace(path) || !CanReleaseInternalInstallBackend)
+        if (_busy || backup is null || string.IsNullOrWhiteSpace(path) || !CanReleaseInternalInstallBackend
+            || IsInternalInstallSessionEnded)
         {
             return;
         }
@@ -975,7 +1004,7 @@ public partial class MainWindow
     private void OnInternalInstallCapacityChanged(object? sender, RangeBaseValueChangedEventArgs e)
     {
         if (_suppressCapacitySync || _busy || _internalInstallBackup is null || _internalInstallPackage is null
-            || !CanReleaseInternalInstallBackend)
+            || !CanReleaseInternalInstallBackend || IsInternalInstallSessionEnded)
         {
             return;
         }
@@ -1074,6 +1103,22 @@ public partial class MainWindow
                 NavigateInternalInstallStep(3);
             }
 
+            return;
+        }
+
+        if (IsInternalInstallSessionEnded)
+        {
+            // The install completed and Core reset the tablet: this session's client no longer reaches a 9008
+            // device, so nothing is prepared on it. A new step-1 check releases it and starts over.
+            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Exit.VerifiedState");
+            return;
+        }
+
+        if (IsInternalInstallResetPending)
+        {
+            // The one reset was sent and the return is not verified yet: the session may be gone, so nothing is
+            // prepared on it until the exit card has finished checking.
+            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Exit.CheckingAgain");
             return;
         }
 
@@ -1306,7 +1351,7 @@ public partial class MainWindow
     private async void OnExecuteSelectedWorkflow(object? sender, RoutedEventArgs e)
     {
         var backend = _internalInstallBackend;
-        if (_busy || backend is null || _internalInstallExecuteAttempted
+        if (_busy || backend is null || _internalInstallExecuteAttempted || IsInternalInstallResetPending
             || InternalInstallEraseRiskCheck.IsChecked != true || backend.Snapshot.ExecutionStarted)
         {
             return;
@@ -1396,11 +1441,15 @@ public partial class MainWindow
             }
         });
 
-        if (backend.Snapshot.Outcome == InternalInstallOutcome.InstallationCompleted)
+        if (HasInternalInstallSucceeded)
         {
-            // 写入成功后平板已由后端复位，9008 会话随之结束。
+            // 成功终态：平板已由后端复位，9008 会话随之结束（与 WPF 的成功判断相同）。
             _internalInstallExitVerified = true;
             RefreshActions();
+        }
+
+        if (backend.Snapshot.Outcome == InternalInstallOutcome.InstallationCompleted)
+        {
             await MessageDialog.ShowAsync(
                 this,
                 T("Dynamic.InternalInstall.Execution.Completion.Title"),
@@ -1674,7 +1723,7 @@ public partial class MainWindow
     /// </summary>
     private async void OnExitInternalInstallMaintenance(object? sender, RoutedEventArgs e)
     {
-        if (_busy || _internalInstallClient is null || !CanReleaseInternalInstallBackend)
+        if (_busy || _internalInstallClient is null || _internalInstallExitVerified || !CanReleaseInternalInstallBackend)
         {
             return;
         }
@@ -1700,7 +1749,8 @@ public partial class MainWindow
     {
         var client = _internalInstallClient;
         var expected = _internalInstallDeviceCheck?.Android;
-        if (_busy || client is null || !CanReleaseInternalInstallBackend)
+        // A finished session (verified return, or a completed install that Core already reset) gets no reset.
+        if (_busy || client is null || _internalInstallExitVerified || !CanReleaseInternalInstallBackend)
         {
             return false;
         }
