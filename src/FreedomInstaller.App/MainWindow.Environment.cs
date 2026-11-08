@@ -121,8 +121,8 @@ public partial class MainWindow
             return;
         }
 
-        // 环境完成后的可选页只有备份视图：不展示任何恢复控件，也可以直接跳过进入首页。
-        ShowGlobalRecoveryPage(GlobalRecoveryMode.Backup, GlobalRecoveryOrigin.Onboarding);
+        // 环境就绪后直接进入功能首页，不再自动展示可选的全局备份引导页。
+        ShowFunctionHome();
         // 准备页曾把首页卡片设为禁用；离开准备页后必须立刻按就绪状态重新计算。
         RefreshActions();
     }
