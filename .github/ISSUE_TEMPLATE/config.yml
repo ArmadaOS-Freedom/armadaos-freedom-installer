@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "使用说明 / Documentation"
+    url: https://github.com/ArmadaOS-Freedom/armadaos-freedom-installer/blob/main/README.md
+    about: "支持的功能与机型。Features and supported devices."
+  - name: "新机型适配与系统问题 / Device support and system issues"
+    url: https://github.com/ArmadaOS-Freedom/armadaos-freedom/issues/new/choose
+    about: "新机型适配和装好后的系统问题请到系统仓库提。Request new devices and report system problems in the system repository."
