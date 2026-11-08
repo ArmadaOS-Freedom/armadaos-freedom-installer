@@ -1,0 +1,12 @@
+name: "功能建议 / Feature request"
+description: "提出安装助手的功能建议。Suggest an installer feature."
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 功能建议 / Suggestion
+      description: 想解决什么问题，希望怎么改？What problem would this solve, and what change do you suggest?
+    validations:
+      required: true

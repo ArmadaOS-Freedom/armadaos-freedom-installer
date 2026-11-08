@@ -1,0 +1,44 @@
+name: "问题反馈 / Bug report"
+description: "报告安装助手的问题。Report a problem with the installer."
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: input
+    id: hardware
+    attributes:
+      label: 设备 / Hardware Device
+      description: 填写平板型号。Enter your tablet model.
+    validations:
+      required: true
+
+  - type: input
+    id: installer-version
+    attributes:
+      label: 安装助手版本 / Installer version
+      description: 关于页里的版本号，或下载的文件名及来源。Version from the About page, or the downloaded filename and source.
+    validations:
+      required: true
+
+  - type: input
+    id: host-os
+    attributes:
+      label: 电脑系统 / Computer OS
+      description: 例如 Windows 11 24H2、macOS 26。For example Windows 11 24H2, macOS 26.
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述 / Problem
+      description: 在哪一步出错、复现步骤，附安装日志或截图。Which step failed and how to reproduce; attach the installer log or screenshots.
+    validations:
+      required: true
+
+  - type: input
+    id: ai-disclosure
+    attributes:
+      label: AI 使用情况 / AI usage
+      description: 工具＋模型名称；未使用填“未使用”。Tool + model name, or None.
+    validations:
+      required: true
