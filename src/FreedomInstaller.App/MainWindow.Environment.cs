@@ -44,7 +44,8 @@ public partial class MainWindow
     /// <summary>自检完全成功、系统受支持、工具与真实驱动都就绪、启动标识已确认且没有门禁。</summary>
     private bool EnvironmentIsReady =>
         EnvironmentPlatformReady && _environmentDriverResult is { IsReady: true }
-        && _environmentAdbResult is { IsReady: true } && _environmentFastbootResult is { IsReady: true };
+        && _environmentAdbResult is { IsReady: true } && _environmentFastbootResult is { IsReady: true }
+        && _workDirectoryReady;
 
     /// <summary>与驱动是否就绪无关的平台前置条件：安装按钮也只在此基础上开放。</summary>
     private bool EnvironmentPlatformReady =>
@@ -121,8 +122,8 @@ public partial class MainWindow
             return;
         }
 
-        // 环境完成后的可选页只有备份视图：不展示任何恢复控件，也可以直接跳过进入首页。
-        ShowGlobalRecoveryPage(GlobalRecoveryMode.Backup, GlobalRecoveryOrigin.Onboarding);
+        // 环境就绪后直接进入功能首页，不再自动展示可选的全局备份引导页。
+        ShowFunctionHome();
         // 准备页曾把首页卡片设为禁用；离开准备页后必须立刻按就绪状态重新计算。
         RefreshActions();
     }
@@ -227,6 +228,8 @@ public partial class MainWindow
         _environmentCheckCompleted = _environmentSystemSupported && _environmentToolsReady
             && _environmentBootVerified && result is not null
             && _environmentAdbResult is not null && _environmentFastbootResult is not null && !_environmentStateUnknown;
+        await CheckTemporaryWorkDirectoryAsync(cancellationToken);
+        if (_closed) return;
         RenderEnvironmentStatus();
         RefreshEnvironmentActions();
     }
@@ -275,6 +278,7 @@ public partial class MainWindow
             : _environmentPendingReboot ? "Dynamic.Environment.PendingReboot"
             : EnvironmentIsReady ? "Dynamic.Environment.Ready"
             : EnvironmentDriverMissing ? "Dynamic.Environment.NeedDriver"
+            : !_workDirectoryReady ? "Dynamic.Environment.WorkNotReady"
             : "Dynamic.Environment.NotReady";
         ReportEnvironment(M(key));
     }
@@ -563,6 +567,7 @@ public partial class MainWindow
         EnvironmentInstallDriverButton.IsEnabled =
             idle && EnvironmentDriverMissing && EnvironmentPlatformReady;
         EnvironmentContinueButton.IsEnabled = idle && EnvironmentIsReady;
+        RefreshTemporaryWorkDirectoryActions();
         // 受保护 TF 现场存在时不允许经环境页「返回首页」丢掉已知状态。
         HomeEnvironmentButton.IsEnabled = idle && !ProtectedModernTfInstallState && !HasPendingTfTabletRecovery;
     }

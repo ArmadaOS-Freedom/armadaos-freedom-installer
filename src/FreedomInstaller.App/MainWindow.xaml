@@ -3180,6 +3180,38 @@
                                                FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
                                 </StackPanel>
                             </Grid>
+                            <Border Background="{DynamicResource SurfaceBrush}"
+                                    BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                    CornerRadius="10" Padding="12" Margin="0,8,0,8">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="EnvironmentWorkIndicator" Text="…"
+                                                   FontFamily="Segoe UI Symbol" Width="24" FontWeight="Bold"
+                                                   Foreground="{DynamicResource MutedBrush}" />
+                                        <TextBlock Text="{DynamicResource Static.Environment.WorkTitle}"
+                                                   FontWeight="SemiBold" Foreground="{DynamicResource InkBrush}" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="EnvironmentWorkPathText"
+                                               Text="{DynamicResource Dynamic.Environment.WorkUnselected}"
+                                               Foreground="{DynamicResource InkBrush}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                    <TextBlock x:Name="EnvironmentWorkStatusText"
+                                               Text="{DynamicResource Dynamic.Environment.Checking}"
+                                               Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    <TextBlock Text="{DynamicResource Static.Environment.WorkHint}"
+                                               Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                    <WrapPanel Margin="0,8,0,0">
+                                        <Button x:Name="EnvironmentWorkChooseButton"
+                                                Content="{DynamicResource Static.Environment.WorkChoose}"
+                                                Click="OnChooseTemporaryWorkDirectory" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" />
+                                        <Button x:Name="EnvironmentWorkAutoButton"
+                                                Content="{DynamicResource Static.Environment.WorkAuto}"
+                                                Click="OnAutoTemporaryWorkDirectory" Style="{StaticResource SecondaryButton}" />
+                                    </WrapPanel>
+                                    <TextBlock x:Name="EnvironmentWorkLockedText" Visibility="Collapsed"
+                                               Text="{DynamicResource Static.Environment.WorkLocked}"
+                                               Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                </StackPanel>
+                            </Border>
                             <!-- 当前结论放在按钮之前：状态行与「下一步做什么」都取自控制器消息。 -->
                             <Border Background="{DynamicResource SurfaceBrush}"
                                     BorderBrush="{DynamicResource StrokeBrush}"

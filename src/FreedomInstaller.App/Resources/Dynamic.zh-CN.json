@@ -1245,5 +1245,10 @@
   "Dynamic.Link.AboutH0CheungName": "h0cheung",
   "Dynamic.Link.AboutSunflowerName": "sunflower2333",
   "Dynamic.AboutBilibiliThanksName": "滴滴滴耶耶",
-  "Dynamic.Link.AboutBilibiliThanks": "Bilibili主页"
+  "Dynamic.Link.AboutBilibiliThanks": "Bilibili主页",
+  "Dynamic.Environment.WorkPath": "{0}",
+  "Dynamic.Environment.WorkUnselected": "尚未选择临时文件位置。",
+  "Dynamic.Environment.WorkSpace": "可用空间：{0:N1} GiB",
+  "Dynamic.Environment.WorkFailed": "临时文件位置不可用，请更换文件夹或释放空间。详情：{0}",
+  "Dynamic.Environment.WorkNotReady": "临时文件位置尚未就绪，请更换文件夹或释放空间后重新检查。"
 }

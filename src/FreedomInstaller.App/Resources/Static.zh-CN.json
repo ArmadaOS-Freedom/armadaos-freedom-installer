@@ -266,5 +266,11 @@
   "Static.SupportAlipayQrAutomationName": "支付宝收款二维码",
   "Static.SupportWeChatTitle": "微信支付",
   "Static.SupportWeChatScan": "使用微信扫描下方二维码",
-  "Static.SupportWeChatQrAutomationName": "微信支付收款二维码"
+  "Static.SupportWeChatQrAutomationName": "微信支付收款二维码",
+  "Static.Environment.WorkTitle": "临时文件位置",
+  "Static.Environment.WorkChooseTitle": "选择临时工作文件的存放位置",
+  "Static.Environment.WorkChoose": "更换文件夹",
+  "Static.Environment.WorkAuto": "自动选择",
+  "Static.Environment.WorkHint": "自动选择可用空间最多的本地磁盘，也可手动更换。正式备份单独保存；安装前还会按实际镜像大小检查空间。",
+  "Static.Environment.WorkLocked": "工作已开始，本次使用固定目录。若要更换，请完成或退出当前操作后重新打开安装器。"
 }
