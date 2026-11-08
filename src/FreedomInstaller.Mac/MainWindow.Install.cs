@@ -203,6 +203,7 @@ public partial class MainWindow
         InternalInstallBackupButton.IsEnabled = idle
             && HasCheckedDevice
             && _internalInstallBackup is null
+            && !IsInternalInstallResetPending
             && !string.IsNullOrWhiteSpace(_internalInstallBackupParent);
 
         var packageEditable = idle && HasBackup && CanReleaseInternalInstallBackend;
@@ -603,7 +604,7 @@ public partial class MainWindow
     /// </summary>
     private async void OnBackupInternalInstall(object? sender, RoutedEventArgs e)
     {
-        if (_busy || !HasCheckedDevice || _internalInstallBackup is not null)
+        if (_busy || !HasCheckedDevice || _internalInstallBackup is not null || IsInternalInstallResetPending)
         {
             return;
         }
@@ -616,12 +617,33 @@ public partial class MainWindow
         }
 
         var expected = _internalInstallDeviceCheck!.Android!;
+        if (_internalInstallExitVerified)
+        {
+            // The earlier 9008 session ended with the same tablet verified back in Android: its client is gone
+            // with it, so a new backup starts a new session from Android.
+            DisposeInternalInstall();
+            _internalInstallExitVerified = false;
+            _internalInstallResetSent = false;
+        }
+
         SetText(InternalInstallBackupVerifiedText, "Dynamic.InternalInstall.Backup.RunningNote");
         await RunBusyAsync(async token =>
         {
             EdlToolchain? pendingTools = null;
             try
             {
+                // A retry after a failed backup keeps the 9008 session that is still open, as the WPF backup
+                // does: same toolchain, same client, no new adb read and no second entry. The tablet is still
+                // running Firehose, so a new client (without the initial Sahara proof) could neither back up nor
+                // reset it. CreateAsync probes warm or initial from this client's own proof.
+                if (_internalInstallClient is { } existingClient && _internalInstallTools is not null)
+                {
+                    SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.Reading");
+                    InternalInstallBackupProgressBar.IsIndeterminate = true;
+                    await RunInternalInstallBackupAsync(existingClient, parent, token);
+                    return;
+                }
+
                 var profile = EdlDeviceProfiles.FindByModel(expected.Identity.Model);
                 if (profile is null || !profile.IsComplete || !profile.SupportsIdentity(expected.Identity)
                     || profile.ArchiveLogicalName is null)
@@ -685,17 +707,7 @@ public partial class MainWindow
                 AppendLog(M("Dynamic.RawValue", $"9008: {entered.Endpoint.DeviceInstanceId}  SN {entered.BusSerialHex}"));
 
                 SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.Reading");
-                var progress = new Progress<InternalBackupProgress>(RenderBackupProgress);
-                var set = await InternalInstallBackup.CreateAsync(_internalInstallClient, parent, progress, token);
-                _internalInstallBackup = set;
-                InternalInstallBackupProgressBar.IsIndeterminate = false;
-                InternalInstallBackupProgressBar.Value = 100;
-                SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.Succeeded", set.Files.Count);
-                SetText(InternalInstallBackupVerifiedText, "Dynamic.InternalInstall.Backup.KeepEdl");
-                SetText(InternalInstallBackupDirectoryText, "Dynamic.RawValue", set.DirectoryPath);
-                SetText(InternalInstallBackupManifestText, "Dynamic.RawValue", set.ManifestPath);
-                SetText(InternalInstallBackupManifestHashText, "Dynamic.RawValue", set.ManifestSha256);
-                AppendLog(M("Dynamic.InternalInstall.Backup.SucceededLog", set.DirectoryPath, set.ManifestSha256));
+                await RunInternalInstallBackupAsync(_internalInstallClient, parent, token);
             }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
@@ -710,6 +722,30 @@ public partial class MainWindow
             }
         });
     }
+
+    /// <summary>The read-only backup itself, on the bound 9008 client; shared by the first run and a retry.</summary>
+    private async Task RunInternalInstallBackupAsync(EdlClient client, string parent, CancellationToken token)
+    {
+        var progress = new Progress<InternalBackupProgress>(RenderBackupProgress);
+        var set = await InternalInstallBackup.CreateAsync(client, parent, progress, token);
+        _internalInstallBackup = set;
+        InternalInstallBackupProgressBar.IsIndeterminate = false;
+        InternalInstallBackupProgressBar.Value = 100;
+        SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Backup.Succeeded", set.Files.Count);
+        SetText(InternalInstallBackupVerifiedText, "Dynamic.InternalInstall.Backup.KeepEdl");
+        SetText(InternalInstallBackupDirectoryText, "Dynamic.RawValue", set.DirectoryPath);
+        SetText(InternalInstallBackupManifestText, "Dynamic.RawValue", set.ManifestPath);
+        SetText(InternalInstallBackupManifestHashText, "Dynamic.RawValue", set.ManifestSha256);
+        AppendLog(M("Dynamic.InternalInstall.Backup.SucceededLog", set.DirectoryPath, set.ManifestSha256));
+    }
+
+    /// <summary>
+    /// The one reset of this 9008 session was sent but the tablet is not yet verified back in Android: the
+    /// session may already be gone, so neither a retry on it nor a new entry is safe until the exit card
+    /// has finished checking.
+    /// </summary>
+    private bool IsInternalInstallResetPending =>
+        _internalInstallClient is not null && _internalInstallResetSent && !_internalInstallExitVerified;
 
     private void RenderBackupProgress(InternalBackupProgress report)
     {
