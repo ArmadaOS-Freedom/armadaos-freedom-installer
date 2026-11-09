@@ -393,8 +393,9 @@ def prepare(repo_root, work_dir, manifest_path=None):
 
     # --- Phase 2: fetch official inputs -----------------------------------
     _log("fetch", f"fetching official inputs -> {downloads_root}")
-    fetched = fetch_build_inputs.fetch_all(manifest, str(downloads_root))
-    for dl_id in ("platformTools", "python", "libusbPackage", "libusbLicense", "gblPrc", "gblRow"):
+    fetched = fetch_build_inputs.fetch_all(
+        manifest, str(downloads_root), ids=fetch_build_inputs.BUILDER_IDS["windows"])
+    for dl_id in fetch_build_inputs.BUILDER_IDS["windows"]:
         if dl_id not in fetched:
             raise SystemExit(f"fetch error: missing download id {dl_id!r}")
     _log("fetch", "official inputs ready")

@@ -26,12 +26,21 @@ SCHEMA_VERSION = 2
 
 REQUIRED_IDS = (
     "platformTools",
+    "platformToolsMacos",
     "python",
     "libusbPackage",
     "libusbLicense",
     "gblPrc",
     "gblRow",
 )
+
+# Each builder fetches only what it uses, so a cached input of the other platform is never required (an offline
+# Windows rebuild must not need the macOS platform-tools, and the macOS build has no use for the Windows ones).
+# The manifest itself must still list every REQUIRED_IDS entry.
+BUILDER_IDS = {
+    "windows": ("platformTools", "python", "libusbPackage", "libusbLicense", "gblPrc", "gblRow"),
+    "macos": ("platformToolsMacos", "libusbPackage", "libusbLicense", "gblPrc", "gblRow"),
+}
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -195,8 +204,17 @@ def _download(entry: dict, dest: str) -> None:
             pass
 
 
-def fetch_all(manifest: dict, output_dir: str, verify_only: bool = False) -> dict[str, str]:
-    """Fetch or verify all downloads; returns {id: absolute file path}.
+def fetch_all(
+    manifest: dict,
+    output_dir: str,
+    verify_only: bool = False,
+    ids: "tuple[str, ...] | list[str] | None" = None,
+) -> dict[str, str]:
+    """Fetch or verify downloads; returns {id: absolute file path}.
+
+    `ids` limits the work to those download ids (a builder's BUILDER_IDS
+    entry); None means every download in the manifest. The whole manifest is
+    validated either way.
 
     `verify_only=True` never creates `output_dir`, never writes, and requires
     every cached file to match. Non-verify mode creates `output_dir` only after
@@ -227,6 +245,13 @@ def fetch_all(manifest: dict, output_dir: str, verify_only: bool = False) -> dic
     extra = sorted(seen_ids - set(REQUIRED_IDS))
     if extra:
         _die(f"manifest has unexpected download ids: {extra}")
+
+    if ids is not None:
+        wanted = list(ids)
+        unknown = sorted(set(wanted) - set(REQUIRED_IDS))
+        if not wanted or unknown or len(set(wanted)) != len(wanted):
+            _die(f"invalid download id selection: {wanted}")
+        downloads = [entry for entry in downloads if entry["id"] in set(wanted)]
 
     output_abs = os.path.abspath(output_dir)
     results: dict[str, str] = {}
@@ -279,6 +304,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--verify-only", action="store_true")
+    parser.add_argument(
+        "--platform",
+        choices=sorted(BUILDER_IDS) + ["all"],
+        default="windows",
+        help="which builder's inputs to fetch or verify (default: windows)",
+    )
     return parser.parse_args(argv)
 
 
@@ -286,7 +317,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
     try:
         manifest = load_manifest(args.manifest)
-        results = fetch_all(manifest, args.output_dir, verify_only=args.verify_only)
+        ids = None if args.platform == "all" else BUILDER_IDS[args.platform]
+        results = fetch_all(manifest, args.output_dir, verify_only=args.verify_only, ids=ids)
     except FetchError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

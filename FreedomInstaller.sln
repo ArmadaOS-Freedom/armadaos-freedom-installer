@@ -8,6 +8,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FreedomInstaller.App", "src
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FreedomInstaller.Core.Tests", "tests\FreedomInstaller.Core.Tests\FreedomInstaller.Core.Tests.csproj", "{4A7B1E52-1C3A-4E77-9C1E-0B1E5C0A0003}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FreedomInstaller.Mac", "src\FreedomInstaller.Mac\FreedomInstaller.Mac.csproj", "{2D2BCFB5-E2EE-4DFD-B114-DD49FF199988}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,6 +28,10 @@ Global
 		{4A7B1E52-1C3A-4E77-9C1E-0B1E5C0A0003}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4A7B1E52-1C3A-4E77-9C1E-0B1E5C0A0003}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4A7B1E52-1C3A-4E77-9C1E-0B1E5C0A0003}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2D2BCFB5-E2EE-4DFD-B114-DD49FF199988}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2D2BCFB5-E2EE-4DFD-B114-DD49FF199988}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2D2BCFB5-E2EE-4DFD-B114-DD49FF199988}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2D2BCFB5-E2EE-4DFD-B114-DD49FF199988}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

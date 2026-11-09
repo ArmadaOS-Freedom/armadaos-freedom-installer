@@ -12,6 +12,15 @@
       "version": "37.0.1"
     },
     {
+      "name": "platform-tools-37.0.1-macos.zip",
+      "id": "platformToolsMacos",
+      "source": "https://developer.android.com/tools/releases/platform-tools",
+      "sha256": "ee39ad5967e95c2a07f04dbcbde96b1a0c916ba376096db5d2f498b7727a5d1d",
+      "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-darwin.zip",
+      "bytes": 16110554,
+      "version": "37.0.1"
+    },
+    {
       "name": "python-3.14.8-embed-amd64.zip",
       "id": "python",
       "source": "https://github.com/python/cpython",
@@ -33,7 +42,12 @@
       "source": "https://github.com/LibUsbDotNet/LibUsbDotNet",
       "sourceCommit": "77ef699a7024af055d7c6ed625dc480463c2eec7",
       "sha256": "6efd58060d41319e1168bff179755017b8db2dccb37d29ac935ba46cd4ede7c9",
-      "version": "3.0.167-alpha"
+      "version": "3.0.167-alpha",
+      "extractMacos": {
+        "bytes": 164592,
+        "sha256": "55e3cdeff3b8000fad41b5b4faac8c95335708ffce5a191c151e2931f72e83fe",
+        "path": "runtimes/osx-arm64/native/libusb-1.0.dylib"
+      }
     },
     {
       "name": "libusb-COPYING.txt",

@@ -116,6 +116,15 @@ def _build_fixture_repo(root):
                 "version": "x",
             },
             {
+                "id": "platformToolsMacos",
+                "name": "platform-tools-macos.zip",
+                "url": "https://example.invalid/platform-tools-darwin.zip",
+                "source": "https://developer.android.com/tools/releases/platform-tools",
+                "bytes": 11,
+                "sha256": "9" * 64,
+                "version": "x",
+            },
+            {
                 "id": "python",
                 "name": "python-embed.zip",
                 "url": "https://example.invalid/python.zip",
@@ -202,13 +211,15 @@ def _build_fixture_repo(root):
     return root, manifest
 
 
-def _fake_fetch_side_effect(manifest, output_dir):
+def _fake_fetch_side_effect(manifest, output_dir, ids=None):
     """Real hashes on fake download inputs cached into output_dir."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     files = {}
     for dl in manifest["downloads"]:
         rid = dl["id"]
+        if ids is not None and rid not in ids:
+            continue
         if rid == "libusbPackage":
             data = _make_nupkg()
         elif rid == "libusbLicense":
@@ -299,6 +310,9 @@ class PrepareTests(unittest.TestCase):
         cache_dir = Path(fetch_mock.call_args[0][1])
         self.assertEqual(cache_dir.name, "downloads")
         self.assertEqual(cache_dir.parent, self.work_dir)
+        # only the Windows inputs: an offline rebuild never needs the macOS platform-tools
+        self.assertEqual(fetch_mock.call_args.kwargs["ids"], fetch_build_inputs.BUILDER_IDS["windows"])
+        self.assertNotIn("platformToolsMacos", fetch_mock.call_args.kwargs["ids"])
 
         # two compilations (edl + boot-packers)
         self.assertGreaterEqual(run_mock.call_count, 2)
@@ -416,12 +430,14 @@ def _fake_split_scripts(argv, cwd, env, phase):
     raise AssertionError(f"unexpected _run: {argv}")
 
 
-def _cli_fetch(manifest, output_dir):
+def _cli_fetch(manifest, output_dir, ids=None):
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     files = {}
     for dl in manifest["downloads"]:
         rid = dl["id"]
+        if ids is not None and rid not in ids:
+            continue
         if rid == "libusbPackage":
             data = _make_nupkg()
         elif rid == "libusbLicense":
