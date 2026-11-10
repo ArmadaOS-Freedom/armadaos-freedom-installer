@@ -4,9 +4,9 @@ namespace FreedomInstaller.Core;
 
 /// <summary>The explicit mutable tail of a v3 ARMADA_BACKUP image.
 /// UUID bytes are RFC 4122 order, matching kShimC after GPT UUID conversion.
-/// Recovery validates the immutable descriptor and reserved bytes. Both settings
-/// slots and v2 diagnostic log slots remain independent of recovery validation,
-/// including interrupted writes.</summary>
+/// Recovery validates the immutable descriptor and reserved bytes. Settings
+/// slots, v2 diagnostic log slots, and v3 trial slots remain independent of
+/// recovery validation, including interrupted writes.</summary>
 internal static class BootSettingsRegion
 {
     internal const int Bytes = 65536;
@@ -47,21 +47,47 @@ internal static class BootSettingsRegion
         return d;
     }
 
+    internal static byte[] CreateTrialDescriptor(Guid partition, Guid installation, string model, long payloadEnd)
+    {
+        var d = CreateDescriptor(partition, installation, model, payloadEnd);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(8), 3);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(92), 28672);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(96), 32768);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(100), SlotBytes);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(4092),
+            InternalInstallArtifacts.Crc32(d.AsSpan(0, 4092)));
+        return d;
+    }
+
     internal static void VerifyRegion(byte[] region, Guid partition, Guid installation, string model, long payloadEnd)
     {
         if (region.Length != Bytes)
             throw new InvalidDataException("The launcher settings descriptor does not match this archive.");
         uint version = BinaryPrimitives.ReadUInt32LittleEndian(region.AsSpan(8));
-        if (version is not (1 or 2))
+        if (version is not (1 or 2 or 3))
             throw new InvalidDataException("The launcher settings descriptor version is not supported.");
-        var expected = CreateDescriptor(partition, installation, model, payloadEnd);
-        BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(8), version);
-        BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(4092),
-            InternalInstallArtifacts.Crc32(expected.AsSpan(0, 4092)));
+        byte[] expected;
+        if (version == 3)
+        {
+            expected = CreateTrialDescriptor(partition, installation, model, payloadEnd);
+        }
+        else
+        {
+            expected = CreateDescriptor(partition, installation, model, payloadEnd);
+            BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(8), version);
+            BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(4092),
+                InternalInstallArtifacts.Crc32(expected.AsSpan(0, 4092)));
+        }
         if (!region.AsSpan(0, SlotBytes).SequenceEqual(expected))
             throw new InvalidDataException("The launcher settings descriptor does not match this archive.");
-        // kShimC v2 assigns 12288..28672 to two mutable 8 KiB diagnostic log slots.
-        int reservedFrom = version == 2 ? 28672 : 3 * SlotBytes;
+        // kShimC v2 assigns 12288..28672 to two mutable 8 KiB diagnostic log slots;
+        // v3 adds two mutable 4 KiB trial slots at 28672..36864.
+        int reservedFrom = version switch
+        {
+            1 => 3 * SlotBytes,
+            2 => 28672,
+            _ => 36864
+        };
         foreach (byte value in region.AsSpan(reservedFrom))
             if (value != 0)
                 throw new InvalidDataException("The reserved launcher settings tail is not zero filled.");

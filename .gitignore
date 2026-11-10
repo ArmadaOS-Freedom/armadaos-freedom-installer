@@ -21,3 +21,6 @@ secrets/
 
 # AOSP's public test fixture, not a device or maintainer key.
 !vendor/aosp/testkey_rsa4096.pem
+
+/tools/boot-tool-inputs/*
+!/tools/boot-tool-inputs/.gitkeep
