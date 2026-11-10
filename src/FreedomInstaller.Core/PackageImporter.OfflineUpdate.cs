@@ -402,7 +402,7 @@ public static partial class PackageImporter
             throw new InvalidDataException("离线升级工作目录无效。");
         }
 
-        EnsureNoReparseAncestors(canonical);
+        canonical = ResolveOfflineWorkRootAncestors(canonical);
         var info = new DirectoryInfo(canonical);
         if (!info.Exists ||
             info.LinkTarget is not null ||
@@ -460,7 +460,7 @@ public static partial class PackageImporter
             throw new InvalidDataException($"拒绝清理非离线升级暂存目录：{canonicalStageRoot}。");
         }
 
-        EnsureNoReparseAncestors(canonicalWorkRoot);
+        EnsureSafeDirectoryTree(canonicalWorkRoot, canonicalWorkRoot);
         if (!Path.Exists(canonicalStageRoot))
         {
             return;
@@ -470,31 +470,24 @@ public static partial class PackageImporter
         Directory.Delete(canonicalStageRoot, recursive: true);
     }
 
-    private static void EnsureNoReparseAncestors(string directoryPath)
+    private static string ResolveOfflineWorkRootAncestors(string directoryPath)
     {
-        var current = Path.GetFullPath(directoryPath);
-        while (!string.IsNullOrEmpty(current))
+        string full = Path.GetFullPath(directoryPath);
+        string parent = Path.GetDirectoryName(full)
+            ?? throw new InvalidDataException("The offline work root cannot be a filesystem root.");
+        string current = Path.GetPathRoot(parent)!;
+        foreach (string segment in parent[current.Length..].Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
         {
-            if (Path.Exists(current))
-            {
-                var info = new DirectoryInfo(current);
-                if (!info.Exists ||
-                    info.LinkTarget is not null ||
-                    (info.Attributes & FileAttributes.ReparsePoint) != 0 ||
-                    (info.Attributes & FileAttributes.Directory) == 0)
-                {
-                    throw new InvalidDataException($"工作目录路径包含重解析点或非目录节点：{current}。");
-                }
-            }
-
-            var parent = Path.GetDirectoryName(current);
-            if (string.IsNullOrEmpty(parent) || string.Equals(parent, current, StringComparison.Ordinal))
-            {
-                break;
-            }
-
-            current = parent;
+            var info = new DirectoryInfo(Path.Combine(current, segment));
+            if (!info.Exists)
+                throw new DirectoryNotFoundException(info.FullName);
+            current = info.LinkTarget != null || (info.Attributes & FileAttributes.ReparsePoint) != 0
+                ? (info.ResolveLinkTarget(returnFinalTarget: true)?.FullName
+                    ?? throw new InvalidDataException($"Cannot resolve work directory ancestor: {info.FullName}"))
+                : info.FullName;
         }
+        return Path.Combine(current, Path.GetFileName(full));
     }
 
     private static void EnsureSafeDirectoryTree(string targetDirectory, string stopRoot)

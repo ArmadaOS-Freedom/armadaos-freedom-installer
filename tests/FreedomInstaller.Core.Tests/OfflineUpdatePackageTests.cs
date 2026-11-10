@@ -28,6 +28,23 @@ public sealed partial class OfflineUpdatePackageTests : IDisposable
     public OfflineUpdatePackageTests() => Directory.CreateDirectory(root);
     public void Dispose() => Directory.Delete(root, true);
 
+    [LinuxFact]
+    public async Task WorkRootBelowLinkedAncestorUsesPhysicalStageAndCleansOnlyThatStage()
+    {
+        var c = new Case(Path.Combine(root, "ancestor-package"));
+        string physical = Directory.CreateDirectory(Path.Combine(root, "physical")).FullName;
+        string work = Directory.CreateDirectory(Path.Combine(physical, "work")).FullName;
+        string alias = Path.Combine(root, "alias");
+        Directory.CreateSymbolicLink(alias, physical);
+        File.WriteAllText(Path.Combine(work, "sentinel"), "keep");
+        var imported = await Import(c.ArchivePath, Model, "1.0.0", Path.Combine(alias, "work"), c.Verify);
+        Assert.StartsWith(work + Path.DirectorySeparatorChar, imported.PackageDirectory);
+        imported.Dispose();
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(work, "sentinel")));
+        Assert.Single(Directory.GetFileSystemEntries(work));
+        await Assert.ThrowsAnyAsync<InvalidDataException>(() => Import(c.ArchivePath, Model, "1.0.0", alias, c.Verify));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(3)]

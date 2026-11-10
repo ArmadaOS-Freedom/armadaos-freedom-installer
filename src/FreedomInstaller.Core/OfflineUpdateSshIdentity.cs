@@ -54,7 +54,7 @@ public static class OfflineUpdateSshIdentityStore
 
         CheckNotReparseOrDirectory(publicPath, "Public key");
         ValidatePrivateKeyFile(privatePath);
-        ApplySecurity(privatePath, isDir: false);
+        ApplySecurity(privatePath, isDir: false, newlyCreated: !privateExists);
 
         token.ThrowIfCancellationRequested();
         OfflineUpdateSshKey publicKey = await DerivePublicKeyAsync(runner, exe, privatePath, token).ConfigureAwait(false);
@@ -104,6 +104,7 @@ public static class OfflineUpdateSshIdentityStore
 
     private static void EnsureDirectory(string dir)
     {
+        bool newlyCreated = false;
         try
         {
             var attrs = File.GetAttributes(dir);
@@ -117,13 +118,14 @@ public static class OfflineUpdateSshIdentityStore
             if (new DirectoryInfo(dir).LinkTarget != null)
                 throw new IOException($"Directory '{dir}' is a dangling symlink.");
             Directory.CreateDirectory(dir);
+            newlyCreated = true;
             if ((File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0)
                 throw new IOException($"Directory '{dir}' was created as a reparse point.");
         }
-        ApplySecurity(dir, isDir: true);
+        ApplySecurity(dir, isDir: true, newlyCreated: newlyCreated);
     }
 
-    private static void ApplySecurity(string path, bool isDir)
+    private static void ApplySecurity(string path, bool isDir, bool newlyCreated = false)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -133,16 +135,20 @@ public static class OfflineUpdateSshIdentityStore
             else File.SetUnixFileMode(path, mode);
             return;
         }
-        ApplyWindowsAcl(path, isDir);
+        ApplyWindowsAcl(path, isDir, newlyCreated);
     }
 
     [SupportedOSPlatform("windows")]
-    private static void ApplyWindowsAcl(string path, bool isDir)
+    private static void ApplyWindowsAcl(string path, bool isDir, bool newlyCreated)
     {
         using WindowsIdentity currentIdentity = WindowsIdentity.GetCurrent();
         SecurityIdentifier currentSID = (SecurityIdentifier)currentIdentity.User!;
         FileSystemSecurity sec = isDir ? new DirectoryInfo(path).GetAccessControl() : new FileInfo(path).GetAccessControl();
-        if (sec.GetOwner(typeof(SecurityIdentifier)) is not SecurityIdentifier owner || owner != currentSID)
+        var owner = sec.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
+        bool elevatedCreation = newlyCreated &&
+            owner?.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) == true &&
+            new WindowsPrincipal(currentIdentity).IsInRole(WindowsBuiltInRole.Administrator);
+        if (owner != currentSID && !elevatedCreation)
             throw new IOException($"Path '{path}' is not owned by current user.");
 
         if (isDir)

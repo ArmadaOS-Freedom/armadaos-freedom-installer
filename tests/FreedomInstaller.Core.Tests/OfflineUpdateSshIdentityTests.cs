@@ -64,6 +64,20 @@ public sealed class OfflineUpdateSshIdentityTests : IDisposable
     }
 
     [Fact]
+    public async Task NewIdentityDirectoryAndPrivateKeyBecomeOwnedByTheCurrentUser()
+    {
+        string dir = Path.Combine(_directory, "new-identity");
+        var result = await OfflineUpdateSshIdentityStore.EnsureAsync(dir, new FakeRunner(), _keygen);
+        if (OperatingSystem.IsWindows())
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            Assert.Equal(identity.User, new DirectoryInfo(dir).GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+            Assert.Equal(identity.User, new FileInfo(result.IdentityFile).GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+        }
+        Assert.Equal(result, await OfflineUpdateSshIdentityStore.EnsureAsync(dir, new FakeRunner(), _keygen));
+    }
+
+    [Fact]
     public async Task DerivedOutputIsAuthoritative_AndMalformedOutputPreservesPrivate()
     {
         string dir = NewDirectory();
