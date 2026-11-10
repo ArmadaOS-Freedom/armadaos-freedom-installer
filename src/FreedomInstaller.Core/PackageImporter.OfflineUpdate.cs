@@ -490,6 +490,33 @@ public static partial class PackageImporter
         return Path.Combine(current, Path.GetFileName(full));
     }
 
+    private static void EnsureNoReparseAncestors(string directoryPath)
+    {
+        var current = Path.GetFullPath(directoryPath);
+        while (!string.IsNullOrEmpty(current))
+        {
+            if (Path.Exists(current))
+            {
+                var info = new DirectoryInfo(current);
+                if (!info.Exists ||
+                    info.LinkTarget is not null ||
+                    (info.Attributes & FileAttributes.ReparsePoint) != 0 ||
+                    (info.Attributes & FileAttributes.Directory) == 0)
+                {
+                    throw new InvalidDataException($"工作目录路径包含重解析点或非目录节点：{current}。");
+                }
+            }
+
+            var parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || string.Equals(parent, current, StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            current = parent;
+        }
+    }
+
     private static void EnsureSafeDirectoryTree(string targetDirectory, string stopRoot)
     {
         var current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetDirectory));
