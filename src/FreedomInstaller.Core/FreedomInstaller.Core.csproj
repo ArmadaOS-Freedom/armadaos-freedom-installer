@@ -25,6 +25,13 @@
        SharpCompress is a single fully managed, MIT-licensed dependency (net10 supported); no external
        archiver executable and no native helper is installed or invoked at build or run time. ZIP/ZIP64
        keeps using System.IO.Compression, so the fast path never goes through this library. -->
+  <!-- Fixed system release trust anchor for signed install/offline-upgrade documents. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\armadaos-freedom.pub"
+                      LogicalName="FreedomInstaller.UpdateTrust.PublicKey.pem"
+                      WithCulture="false" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="SharpCompress" Version="0.50.6" />
     <PackageReference Include="System.IO.Ports" Version="10.0.0" />

@@ -567,7 +567,8 @@ internal static class RamInstallValidation
 {
     private const int Sha256HexLength = 64;
 
-    private const string OriginPrefix = "ostree-image-signed:docker://ghcr.io/mydanyi/armadaos-freedom:";
+    private const string OriginPrefix = "ostree-image-signed:docker://ghcr.io/armadaos-freedom/armadaos-freedom:";
+    private const string LegacyOriginPrefix = "ostree-image-signed:docker://ghcr.io/mydanyi/armadaos-freedom:";
 
     private const string ManifestDigestPrefix = "sha256:";
 
@@ -694,12 +695,18 @@ internal static class RamInstallValidation
 
     private static bool IsFreedomOrigin(string? origin)
     {
-        if (origin is null || !origin.StartsWith(OriginPrefix, StringComparison.Ordinal))
+        if (origin is null)
         {
             return false;
         }
 
-        var tail = origin[OriginPrefix.Length..];
+        var prefix = origin.StartsWith(OriginPrefix, StringComparison.Ordinal) ? OriginPrefix : LegacyOriginPrefix;
+        if (!origin.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var tail = origin[prefix.Length..];
         var separator = tail.IndexOf('@');
         var channel = separator < 0 ? tail : tail[..separator];
 

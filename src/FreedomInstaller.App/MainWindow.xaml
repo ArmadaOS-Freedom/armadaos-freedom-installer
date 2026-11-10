@@ -3555,13 +3555,18 @@
                 </StackPanel>
             </ScrollViewer>
 
+            <!-- 离线升级视图同样占满主体三列；可见性只由 ApplyFunctionView() 决定。 -->
+            <local:OfflineUpgradeView x:Name="OfflineUpgradePanel"
+                                      Grid.Column="0"
+                                      Grid.ColumnSpan="3"
+                                      Visibility="Collapsed" />
+
             <!--
                 ================= 功能首页（应用入口） =================
-                启动后先看到这一页：五张操作卡片各自对应一个独立操作，点击后进入原有向导；
-                末尾两张 9008 卡片只打开全局页的备份 / 恢复视图，不参与这五种操作标签。
-                TF 卡安装卡片暂时移除（底层实现保留），新安装入口因此不在这里出现。
+                启动后先看到这一页：操作卡片各自对应一个独立功能（安装 / 修复等原有向导、
+                离线升级页），9008 备份 / 恢复卡片只打开全局页的对应视图，不写入操作标签。
                 卡片内容全部取自本地化键（标题 16 半粗、说明 12 折行），图标是内联矢量 Path，
-                不引入任何新库或图片资源。首页与向导的可见性只由 ApplyFunctionView() 改。
+                不引入任何新库或图片资源。首页与各功能页的可见性只由 ApplyFunctionView() 改。
             -->
             <ScrollViewer x:Name="HomePage"
                           Grid.Column="0"
@@ -3630,8 +3635,7 @@
                                 </Grid>
                             </Button>
 
-                            <Button Tag="repair-install"
-                                    Click="OnSelectOperation"
+                            <Button Click="OnShowOfflineUpgrade"
                                     Style="{StaticResource FunctionCard}"
                                     Margin="0,0,12,12">
                                 <Grid>
@@ -3640,7 +3644,7 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <Border Grid.Column="0" Style="{StaticResource FunctionCardIcon}">
-                                        <Path Data="M 4 12 C 4 7.6 7.6 4 12 4 M 4 8 V 12 H 8 M 20 12 C 20 16.4 16.4 20 12 20 M 20 16 V 12 H 16"
+                                        <Path Data="M 12 3 V 15 M 7 10 L 12 15 L 17 10 M 5 20 H 19"
                                               Width="18"
                                               Height="18"
                                               Stretch="Uniform"
@@ -3650,12 +3654,12 @@
                                               StrokeThickness="1.8" />
                                     </Border>
                                     <StackPanel Grid.Column="1">
-                                        <TextBlock Text="{DynamicResource Static.Function.RepairInstall.Title}"
+                                        <TextBlock Text="{DynamicResource Static.Function.OfflineUpdate.Title}"
                                                    FontSize="16"
                                                    FontWeight="SemiBold"
                                                    Foreground="{DynamicResource InkBrush}"
                                                    TextWrapping="Wrap" />
-                                        <TextBlock Text="{DynamicResource Static.Function.RepairInstall.Desc}"
+                                        <TextBlock Text="{DynamicResource Static.Function.OfflineUpdate.Desc}"
                                                    FontSize="12"
                                                    Foreground="{DynamicResource MutedBrush}"
                                                    TextWrapping="Wrap"
@@ -3795,6 +3799,40 @@
                                                    Foreground="{DynamicResource InkBrush}"
                                                    TextWrapping="Wrap" />
                                         <TextBlock Text="{DynamicResource Static.Function.GlobalRestore.Desc}"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource MutedBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,6,0,0" />
+                                    </StackPanel>
+                                </Grid>
+                            </Button>
+
+                            <Button Tag="repair-install"
+                                    Click="OnSelectOperation"
+                                    Style="{StaticResource FunctionCard}"
+                                    Margin="0,0,12,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0" Style="{StaticResource FunctionCardIcon}">
+                                        <Path Data="M 4 12 C 4 7.6 7.6 4 12 4 M 4 8 V 12 H 8 M 20 12 C 20 16.4 16.4 20 12 20 M 20 16 V 12 H 16"
+                                              Width="18"
+                                              Height="18"
+                                              Stretch="Uniform"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Stroke="{DynamicResource AccentBrush}"
+                                              StrokeThickness="1.8" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{DynamicResource Static.Function.RepairInstall.Title}"
+                                                   FontSize="16"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource InkBrush}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Text="{DynamicResource Static.Function.RepairInstall.Desc}"
                                                    FontSize="12"
                                                    Foreground="{DynamicResource MutedBrush}"
                                                    TextWrapping="Wrap"

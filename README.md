@@ -4,7 +4,7 @@
 
 **免费软件，谨防被骗。**
 
-[系统仓库](https://github.com/mydanyi/armadaos-freedom) · [哔哩哔哩](https://space.bilibili.com/258786) · [GitHub](https://github.com/mydanyi)
+[系统仓库](https://github.com/ArmadaOS-Freedom/armadaos-freedom) · [哔哩哔哩](https://space.bilibili.com/258786) · [GitHub](https://github.com/mydanyi)
 
 ## 功能
 
@@ -38,7 +38,7 @@ A/B 两槽分别核验各自的 AVB 签名和父子密钥关系，支持同一�
 
 ## 系统包与恢复区
 
-系统镜像由[系统仓库的 9008 打包流水线](https://github.com/mydanyi/armadaos-freedom/blob/main/docs/edl-package.zh-CN.md)生成，单独选择导入，不嵌入安装器 EXE。共用系统内容在统一包中只保存一份，型号差异文件分别存放。分卷文件放在同一目录，选择第一卷。
+系统镜像由[系统仓库的 9008 打包流水线](https://github.com/ArmadaOS-Freedom/armadaos-freedom/blob/main/docs/edl-package.zh-CN.md)生成，单独选择导入，不嵌入安装器 EXE。共用系统内容在统一包中只保存一份，型号差异文件分别存放。分卷文件放在同一目录，选择第一卷。
 
 安装器按当前平板的备份生成 `ARMADA_BACKUP`，固定 **2 GiB（2048 MiB）**。它是专用恢复镜像，包含头信息、gzip 压缩的 tar 资料、填充及启动器设置区，并非 ext4、FAT 或普通空白分区。显示写入或回读 2 GiB，不代表压缩后的备份仍有 2 GiB。
 

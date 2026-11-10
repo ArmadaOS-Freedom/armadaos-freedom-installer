@@ -1,6 +1,6 @@
 # 统一安装包结构
 
-统一包将多个型号放在同一个归档中，共用内容只存一份。当前 9008 包由[系统仓库](https://github.com/mydanyi/armadaos-freedom/blob/main/docs/edl-package.md)生成。
+统一包将多个型号放在同一个归档中，共用内容只存一份。当前 9008 包由[系统仓库](https://github.com/ArmadaOS-Freedom/armadaos-freedom/blob/main/docs/edl-package.md)生成。
 
 ## 当前结构
 

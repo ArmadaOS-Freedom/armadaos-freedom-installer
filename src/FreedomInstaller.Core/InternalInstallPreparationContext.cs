@@ -62,7 +62,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
     private const string SeedManifestDigestPin =
         "sha256:af569f306a86a246fac51370e2dc8d54b514e1c06b484dee33d3db02dce108c1";
     private const string SeedOriginPin =
-        "ostree-image-signed:docker://ghcr.io/mydanyi/armadaos-freedom:testing";
+        "ostree-image-signed:docker://ghcr.io/armadaos-freedom/armadaos-freedom:testing";
 
     private const string InstallationRecordKind = "armada-internal-install";
     private const string SummaryManifestKind = "armada-install-artifacts";

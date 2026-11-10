@@ -21,11 +21,24 @@ public sealed class ImportedPackage : IDisposable
         PackageValidationResult validation,
         string? ownedDirectory,
         string? ownerRoot)
+        : this(sourcePath, packageDirectory, deviceModel, validation, ownedDirectory, ownerRoot, null)
+    {
+    }
+
+    internal ImportedPackage(
+        string sourcePath,
+        string packageDirectory,
+        string deviceModel,
+        PackageValidationResult validation,
+        string? ownedDirectory,
+        string? ownerRoot,
+        UpdatePackageDescriptor? updateDescriptor)
     {
         SourcePath = sourcePath;
         PackageDirectory = packageDirectory;
         DeviceModel = deviceModel;
         Validation = validation;
+        UpdateDescriptor = updateDescriptor;
         _ownedDirectory = ownedDirectory;
         _ownerRoot = ownerRoot;
     }
@@ -48,6 +61,12 @@ public sealed class ImportedPackage : IDisposable
 
     /// <summary>Validation result of the selected package, including its manifest fingerprint.</summary>
     public PackageValidationResult Validation { get; }
+
+    /// <summary>
+    /// Verified signed update descriptor and archive media metadata when present, or null for legacy
+    /// or invalid packages. Does not imply device or startup readiness.
+    /// </summary>
+    public UpdatePackageDescriptor? UpdateDescriptor { get; }
 
     /// <summary>Private directory this instance owns, or null when it does not own one.</summary>
     internal string? OwnedDirectory => _ownedDirectory;
@@ -248,6 +267,14 @@ public static partial class PackageImporter
             var source = ResolveArchiveSource(fullSource);
             token.ThrowIfCancellationRequested();
 
+            var updateDescriptor = ReadUpdateDescriptor(
+                source,
+                expectedModel,
+                "install",
+                typeof(PackageImporter).Assembly.GetName().Version!.ToString(3),
+                required: false,
+                token);
+
             if (source.IsNativeRar)
             {
                 // A genuine RAR volume set has its own per-volume headers, so it is read by the
@@ -256,6 +283,11 @@ public static partial class PackageImporter
             }
 
             using var stream = source.OpenStream();
+
+            if (updateDescriptor is not null)
+            {
+                VerifyUpdateMedia(source, stream, updateDescriptor, token);
+            }
 
             if (!HasZipHeader(stream))
             {
@@ -293,6 +325,27 @@ public static partial class PackageImporter
                 out var sharedMappings))
             {
                 return Invalid(sourcePath, expectedModel, reasons);
+            }
+
+            if (updateDescriptor is not null)
+            {
+                if (!string.Equals(updateDescriptor.Version, bundleVersion, StringComparison.Ordinal))
+                {
+                    reasons.Add($"升级包描述文件版本 {updateDescriptor.Version} 与合集版本 {bundleVersion} 不一致，拒绝使用。");
+                    return Invalid(sourcePath, expectedModel, reasons);
+                }
+
+                var expectedManifestEntry = selectedDirectory + "/" + ManifestFileName;
+                var declaredManifestEntry = updateDescriptor.Root
+                    .GetProperty("modelManifests")
+                    .GetProperty(expectedModel)
+                    .GetString();
+
+                if (!string.Equals(declaredManifestEntry, expectedManifestEntry, StringComparison.Ordinal))
+                {
+                    reasons.Add($"升级包型号清单路径 {declaredManifestEntry} 与合集所选路径 {expectedManifestEntry} 不一致，拒绝使用。");
+                    return Invalid(sourcePath, expectedModel, reasons);
+                }
             }
 
             token.ThrowIfCancellationRequested();
@@ -374,7 +427,7 @@ public static partial class PackageImporter
             }
 
             stage = null;
-            return new ImportedPackage(sourcePath, stageDirectory, expectedModel, validation, stageDirectory, root);
+            return new ImportedPackage(sourcePath, stageDirectory, expectedModel, validation, stageDirectory, root, updateDescriptor);
         }
         catch (OperationCanceledException)
         {

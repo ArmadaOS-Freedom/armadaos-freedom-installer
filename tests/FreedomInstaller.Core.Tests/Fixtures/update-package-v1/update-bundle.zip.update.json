@@ -1,0 +1,189 @@
+{
+  "architecture": "aarch64",
+  "archive": {
+    "bytes": 8891,
+    "fileName": "update-bundle.zip",
+    "sha256": "24a71964e8a4c085123be77a34c8c90e08fb4d2aa0757d11cc8b95be9c4ba019"
+  },
+  "deckySnapshot": null,
+  "files": [
+    {
+      "bytes": 49,
+      "compression": "gzip",
+      "expandedBytes": 384,
+      "expandedSha256": "0f636f444a641a090296e5aa8506c5ca855afab40d62e3e970ff1ca39a8b23d0",
+      "path": "common/images/root.img.gz",
+      "role": "linux-root",
+      "sha256": "33ad9a61f68c086bb733e93ee25610865a79b64e1c6be67c34496b425588a5b1"
+    },
+    {
+      "bytes": 49,
+      "compression": "gzip",
+      "expandedBytes": 288,
+      "expandedSha256": "293dc2df763882ca848c66000e16b1a3dc809a6e2c3f013cfcda833c3dd90214",
+      "path": "common/images/boot.img.gz",
+      "role": "linux-boot",
+      "sha256": "37c8fb39932a911ca4448f4c1944ab42b73da397a40e601332e01dddc08fd7b6"
+    },
+    {
+      "bytes": 19,
+      "compression": "none",
+      "expandedBytes": 19,
+      "expandedSha256": "c294b4e6bbd3e013829937ec9255ae90e0a0b54719b86b8218e606737e976fc6",
+      "path": "common/boot/Image",
+      "role": "kernel",
+      "sha256": "c294b4e6bbd3e013829937ec9255ae90e0a0b54719b86b8218e606737e976fc6"
+    },
+    {
+      "bytes": 22,
+      "compression": "none",
+      "expandedBytes": 22,
+      "expandedSha256": "4c8a250691e718549ed02ecc1ceb797c011d853f275fd8ae02025b4eb17997f7",
+      "path": "common/boot/initramfs.cpio.gz",
+      "role": "initramfs",
+      "sha256": "4c8a250691e718549ed02ecc1ceb797c011d853f275fd8ae02025b4eb17997f7"
+    },
+    {
+      "bytes": 15,
+      "compression": "none",
+      "expandedBytes": 15,
+      "expandedSha256": "cae5b2d1e1fd2fa4dc301ada10e7184e53aa968d92a28b8be55e4fb5e6d4636b",
+      "path": "packages/TB322FC/runtime/runtime.img",
+      "role": "runtime",
+      "sha256": "cae5b2d1e1fd2fa4dc301ada10e7184e53aa968d92a28b8be55e4fb5e6d4636b"
+    },
+    {
+      "bytes": 18,
+      "compression": "none",
+      "expandedBytes": 18,
+      "expandedSha256": "b5599d1dd190ddd8abee690965b1fedf1fe5ff9d79bce967847b2bb8788de09d",
+      "path": "packages/TB322FC/dtb/normal.dtb",
+      "role": "dtb-normal",
+      "sha256": "b5599d1dd190ddd8abee690965b1fedf1fe5ff9d79bce967847b2bb8788de09d"
+    },
+    {
+      "bytes": 22,
+      "compression": "none",
+      "expandedBytes": 22,
+      "expandedSha256": "7b307fd786f5d985ab0ab6ae272db2e7c68e006da8a2e19d79a3903f365827ba",
+      "path": "packages/TB322FC/dtb/diagnostic.dtb",
+      "role": "dtb-diagnostic",
+      "sha256": "7b307fd786f5d985ab0ab6ae272db2e7c68e006da8a2e19d79a3903f365827ba"
+    },
+    {
+      "bytes": 15,
+      "compression": "none",
+      "expandedBytes": 15,
+      "expandedSha256": "bf3a9f97907c2fbe6e7556301e08d6af33bb0123e47b991e7260bcb45b0ff96a",
+      "path": "packages/TB323FU/runtime/runtime.img",
+      "role": "runtime",
+      "sha256": "bf3a9f97907c2fbe6e7556301e08d6af33bb0123e47b991e7260bcb45b0ff96a"
+    },
+    {
+      "bytes": 18,
+      "compression": "none",
+      "expandedBytes": 18,
+      "expandedSha256": "faeb37302a668a5560381446405cd8ad5b6e56523f0aa208861dd4075e8ad82e",
+      "path": "packages/TB323FU/dtb/normal.dtb",
+      "role": "dtb-normal",
+      "sha256": "faeb37302a668a5560381446405cd8ad5b6e56523f0aa208861dd4075e8ad82e"
+    },
+    {
+      "bytes": 22,
+      "compression": "none",
+      "expandedBytes": 22,
+      "expandedSha256": "337228ac5cd7231f6877c3fb8effa16135f08ed74945b187525905947434bdeb",
+      "path": "packages/TB323FU/dtb/diagnostic.dtb",
+      "role": "dtb-diagnostic",
+      "sha256": "337228ac5cd7231f6877c3fb8effa16135f08ed74945b187525905947434bdeb"
+    },
+    {
+      "bytes": 15,
+      "compression": "none",
+      "expandedBytes": 15,
+      "expandedSha256": "d32a6e933c64f868922916f0ae2fc7421b55d1a7e03b9df06e16bef15c974e42",
+      "path": "packages/TB710FU/runtime/runtime.img",
+      "role": "runtime",
+      "sha256": "d32a6e933c64f868922916f0ae2fc7421b55d1a7e03b9df06e16bef15c974e42"
+    },
+    {
+      "bytes": 18,
+      "compression": "none",
+      "expandedBytes": 18,
+      "expandedSha256": "115ecffa8f37288cb4dc2bb7d04edca7380077de9d3d965ddc6a9630b05f7416",
+      "path": "packages/TB710FU/dtb/normal.dtb",
+      "role": "dtb-normal",
+      "sha256": "115ecffa8f37288cb4dc2bb7d04edca7380077de9d3d965ddc6a9630b05f7416"
+    },
+    {
+      "bytes": 22,
+      "compression": "none",
+      "expandedBytes": 22,
+      "expandedSha256": "a93ec430d8ac76fef79bfbc21197d7b1f5d1dad74bb06a5389bad89b2d3a80c6",
+      "path": "packages/TB710FU/dtb/diagnostic.dtb",
+      "role": "dtb-diagnostic",
+      "sha256": "a93ec430d8ac76fef79bfbc21197d7b1f5d1dad74bb06a5389bad89b2d3a80c6"
+    },
+    {
+      "bytes": 1236,
+      "compression": "none",
+      "expandedBytes": 1236,
+      "expandedSha256": "83ea60b3700f9c35de0108a1b15e3c8011d4bdf127e9710c65d239dc1feaa4b9",
+      "path": "bundle.json",
+      "role": "manifest",
+      "sha256": "83ea60b3700f9c35de0108a1b15e3c8011d4bdf127e9710c65d239dc1feaa4b9"
+    },
+    {
+      "bytes": 1679,
+      "compression": "none",
+      "expandedBytes": 1679,
+      "expandedSha256": "b8eca70aff775fc12c1c0503f5c6423bbcc29f49c03fdd9555e7bab9ad48672c",
+      "path": "packages/TB322FC/package.json",
+      "role": "manifest",
+      "sha256": "b8eca70aff775fc12c1c0503f5c6423bbcc29f49c03fdd9555e7bab9ad48672c"
+    },
+    {
+      "bytes": 1679,
+      "compression": "none",
+      "expandedBytes": 1679,
+      "expandedSha256": "ed36ad98fbaffdadeebae4e593a30c4819b9cb06ab02302c5dabbc303d1cde1e",
+      "path": "packages/TB323FU/package.json",
+      "role": "manifest",
+      "sha256": "ed36ad98fbaffdadeebae4e593a30c4819b9cb06ab02302c5dabbc303d1cde1e"
+    },
+    {
+      "bytes": 1679,
+      "compression": "none",
+      "expandedBytes": 1679,
+      "expandedSha256": "e8a208b7c774eb49e5a7db5a162a4698f9b3145abea4c4fc0568ea04dd8627d2",
+      "path": "packages/TB710FU/package.json",
+      "role": "manifest",
+      "sha256": "e8a208b7c774eb49e5a7db5a162a4698f9b3145abea4c4fc0568ea04dd8627d2"
+    }
+  ],
+  "kind": "freedom-universal-package",
+  "minimumInstallerVersion": "0.8.0",
+  "minimumUpdaterVersion": "0.8.0",
+  "modelManifests": {
+    "TB322FC": "packages/TB322FC/package.json",
+    "TB323FU": "packages/TB323FU/package.json",
+    "TB710FU": "packages/TB710FU/package.json"
+  },
+  "ociDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "operations": [
+    "install"
+  ],
+  "ostreeCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "parts": [],
+  "product": "armadaos-freedom",
+  "recoveryManifests": {},
+  "releaseId": "interop-2026.04.0",
+  "schemaVersion": 1,
+  "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "supportedModels": [
+    "TB322FC",
+    "TB323FU",
+    "TB710FU"
+  ],
+  "version": "2026.04.0"
+}

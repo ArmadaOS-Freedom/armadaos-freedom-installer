@@ -22,8 +22,9 @@ public static partial class PackageReader
 
     private const string ManifestDigestPrefix = "sha256:";
 
-    /// <summary>The only accepted update origin. Any other registry or repository path is rejected.</summary>
-    private const string OriginPrefix = "ostree-image-signed:docker://ghcr.io/mydanyi/armadaos-freedom:";
+    /// <summary>Canonical origin, with compatibility for packages published before the organization transfer.</summary>
+    private const string OriginPrefix = "ostree-image-signed:docker://ghcr.io/armadaos-freedom/armadaos-freedom:";
+    private const string LegacyOriginPrefix = "ostree-image-signed:docker://ghcr.io/mydanyi/armadaos-freedom:";
 
     private static readonly string[] OriginChannels = { "stable", "beta", "testing" };
 
@@ -765,12 +766,13 @@ public static partial class PackageReader
     /// </summary>
     private static bool IsProjectOrigin(string origin)
     {
-        if (!origin.StartsWith(OriginPrefix, StringComparison.Ordinal))
+        var prefix = origin.StartsWith(OriginPrefix, StringComparison.Ordinal) ? OriginPrefix : LegacyOriginPrefix;
+        if (!origin.StartsWith(prefix, StringComparison.Ordinal))
         {
             return false;
         }
 
-        var tail = origin[OriginPrefix.Length..];
+        var tail = origin[prefix.Length..];
         var separator = tail.IndexOf('@');
         var channel = separator < 0 ? tail : tail[..separator];
 

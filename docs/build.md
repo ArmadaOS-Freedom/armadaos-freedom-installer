@@ -104,3 +104,11 @@ python -B tools/boot-packers/tests/windows_paths.py --packer <MultiBootKernelPat
 ```
 
 覆盖长路径、中文名称、绝对路径和网络共享路径；每个成功用例都会逐字节比较重打包结果。网络共享路径需将测试目录放在实际可用的共享中。失败现场保留在测试目录下。
+
+## Linux 系统更新用 BootTool
+
+BootTool 与安装器共用 Core 中的引导解析、重新打包及签名校验逻辑。`tools/publish-boot-tool.py` 生成包含运行时的 Linux ARM64 工具目录；平板无需安装 .NET SDK 或系统级 .NET 运行时。`tools/boot-tool.Containerfile` 以仓库根目录为构建上下文，产物位于镜像的 `/boot-tool`。`tools/verify-boot-tool.py` 检查文件清单、哈希、架构和启动入口；这项检查不代替设备启动验收。
+
+打包仅取得 `maintenance/build-inputs.json` 中固定的 GBL PRC/ROW 文件，并复用仓库内的 AOSP 公开测试素材。需要离线复用下载内容时，可把清单指定文件名的两个 GBL 文件放进 `tools/boot-tool-inputs/`；它们仍须通过长度和 SHA-256 校验，且被 Git 排除。发布目录保留运行时和第三方许可，不包含 Windows 刷机工具或 SDK。
+
+`boot-tool` 工作流在原生 ARM64 runner 上构建并上传压缩产物，同时在没有 .NET 的运行容器中检查启动。系统仓库从本仓库解析并记录实际源码提交后构建同一工具；系统侧接入前，应先合入所需的 BootTool 源码。

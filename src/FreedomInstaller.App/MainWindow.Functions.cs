@@ -7,8 +7,8 @@ namespace FreedomInstaller.App;
 /// <summary>
 /// 功能选择（应用入口）与「功能 → 向导」的视图切换。
 /// <para>
-/// 首页给出七张卡片：五张操作卡片各自进入一个原有向导，另外两张 9008 全局备份 / 恢复卡片
-/// 直接打开全局页视图，不写入操作标签；选中一张就进入原有向导，向导的任意一步都能回到首页重新选择。
+/// 首页的操作卡片各自进入一个原有向导；9008 全局备份 / 恢复卡片直接打开全局页视图，
+/// 不写入操作标签；离线升级卡片进入自己的页面。选中一张就进入对应向导，向导的任意一步都能回到首页重新选择。
 /// 这里只持有两个状态：当前选中的操作标签 <see cref="_selectedOperation"/>，
 /// 以及当前是否停在首页 <see cref="_showingHome"/>。设备身份、真实分区、安装包路径与日志
 /// 仍然留在 <c>MainWindow.xaml.cs</c> 的字段里，换功能时只清理由「上一次操作」派生出来的计划对象。
@@ -55,6 +55,12 @@ public partial class MainWindow
     private async void OnSelectOperation(object sender, RoutedEventArgs e)
     {
         if (!_ready || _busy)
+        {
+            return;
+        }
+
+        // 离线升级页自己拥有「返回」按钮与离开清理流程，功能首页卡片不在此页生效。
+        if (_showingOfflineUpgrade)
         {
             return;
         }
@@ -199,6 +205,12 @@ public partial class MainWindow
             return;
         }
 
+        // 离线升级页拥有自己的「返回」例程（含断开 / 清理确认），侧栏返回不在此页生效。
+        if (_showingOfflineUpgrade)
+        {
+            return;
+        }
+
         // 全局救援页受保护现场存在时不允许离开，避免丢掉仍在设备上的会话。
         if (HasGlobalRecoveryProtectedState)
         {
@@ -271,7 +283,15 @@ public partial class MainWindow
             return;
         }
 
+        // 离线升级现场（活动任务、SSH 连接或已导入安装包）不能静默逃回首页：
+        // 必须先经离线页自己的返回例程断开并清理，否则保留在离线页。
+        if (_showingOfflineUpgrade && (_offlineUpgradeActive || _offlineSsh != null || _offlinePackage != null))
+        {
+            return;
+        }
+
         _showingGlobalRecovery = false;
+        _showingOfflineUpgrade = false;
         _showingHome = true;
         ApplyFunctionView();
     }
@@ -284,8 +304,9 @@ public partial class MainWindow
         // 准备页、首页、向导与支持页互斥；支持页打开时三者都收起，返回后按原状态恢复。
         var environment = _showingEnvironment && !_showingSupport;
         var global = !_showingEnvironment && _showingGlobalRecovery && !_showingSupport;
-        var home = !_showingEnvironment && _showingHome && !_showingSupport && !_showingGlobalRecovery;
-        var workflow = !_showingEnvironment && !_showingHome && !_showingSupport && !_showingGlobalRecovery;
+        var offline = !_showingEnvironment && !_showingHome && _showingOfflineUpgrade && !_showingSupport && !_showingGlobalRecovery;
+        var home = !_showingEnvironment && _showingHome && !_showingSupport && !_showingGlobalRecovery && !offline;
+        var workflow = !_showingEnvironment && !_showingHome && !_showingSupport && !_showingGlobalRecovery && !offline;
 
         // 首页占满主体三列；左侧步骤栏、向导正文与底栏的「上一步 / 下一步 / 执行」一起收起。
         EnvironmentPage.Visibility = environment ? Visibility.Visible : Visibility.Collapsed;
@@ -300,6 +321,9 @@ public partial class MainWindow
 
         // 全局救援页同样占满三列；只在它自己的标志下显示，不改选中操作。
         GlobalRecoveryPage.Visibility = global ? Visibility.Visible : Visibility.Collapsed;
+
+        // 离线升级页占满主体三列；支持页（About 返回）打开时一并收起，但不清离线页标志。
+        OfflineUpgradePanel.Visibility = offline ? Visibility.Visible : Visibility.Collapsed;
 
         // 只在新旧向导内容与共享连接图示之间切换，不改首页 / 向导 / 支持页的父容器状态。
         ApplyInternalInstallView();

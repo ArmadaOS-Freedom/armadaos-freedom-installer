@@ -123,6 +123,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         InitializeLocalization();
+        InitializeOfflineUpgradeView();
         _bootStateMessage = M("Dynamic.BootState.Pending");
 
         // 启动时先按「未读取设备」渲染引导兼容性：面板在未连接时也必须可读，
@@ -136,6 +137,7 @@ public partial class MainWindow : Window
         Closing += OnInternalInstallClosing;
         Closing += OnEnvironmentClosing;
         Closing += (_, e) => OnGlobalRecoveryClosing(e);
+        Closing += OnOfflineUpgradeClosing;
     }
 
     // ---------- 生命周期 ----------
@@ -2086,6 +2088,7 @@ public partial class MainWindow : Window
             HomeEnvironmentButton.IsEnabled = HomeEnvironmentButton.IsEnabled && !HasGlobalRecoveryProtectedState;
         }
         RefreshGlobalRecoveryActions();
+        RefreshOfflineUpgradeActions();
 
         // 路由门禁最后统一收紧；它只做 AND，不会把任何按钮从禁用改为可用。
         RefreshWorkflowRouteGates();

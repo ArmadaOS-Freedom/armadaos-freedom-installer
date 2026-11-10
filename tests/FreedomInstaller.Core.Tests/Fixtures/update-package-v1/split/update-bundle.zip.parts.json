@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "format": "raw-split",
+  "archive": {
+    "fileName": "update-bundle.zip",
+    "bytes": 8891,
+    "sha256": "24a71964e8a4c085123be77a34c8c90e08fb4d2aa0757d11cc8b95be9c4ba019"
+  },
+  "partSizeBytes": 4096,
+  "parts": [
+    {
+      "fileName": "update-bundle.zip.001",
+      "bytes": 4096,
+      "sha256": "aaf197bb9e2d1f2272d3ab424599618d438166c6542476eed8dc85ed99ff56c9"
+    },
+    {
+      "fileName": "update-bundle.zip.002",
+      "bytes": 4096,
+      "sha256": "5623d7c0bca581d05399bf9b919476ca3ecb93f0db30b9869be98068c6550c4c"
+    },
+    {
+      "fileName": "update-bundle.zip.003",
+      "bytes": 699,
+      "sha256": "09874f9a7c0e2132218894f55a68de3b5f87da2c3016db016be3bfaceb58ffd2"
+    }
+  ]
+}

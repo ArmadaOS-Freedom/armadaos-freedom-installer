@@ -38,7 +38,7 @@ public partial class MainWindow
     }
 
     private void OnOpenAboutRepository(object sender, RoutedEventArgs e)
-        => OpenExternalLink("Dynamic.Link.AboutRepository", "https://github.com/mydanyi/armadaos-freedom");
+        => OpenExternalLink("Dynamic.Link.AboutRepository", "https://github.com/ArmadaOS-Freedom/armadaos-freedom");
 
     private void OnOpenLichWangGithub(object sender, RoutedEventArgs e)
         => OpenExternalLink("Dynamic.Link.AboutLichWangName", "https://github.com/lich-wang");

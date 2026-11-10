@@ -1,0 +1,45 @@
+name: Package contracts
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    container: mcr.microsoft.com/dotnet/sdk:10.0.401
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fetch public AOSP AVB test fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="${RUNNER_TEMP}/aosp-testkey-rsa4096.pem"
+          curl --fail --silent --show-error --location \
+            'https://android.googlesource.com/platform/external/avb/+/refs/heads/main/test/data/testkey_rsa4096.pem?format=TEXT' \
+            | base64 --decode > "${fixture}"
+          printf '%s  %s\n' '6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121' "${fixture}" | sha256sum --check
+      - name: Ensure python3 available for LinuxFact-dependent test process cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -x /usr/bin/python3 ] || [ ! -x /usr/bin/ssh-keygen ]; then
+            apt-get update
+            apt-get install -y --no-install-recommends python3 openssh-client
+          fi
+          test -x /usr/bin/python3
+          test -x /usr/bin/ssh-keygen
+      - name: Test package compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TEST_ARTIFACT_ROOT="${RUNNER_TEMP}/armada-package-contracts"
+          mkdir -p "${TEST_ARTIFACT_ROOT}"
+          dotnet test tests/FreedomInstaller.Core.Tests/FreedomInstaller.Core.Tests.csproj \
+            -p:BundledAvbSigningKey="${RUNNER_TEMP}/aosp-testkey-rsa4096.pem" \
+            --filter 'FullyQualifiedName~PackageContractTests|FullyQualifiedName~RamInstallRequestTests|FullyQualifiedName~InternalInstallPackageSnapshotTests|FullyQualifiedName~InternalInstallEdlRawSnapshotTests|FullyQualifiedName~EdlRawPackageContractTests|FullyQualifiedName~BehavioralTests|FullyQualifiedName~InternalInstallPreparationContext|FullyQualifiedName~UpdatePackageDescriptorTests|FullyQualifiedName~UpdateSignatureVerifierTests|FullyQualifiedName~UpdatePackageMediaTests|FullyQualifiedName~UpdatePackageImportTests|FullyQualifiedName~OfflineUpdate'

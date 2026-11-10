@@ -1,0 +1,797 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using FreedomInstaller.Core;
+using Xunit;
+
+namespace FreedomInstaller.Core.Tests;
+
+public sealed class OfflineUpdateRecoveryTests
+{
+    private const string PlanFileName = "plan.json";
+    private const string ManifestFileName = "recovery-manifest.json";
+    private const string AckFileName = "recovery-ack.json";
+    private const string FirstPath = "trust/slots/a/boot.img";
+    private const string SecondPath = "recovery-header.bin";
+
+    [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    public async Task SaveAsync_CopiesAndBindsBothModelsWithoutAutomaticCleanup(string model)
+    {
+        using var root = new TestRoot();
+        var fixture = CreateFixture(model);
+        var originalNeighbor = File.ReadAllBytes(root.WorkNeighborPath);
+        var savedDirectories = new List<string>();
+
+        for (var invocation = 0; invocation < 2; invocation++)
+        {
+            var calls = new List<string>();
+            var streams = new List<TrackingMemoryStream>();
+            var reports = new List<OfflineUpdateRecoveryProgress>();
+            var progress = new InlineProgress<OfflineUpdateRecoveryProgress>(reports.Add);
+
+            Task<Stream> OpenSource(string path, CancellationToken token)
+            {
+                calls.Add(path);
+                var payload = fixture.Files.Single(file => file.Path == path).Bytes;
+                var stream = new TrackingMemoryStream(payload, writable: false);
+                streams.Add(stream);
+                return Task.FromResult<Stream>(stream);
+            }
+
+            var result = await PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                root.WorkRoot,
+                fixture.Context,
+                fixture.PlanBytes,
+                fixture.ManifestBytes,
+                OpenSource,
+                progress);
+
+            Assert.False((object)result is IDisposable);
+            Assert.True(Directory.Exists(result.DirectoryPath));
+            Assert.Equal(result.DirectoryPath, Path.GetDirectoryName(result.PlanPath));
+            Assert.Equal(result.DirectoryPath, Path.GetDirectoryName(result.ManifestPath));
+            Assert.Equal(fixture.PlanBytes, File.ReadAllBytes(result.PlanPath));
+            Assert.Equal(fixture.ManifestBytes, File.ReadAllBytes(result.ManifestPath));
+            Assert.Equal(fixture.Files.Select(file => file.Path), calls);
+            Assert.All(streams, stream => Assert.True(stream.Disposed));
+
+            foreach (var file in fixture.Files)
+            {
+                var storedPath = Path.Combine(
+                    result.DirectoryPath,
+                    file.Path.Replace('/', Path.DirectorySeparatorChar));
+                var storedBytes = File.ReadAllBytes(storedPath);
+                Assert.Equal(file.Bytes, storedBytes);
+                Assert.Equal(file.Sha256, Sha256(storedBytes));
+            }
+
+            var totalBytes = fixture.Files.Sum(file => (long)file.Bytes.Length);
+            Assert.Equal(2, reports.Count);
+            Assert.Equal(FirstPath, reports[0].RelativePath);
+            Assert.Equal(fixture.Files[0].Bytes.Length, reports[0].BytesCompleted);
+            Assert.Equal(totalBytes, reports[0].TotalBytes);
+            Assert.Equal(SecondPath, reports[1].RelativePath);
+            Assert.Equal(totalBytes, reports[1].BytesCompleted);
+            Assert.Equal(totalBytes, reports[1].TotalBytes);
+
+            AssertAcknowledgement(result, fixture);
+            Assert.Equal(originalNeighbor, File.ReadAllBytes(root.WorkNeighborPath));
+            Assert.Equal(root.NeighborContents, File.ReadAllBytes(root.RootNeighborPath));
+            Assert.True(Directory.Exists(root.WorkRoot));
+            savedDirectories.Add(result.DirectoryPath);
+        }
+
+        Assert.NotEqual(savedDirectories[0], savedDirectories[1]);
+        Assert.Equal(2, FindStages(root).Count);
+        Assert.Equal(
+            File.ReadAllBytes(Path.Combine(savedDirectories[0], SecondPath)),
+            File.ReadAllBytes(Path.Combine(savedDirectories[1], SecondPath)));
+    }
+
+    [Fact]
+    public async Task MetadataAndBindingFailures_AreRejectedBeforeSourceOrStageCreation()
+    {
+        var cases = new[]
+        {
+            "plan-hash",
+            "manifest-hash",
+            "plan-transaction",
+            "manifest-transaction",
+            "plan-model",
+            "manifest-model",
+            "policy",
+            "plan-schema",
+            "manifest-schema",
+            "missing-model-with-alias",
+            "duplicate-json-property"
+        };
+
+        foreach (var testCase in cases)
+        {
+            using var root = new TestRoot();
+            var fixture = CreateFixture();
+            var sourceCalls = 0;
+
+            switch (testCase)
+            {
+                case "plan-hash":
+                    fixture.PlanSha256 = new string('0', 64);
+                    break;
+                case "manifest-hash":
+                    fixture.RecoveryManifestSha256 = new string('0', 64);
+                    break;
+                case "plan-transaction":
+                    SetPlan(fixture, ReplaceRequired(
+                        Text(fixture.PlanBytes),
+                        $"\"transactionId\": \"{fixture.TransactionId}\"",
+                        $"\"transactionId\": \"{Guid.NewGuid():D}\""));
+                    break;
+                case "manifest-transaction":
+                    SetManifest(fixture, ReplaceRequired(
+                        Text(fixture.ManifestBytes),
+                        $"\"transactionId\": \"{fixture.TransactionId}\"",
+                        $"\"transactionId\": \"{Guid.NewGuid():D}\""));
+                    break;
+                case "plan-model":
+                    SetPlan(fixture, ReplaceRequired(
+                        Text(fixture.PlanBytes),
+                        "\"model\": \"TB322FC\"",
+                        "\"model\": \"TB323FU\""));
+                    break;
+                case "manifest-model":
+                    SetManifest(fixture, ReplaceRequired(
+                        Text(fixture.ManifestBytes),
+                        "\"model\": \"TB322FC\"",
+                        "\"model\": \"TB323FU\""));
+                    break;
+                case "policy":
+                    SetPlan(fixture, ReplaceRequired(
+                        Text(fixture.PlanBytes),
+                        "\"policy\": \"offline-dual\"",
+                        "\"policy\": \"offline-single\""));
+                    break;
+                case "plan-schema":
+                    SetPlan(fixture, ReplaceRequired(
+                        Text(fixture.PlanBytes),
+                        "\"schemaVersion\": 1",
+                        "\"schemaVersion\": 2"));
+                    break;
+                case "manifest-schema":
+                    SetManifest(fixture, ReplaceRequired(
+                        Text(fixture.ManifestBytes),
+                        "\"schemaVersion\": 1",
+                        "\"schemaVersion\": 2"));
+                    break;
+                case "missing-model-with-alias":
+                    SetPlan(fixture, ReplaceRequired(
+                        Text(fixture.PlanBytes),
+                        "\"model\": \"TB322FC\"",
+                        "\"deviceModel\": \"TB322FC\""));
+                    break;
+                case "duplicate-json-property":
+                    SetPlan(fixture, ReplaceRequired(
+                        Text(fixture.PlanBytes),
+                        "\"operation\": \"offline-upgrade\",",
+                        "\"operation\": \"offline-upgrade\",\n  \"operation\": \"offline-upgrade\","));
+                    break;
+            }
+
+            Task<Stream> OpenSource(string path, CancellationToken token)
+            {
+                sourceCalls++;
+                throw new UnreachableException("Validation must precede source opening.");
+            }
+
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                    root.WorkRoot,
+                    fixture.Context,
+                    fixture.PlanBytes,
+                    fixture.ManifestBytes,
+                    OpenSource));
+
+            Assert.Equal(0, sourceCalls);
+            Assert.Empty(FindStages(root));
+            Assert.Equal(root.NeighborContents, File.ReadAllBytes(root.RootNeighborPath));
+            Assert.Equal(root.WorkNeighborContents, File.ReadAllBytes(root.WorkNeighborPath));
+        }
+    }
+
+    public static IEnumerable<object[]> InvalidPortablePaths()
+    {
+        yield return new object[] { "../outside.bin" };
+        yield return new object[] { "/absolute.bin" };
+        yield return new object[] { "trust\\slots\\boot.img" };
+        yield return new object[] { "C:/boot.img" };
+        yield return new object[] { "trust/<bad>.img" };
+        yield return new object[] { "trust/>bad.img" };
+        yield return new object[] { "trust/pipe|bad.img" };
+        yield return new object[] { "trust/question?.img" };
+        yield return new object[] { "trust/star*.img" };
+        yield return new object[] { "trust/quote\"bad.img" };
+        yield return new object[] { "trust/CON.txt" };
+        yield return new object[] { "trust/trailing./boot.img" };
+        yield return new object[] { "trust/trailing /boot.img" };
+        yield return new object[] { "trust//boot.img" };
+        yield return new object[] { ManifestFileName };
+        yield return new object[] { "case-collision" };
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidPortablePaths))]
+    public async Task InvalidPortablePathsAndCaseCollisions_NeverOpenSources(string invalidPath)
+    {
+        using var root = new TestRoot();
+        RecoveryFixture fixture;
+
+        if (invalidPath == "case-collision")
+        {
+            fixture = CreateFixture(files: new[]
+            {
+                new RecoveryPayload(FirstPath, Bytes(4097, 1)),
+                new RecoveryPayload(FirstPath.ToUpperInvariant(), Bytes(1029, 73))
+            });
+        }
+        else
+        {
+            fixture = CreateFixture(files: new[]
+            {
+                new RecoveryPayload(invalidPath, Bytes(4097, 1))
+            });
+        }
+
+        var sourceCalls = 0;
+        Task<Stream> OpenSource(string path, CancellationToken token)
+        {
+            sourceCalls++;
+            throw new UnreachableException("Portable path validation must precede source opening.");
+        }
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                root.WorkRoot,
+                fixture.Context,
+                fixture.PlanBytes,
+                fixture.ManifestBytes,
+                OpenSource));
+
+        Assert.Equal(0, sourceCalls);
+        Assert.Empty(FindStages(root));
+    }
+
+    [Theory]
+    [InlineData("short")]
+    [InlineData("oversized")]
+    [InlineData("same-size-wrong-hash")]
+    public async Task BadSourceContent_DisposesSourceAndRetainsPartialStageWithoutAck(string mode)
+    {
+        using var root = new TestRoot();
+        var fixture = CreateFixture(files: new[]
+        {
+            new RecoveryPayload(FirstPath, Bytes(8193, 19))
+        });
+        var original = (byte[])fixture.Files[0].Bytes.Clone();
+        var supplied = mode switch
+        {
+            "short" => original[..^1],
+            "oversized" => original.Concat(new byte[] { 0x5a }).ToArray(),
+            _ => MutateFirstByte(original)
+        };
+        TrackingMemoryStream? remote = null;
+        var calls = new List<string>();
+
+        Task<Stream> OpenSource(string path, CancellationToken token)
+        {
+            calls.Add(path);
+            remote = new TrackingMemoryStream(supplied, writable: false);
+            return Task.FromResult<Stream>(remote);
+        }
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                root.WorkRoot,
+                fixture.Context,
+                fixture.PlanBytes,
+                fixture.ManifestBytes,
+                OpenSource));
+
+        Assert.Equal(new[] { FirstPath }, calls);
+        Assert.NotNull(remote);
+        Assert.True(remote.Disposed);
+        var stage = Assert.Single(FindStages(root));
+        Assert.True(Directory.Exists(stage));
+        Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+        Assert.Equal(original, fixture.Files[0].Bytes);
+        Assert.Equal(root.WorkNeighborContents, File.ReadAllBytes(root.WorkNeighborPath));
+    }
+
+    [Fact]
+    public async Task CancellationAndSynchronousProgressFailure_LeaveNoAckAndPreserveCause()
+    {
+        using (var root = new TestRoot())
+        {
+            var fixture = CreateFixture();
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            var sourceCalls = 0;
+
+            Task<Stream> OpenSource(string path, CancellationToken token)
+            {
+                sourceCalls++;
+                throw new UnreachableException();
+            }
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                    root.WorkRoot,
+                    fixture.Context,
+                    fixture.PlanBytes,
+                    fixture.ManifestBytes,
+                    OpenSource,
+                    token: cancelled.Token));
+            Assert.Equal(0, sourceCalls);
+            Assert.Empty(FindStages(root));
+        }
+
+        using (var root = new TestRoot())
+        {
+            var fixture = CreateFixture(files: new[]
+            {
+                new RecoveryPayload(FirstPath, Bytes(8193, 31))
+            });
+            using var cancellation = new CancellationTokenSource();
+            CancelAfterReadMemoryStream? remote = null;
+
+            Task<Stream> OpenSource(string path, CancellationToken token)
+            {
+                remote = new CancelAfterReadMemoryStream(fixture.Files[0].Bytes, cancellation);
+                return Task.FromResult<Stream>(remote);
+            }
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                    root.WorkRoot,
+                    fixture.Context,
+                    fixture.PlanBytes,
+                    fixture.ManifestBytes,
+                    OpenSource,
+                    token: cancellation.Token));
+            Assert.NotNull(remote);
+            Assert.True(remote.Disposed);
+            var stage = Assert.Single(FindStages(root));
+            Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+        }
+
+        using (var root = new TestRoot())
+        {
+            var fixture = CreateFixture(files: new[]
+            {
+                new RecoveryPayload(FirstPath, Bytes(8193, 47))
+            });
+            var cause = new InlineProgressException("inline progress failed");
+            var progress = new InlineProgress<OfflineUpdateRecoveryProgress>(_ => throw cause);
+            TrackingMemoryStream? remote = null;
+
+            Task<Stream> OpenSource(string path, CancellationToken token)
+            {
+                remote = new TrackingMemoryStream(fixture.Files[0].Bytes, writable: false);
+                return Task.FromResult<Stream>(remote);
+            }
+
+            var actual = await Assert.ThrowsAsync<InlineProgressException>(() =>
+                PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                    root.WorkRoot,
+                    fixture.Context,
+                    fixture.PlanBytes,
+                    fixture.ManifestBytes,
+                    OpenSource,
+                    progress));
+            Assert.Same(cause, actual);
+            Assert.NotNull(remote);
+            Assert.True(remote.Disposed);
+            var stage = Assert.Single(FindStages(root));
+            Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+        }
+    }
+
+    [Fact]
+    public async Task ReadbackTamperOpenFailureAndInvalidMetadataLength_DoNotProduceAck()
+    {
+        using (var root = new TestRoot())
+        {
+            var fixture = CreateFixture(files: new[]
+            {
+                new RecoveryPayload(FirstPath, Bytes(8193, 61))
+            });
+            TamperOnDisposeMemoryStream? remote = null;
+            var calls = new List<string>();
+
+            Task<Stream> OpenSource(string path, CancellationToken token)
+            {
+                calls.Add(path);
+                var stage = Assert.Single(FindStages(root));
+                var target = Path.Combine(stage, FirstPath.Replace('/', Path.DirectorySeparatorChar));
+                remote = new TamperOnDisposeMemoryStream(fixture.Files[0].Bytes, target);
+                return Task.FromResult<Stream>(remote);
+            }
+
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                    root.WorkRoot,
+                    fixture.Context,
+                    fixture.PlanBytes,
+                    fixture.ManifestBytes,
+                    OpenSource));
+            Assert.Equal(new[] { FirstPath }, calls);
+            Assert.NotNull(remote);
+            Assert.True(remote.Disposed);
+            Assert.True(remote.Tampered);
+            var stage = Assert.Single(FindStages(root));
+            Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+        }
+
+        using (var root = new TestRoot())
+        {
+            var fixture = CreateFixture();
+            var cause = new SourceOpenException("source open failed");
+
+            Task<Stream> OpenSource(string path, CancellationToken token) => throw cause;
+
+            var actual = await Assert.ThrowsAsync<SourceOpenException>(() =>
+                PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                    root.WorkRoot,
+                    fixture.Context,
+                    fixture.PlanBytes,
+                    fixture.ManifestBytes,
+                    OpenSource));
+            Assert.Same(cause, actual);
+            var stage = Assert.Single(FindStages(root));
+            Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+        }
+
+        using (var root = new TestRoot())
+        {
+            var fixture = CreateFixture();
+            fixture.ManifestBytes = Array.Empty<byte>();
+            fixture.RecoveryManifestSha256 = Sha256(fixture.ManifestBytes);
+            var sourceCalls = 0;
+
+            Task<Stream> OpenSource(string path, CancellationToken token)
+            {
+                sourceCalls++;
+                throw new UnreachableException();
+            }
+
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                    root.WorkRoot,
+                    fixture.Context,
+                    fixture.PlanBytes,
+                    fixture.ManifestBytes,
+                    OpenSource));
+            Assert.Equal(0, sourceCalls);
+            Assert.Empty(FindStages(root));
+        }
+    }
+
+    private static RecoveryFixture CreateFixture(
+        string model = "TB322FC",
+        IReadOnlyList<RecoveryPayload>? files = null)
+    {
+        files ??= new[]
+        {
+            new RecoveryPayload(FirstPath, Bytes(8193, 1)),
+            new RecoveryPayload(SecondPath, Bytes(1027, 79))
+        };
+        var transactionId = Guid.NewGuid().ToString("D");
+        var manifestSha = new string('0', 64);
+        var planText = $$"""
+{
+  "schemaVersion": 1,
+  "operation": "offline-upgrade",
+  "transactionId": "{{transactionId}}",
+  "model": "{{model}}",
+  "policy": "offline-dual",
+  "recoveryManifestSha256": "{{manifestSha}}"
+}
+""";
+        var entries = string.Join(",\n", files.Select((file, index) => $$"""
+    {
+      "path": {{JsonSerializer.Serialize(file.Path)}},
+      "bytes": {{file.Bytes.Length}},
+      "sha256": "{{file.Sha256}}",
+      "kind": "{{(index == 0 ? "slot-image" : "recovery-header")}}"
+    }
+"""));
+        var manifestText = $$"""
+{
+  "schemaVersion": 1,
+  "operation": "offline-upgrade",
+  "transactionId": "{{transactionId}}",
+  "model": "{{model}}",
+  "files": [
+{{entries}}
+  ]
+}
+""";
+        var manifestBytes = Utf8(manifestText);
+        manifestSha = Sha256(manifestBytes);
+        planText = planText.Replace(new string('0', 64), manifestSha, StringComparison.Ordinal);
+        var planBytes = Utf8(planText);
+        return new RecoveryFixture(transactionId, model, files, planBytes, manifestBytes);
+    }
+
+    private static void SetPlan(RecoveryFixture fixture, string planText)
+    {
+        fixture.PlanBytes = Utf8(planText);
+        fixture.PlanSha256 = Sha256(fixture.PlanBytes);
+    }
+
+    private static void SetManifest(RecoveryFixture fixture, string manifestText)
+    {
+        fixture.ManifestBytes = Utf8(manifestText);
+        var oldManifestSha = fixture.RecoveryManifestSha256;
+        fixture.RecoveryManifestSha256 = Sha256(fixture.ManifestBytes);
+        SetPlan(fixture, ReplaceRequired(
+            Text(fixture.PlanBytes),
+            oldManifestSha,
+            fixture.RecoveryManifestSha256));
+    }
+
+
+    private static void AssertAcknowledgement(SavedOfflineUpdateRecovery result, RecoveryFixture fixture)
+    {
+        var ackPath = Path.Combine(result.DirectoryPath, AckFileName);
+        var ackBytes = File.ReadAllBytes(ackPath);
+        Assert.Equal(result.Acknowledgement, ackBytes);
+        using var document = JsonDocument.Parse(Text(ackBytes));
+        var root = document.RootElement;
+
+        Assert.Equal(
+            new[] { "schemaVersion", "operation", "transactionId", "planSha256", "recoveryManifestSha256", "files" },
+            root.EnumerateObject().Select(property => property.Name));
+
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("offline-upgrade", root.GetProperty("operation").GetString());
+        Assert.Equal(fixture.TransactionId, root.GetProperty("transactionId").GetString());
+        Assert.Equal(fixture.PlanSha256, root.GetProperty("planSha256").GetString());
+        Assert.Equal(fixture.RecoveryManifestSha256, root.GetProperty("recoveryManifestSha256").GetString());
+
+        var entries = root.GetProperty("files").EnumerateArray().ToList();
+        Assert.Equal(fixture.Files.Count, entries.Count);
+        for (var index = 0; index < fixture.Files.Count; index++)
+        {
+            var entry = entries[index];
+            Assert.Equal(
+                new[] { "path", "bytes", "sha256" },
+                entry.EnumerateObject().Select(property => property.Name));
+            Assert.Equal(fixture.Files[index].Path, entry.GetProperty("path").GetString());
+            Assert.Equal(fixture.Files[index].Bytes.Length, entry.GetProperty("bytes").GetInt64());
+            Assert.Equal(fixture.Files[index].Sha256, entry.GetProperty("sha256").GetString());
+        }
+    }
+
+    private sealed record RecoveryPayload(string Path, byte[] Bytes)
+    {
+        public string Sha256 => OfflineUpdateRecoveryTests.Sha256(Bytes);
+    }
+
+    private sealed class RecoveryFixture
+    {
+        public RecoveryFixture(
+            string transactionId,
+            string model,
+            IReadOnlyList<RecoveryPayload> files,
+            byte[] planBytes,
+            byte[] manifestBytes)
+        {
+            TransactionId = transactionId;
+            Model = model;
+            Files = files;
+            PlanBytes = planBytes;
+            ManifestBytes = manifestBytes;
+            PlanSha256 = Sha256(planBytes);
+            RecoveryManifestSha256 = Sha256(manifestBytes);
+        }
+
+        public byte[] PlanBytes { get; set; }
+        public byte[] ManifestBytes { get; set; }
+        public string PlanSha256 { get; set; }
+        public string RecoveryManifestSha256 { get; set; }
+        public string TransactionId { get; }
+        public string Model { get; }
+        public IReadOnlyList<RecoveryPayload> Files { get; }
+
+        public OfflineUpdateRecoveryContext Context => new(
+            TransactionId,
+            Model,
+            PlanSha256,
+            RecoveryManifestSha256);
+    }
+
+    private sealed class TestRoot : IDisposable
+    {
+        private static readonly string BaseRoot =
+            Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT") is { Length: > 0 } value
+                ? value
+                : Path.GetTempPath();
+
+        public TestRoot()
+        {
+            var unique = $"offline-recovery-tests-{Guid.NewGuid():D}";
+            Root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(BaseRoot, unique)));
+            Directory.CreateDirectory(Root);
+            WorkRoot = Path.Combine(Root, "work");
+            Directory.CreateDirectory(WorkRoot);
+            WorkNeighborContents = Bytes(521, 101);
+            WorkNeighborPath = Path.Combine(WorkRoot, "neighbor.bin");
+            File.WriteAllBytes(WorkNeighborPath, WorkNeighborContents);
+            NeighborContents = Bytes(733, 202);
+            RootNeighborPath = Path.Combine(Root, "neighbor-root.bin");
+            File.WriteAllBytes(RootNeighborPath, NeighborContents);
+        }
+
+        public string Root { get; }
+        public string WorkRoot { get; }
+        public string WorkNeighborPath { get; }
+        public byte[] WorkNeighborContents { get; }
+        public string RootNeighborPath { get; }
+        public byte[] NeighborContents { get; }
+
+        public void Dispose()
+        {
+            var canonicalRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Root));
+            var canonicalBase = Path.TrimEndingDirectorySeparator(Path.GetFullPath(BaseRoot));
+            var parent = Directory.GetParent(canonicalRoot)?.FullName;
+            var canonicalParent = parent is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(parent));
+            if (!string.Equals(canonicalRoot, canonicalBase, StringComparison.Ordinal) &&
+                string.Equals(canonicalParent, canonicalBase, StringComparison.Ordinal) &&
+                Directory.Exists(canonicalRoot))
+            {
+                Directory.Delete(canonicalRoot, recursive: true);
+            }
+        }
+    }
+
+    private static List<string> FindStages(TestRoot root) =>
+        Directory.EnumerateDirectories(root.WorkRoot, "offline-update-*")
+            .ToList();
+
+    private static byte[] Utf8(string text) => Encoding.UTF8.GetBytes(text);
+
+    private static string Text(byte[] bytes) => Encoding.UTF8.GetString(bytes);
+
+    private static string Sha256(byte[] bytes)
+    {
+        var hash = SHA256.HashData(bytes);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static byte[] Bytes(int length, int seed)
+    {
+        var data = new byte[length];
+        for (var index = 0; index < data.Length; index++)
+        {
+            data[index] = (byte)((seed * 31 + index * 7 + 1) % 255 + 1);
+        }
+
+        return data;
+    }
+
+    private static byte[] MutateFirstByte(byte[] source)
+    {
+        var copy = (byte[])source.Clone();
+        copy[0] = (byte)(copy[0] ^ 0xff);
+        return copy;
+    }
+
+    private static string ReplaceRequired(string text, string old, string @new)
+    {
+        var first = text.IndexOf(old, StringComparison.Ordinal);
+        Assert.True(first >= 0, $"Expected fragment not found: {old}");
+        Assert.Equal(first, text.LastIndexOf(old, StringComparison.Ordinal));
+        return text.Remove(first, old.Length).Insert(first, @new);
+    }
+
+    private sealed class InlineProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> report;
+
+        public InlineProgress(Action<T> report) => this.report = report;
+
+        public void Report(T value) => report(value);
+    }
+
+    private sealed class InlineProgressException : Exception
+    {
+        public InlineProgressException(string message) : base(message)
+        {
+        }
+    }
+
+    private sealed class SourceOpenException : Exception
+    {
+        public SourceOpenException(string message) : base(message)
+        {
+        }
+    }
+
+    private class TrackingMemoryStream : MemoryStream
+    {
+        private int disposed;
+
+        public TrackingMemoryStream(byte[] bytes, bool writable)
+            : base(bytes, writable: writable)
+        {
+        }
+
+        public bool Disposed => disposed != 0;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Interlocked.Exchange(ref disposed, 1);
+            }
+
+            base.Dispose(disposing);
+        }
+
+        public override ValueTask DisposeAsync()
+        {
+            Dispose(disposing: true);
+            return default;
+        }
+    }
+
+    private sealed class CancelAfterReadMemoryStream : TrackingMemoryStream
+    {
+        private readonly CancellationTokenSource cancellation;
+
+        public CancelAfterReadMemoryStream(byte[] bytes, CancellationTokenSource cancellation)
+            : base(bytes, writable: false) => this.cancellation = cancellation;
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken)
+        {
+            var read = base.ReadAsync(buffer, cancellationToken);
+            if (read.IsCompletedSuccessfully && read.Result > 0)
+            {
+                cancellation.Cancel();
+            }
+
+            return read;
+        }
+    }
+
+    private sealed class TamperOnDisposeMemoryStream : TrackingMemoryStream
+    {
+        private readonly string targetPath;
+        private int tampered;
+
+        public TamperOnDisposeMemoryStream(byte[] bytes, string targetPath)
+            : base(bytes, writable: false) => this.targetPath = targetPath;
+
+        public bool Tampered => tampered != 0;
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing && Interlocked.Exchange(ref tampered, 1) == 0 && File.Exists(targetPath))
+            {
+                using var stream = new FileStream(
+                    targetPath,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.Read);
+                var original = stream.ReadByte();
+                stream.Position = 0;
+                stream.WriteByte((byte)(original ^ 0xff));
+            }
+        }
+    }
+}
