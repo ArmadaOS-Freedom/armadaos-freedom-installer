@@ -252,7 +252,7 @@ public partial class MainWindow
                 return;
             }
 
-            var parent = _internalInstallBackupParent;
+            var parent = InternalInstallWorkParent;
             if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
             {
                 SetInternalInstallCapacityPackageStatus(
@@ -622,7 +622,7 @@ public partial class MainWindow
         var backup = _internalInstallBackup;
         var package = _internalInstallPackage;
         var storage = package?.Validation.Storage;
-        var parent = _internalInstallBackupParent;
+        var parent = InternalInstallWorkParent;
 
         if (!HasInternalInstallAllocationInputs
             || backup is null
