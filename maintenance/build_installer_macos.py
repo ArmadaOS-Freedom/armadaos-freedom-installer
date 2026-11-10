@@ -25,6 +25,7 @@ import argparse
 import json
 import platform
 import shutil
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -234,6 +235,28 @@ def _info_plist(version):
 """
 
 
+def _query_version(repo_root, project, record, env):
+    """Return the Mac project's evaluated Version, as the build and publish see it."""
+    argv = [
+        "dotnet", "msbuild", str(project), "-getProperty:Version", "-nologo",
+        "-p:Configuration=Release", f"-p:RuntimeIdentifier={RUNTIME}", "-p:SelfContained=true",
+        f"-p:BundledBuildInputsProps={record['propsPath']}",
+    ]
+    try:
+        result = subprocess.run(argv, cwd=str(repo_root), env=env, check=True,
+                                capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise SystemExit(f"[publish] executable not found: {exc}") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise SystemExit(
+            f"[publish] version query failed with exit code {exc.returncode}: {detail}") from exc
+    version = result.stdout.strip()
+    if not version:
+        raise SystemExit("[publish] version query returned an empty Version")
+    return version
+
+
 def publish(repo_root, record, output_dir, env):
     """dotnet publish FreedomInstaller.Mac for osx-arm64, then lay out the .app bundle."""
     repo_root = Path(repo_root).resolve()
@@ -244,20 +267,12 @@ def publish(repo_root, record, output_dir, env):
         if stale.exists():
             raise SystemExit(f"publish error: output already exists, choose an empty --output-dir: {stale}")
     project = repo_root / "src" / "FreedomInstaller.Mac" / "FreedomInstaller.Mac.csproj"
+    # Resolve the version before the expensive publish, so a failure leaves no partial output.
+    version = _query_version(repo_root, project, record, env)
     bi._run(
         ["dotnet", "publish", str(project), "-c", "Release", "-r", RUNTIME, "--self-contained", "true",
          "-p:UseSharedCompilation=false", f"-p:BundledBuildInputsProps={record['propsPath']}", "-o", str(publish_dir)],
         cwd=repo_root, env=env, phase="publish")
-    # The Mac project takes its version from the WPF project, so the bundle does too.
-    version_source = repo_root / "src" / "FreedomInstaller.App" / "FreedomInstaller.App.csproj"
-    version = None
-    for line in version_source.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line.startswith("<Version>") and line.endswith("</Version>"):
-            version = line[len("<Version>"):-len("</Version>")]
-            break
-    if not version:
-        raise SystemExit("publish error: FreedomInstaller.App.csproj declares no <Version>")
     (app / "Contents" / "Resources").mkdir(parents=True)
     shutil.copytree(publish_dir, app / "Contents" / "MacOS")
     bi._atomic_write_text(app / "Contents" / "Info.plist", _info_plist(version))

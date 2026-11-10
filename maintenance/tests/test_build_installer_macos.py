@@ -4,6 +4,7 @@ packages every EDL toolchain for macos-arm64 with the freshly generated pins."""
 import hashlib
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -143,11 +144,12 @@ class MacPrepareTests(unittest.TestCase):
 
     def test_publish_signs_and_verifies_the_finished_bundle(self):
         record, _ = self._prepare()
-        (self.repo_root / "src" / "FreedomInstaller.App" / "FreedomInstaller.App.csproj").write_text(
-            "<Project>\n  <PropertyGroup>\n    <Version>9.8.7</Version>\n  </PropertyGroup>\n</Project>\n",
-            encoding="utf-8")
+        app_csproj = self.repo_root / "src" / "FreedomInstaller.App" / "FreedomInstaller.App.csproj"
+        self.assertNotIn("<Version>", app_csproj.read_text(encoding="utf-8"))
         out = Path(self._tmp.name) / "publish out"
         calls = []
+        queries = []
+        env = {"CONTROLLED": "1"}
 
         def fake_run(argv, cwd, env, phase):
             calls.append([str(a) for a in argv])
@@ -161,12 +163,60 @@ class MacPrepareTests(unittest.TestCase):
                 assert (app / "Contents" / "Info.plist").is_file()
                 assert (app / "Contents" / "MacOS" / "FreedomInstaller.Mac").is_file()
 
-        with mock.patch.object(build_installer, "_run", side_effect=fake_run):
-            app = build_installer_macos.publish(self.repo_root, record, out, env={})
+        def fake_query(argv, cwd, env, check, capture_output, text):
+            queries.append({"argv": [str(a) for a in argv], "cwd": cwd, "env": env,
+                            "check": check, "capture_output": capture_output, "text": text})
+            return mock.Mock(stdout="9.8.7\n")
+
+        with mock.patch.object(build_installer, "_run", side_effect=fake_run), \
+             mock.patch.object(build_installer_macos.subprocess, "run", side_effect=fake_query):
+            app = build_installer_macos.publish(self.repo_root, record, out, env=env)
+        project = self.repo_root / "src" / "FreedomInstaller.Mac" / "FreedomInstaller.Mac.csproj"
+        self.assertEqual(len(queries), 1)
+        self.assertEqual(queries[0]["argv"], [
+            "dotnet", "msbuild", str(project), "-getProperty:Version", "-nologo",
+            "-p:Configuration=Release", "-p:RuntimeIdentifier=osx-arm64", "-p:SelfContained=true",
+            f"-p:BundledBuildInputsProps={record['propsPath']}",
+        ])
+        self.assertEqual(queries[0]["cwd"], str(self.repo_root.resolve()))
+        self.assertIs(queries[0]["env"], env)
+        self.assertTrue(queries[0]["check"])
+        self.assertTrue(queries[0]["capture_output"])
+        self.assertTrue(queries[0]["text"])
         self.assertEqual(calls[0][0], "dotnet")
         self.assertEqual(calls[1], ["codesign", "--force", "--deep", "--sign", "-", str(app)])
         self.assertEqual(calls[2], ["codesign", "--verify", "--strict", "--deep", str(app)])
         self.assertIn("<string>9.8.7</string>", (app / "Contents" / "Info.plist").read_text(encoding="utf-8"))
+
+    def _publish_after_query(self, query):
+        record, _ = self._prepare()
+        out = Path(self._tmp.name) / "publish out"
+        calls = []
+
+        def fake_run(argv, cwd, env, phase):
+            calls.append([str(a) for a in argv])
+
+        with mock.patch.object(build_installer, "_run", side_effect=fake_run), \
+             mock.patch.object(build_installer_macos.subprocess, "run", side_effect=query):
+            with self.assertRaises(SystemExit) as caught:
+                build_installer_macos.publish(self.repo_root, record, out, env={})
+        return calls, caught.exception
+
+    def test_publish_rejects_an_empty_queried_version_before_starting_publish(self):
+        def empty_query(argv, cwd, env, check, capture_output, text):
+            return mock.Mock(stdout="\n")
+
+        calls, error = self._publish_after_query(empty_query)
+        self.assertEqual(calls, [])
+        self.assertIn("empty Version", str(error))
+
+    def test_publish_reports_a_failed_version_query_without_starting_publish(self):
+        def failed_query(argv, cwd, env, check, capture_output, text):
+            raise subprocess.CalledProcessError(1, argv, output="", stderr="MSB1009: project missing")
+
+        calls, error = self._publish_after_query(failed_query)
+        self.assertEqual(calls, [])
+        self.assertIn("MSB1009: project missing", str(error))
 
     def test_missing_macos_platform_tools_fails(self):
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
