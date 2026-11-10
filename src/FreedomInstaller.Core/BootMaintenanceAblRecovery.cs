@@ -125,9 +125,13 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         ArgumentNullException.ThrowIfNull(sourceSlots);
         if (current.Model != "TB322FC" || lockState != BootloaderState.Locked) return null;
 
+        // Only the distinct source slots this install actually reads are authenticated. A target mapped to the
+        // current slot by the strict inactive-slot proof never touches the other physical slot's vbmeta, so a
+        // stale, non-zero or unparseable slot that is not a source can neither block nor be authorized here.
+        var selected = new SortedSet<string>(sourceSlots.Values, StringComparer.Ordinal);
         var roots = new Dictionary<string, string>(StringComparer.Ordinal);
         var vbmetaSha256 = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (string slot in new[] { "a", "b" })
+        foreach (string slot in selected)
         {
             VerifiedEdlFile root = Claim(current, "vbmeta_" + slot);
             if (await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(root, ct).ConfigureAwait(false)) continue;
@@ -139,7 +143,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
 
         var referenced = new Dictionary<string, string[]>(StringComparer.Ordinal);
         var claims = new List<VerifiedEdlFile>();
-        foreach (string slot in sourceSlots.Values.Distinct(StringComparer.Ordinal))
+        foreach (string slot in selected)
         {
             ct.ThrowIfCancellationRequested();
             if (!roots.TryGetValue(slot, out string? root) || root is null || IsAosp(root)) continue;
@@ -186,24 +190,30 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         ArgumentNullException.ThrowIfNull(referencedAblKeySha256);
 
         if (model != "TB322FC" || lockState != BootloaderState.Locked) return null;
-        if (originalRootKeys.Count == 0 || originalRootKeys.Values.All(IsAosp)) return null;
-        if (originalRootKeys.Keys.Any(slot => !currentVbmetaSha256.ContainsKey(slot))) return null;
 
-        foreach (string slot in sourceSlots.Values.Distinct(StringComparer.Ordinal))
+        var selected = new SortedSet<string>(sourceSlots.Values, StringComparer.Ordinal);
+        if (selected.Count == 0) return null;
+
+        // Retain authenticated facts only for the sources this install reads. An unused physical slot may be
+        // stale, non-zero or invalid: it must neither block the proof nor ever be authorized by it.
+        var roots = new Dictionary<string, string>(StringComparer.Ordinal);
+        var vbmetaSha256 = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string slot in selected)
         {
-            // A required source without its own current root is not evidence; the existing paths decide.
             if (!originalRootKeys.TryGetValue(slot, out string? root) || root is null) return null;
-            if (IsAosp(root)) continue;
+            if (!currentVbmetaSha256.TryGetValue(slot, out string? sha) || sha is null) return null;
+            roots.Add(slot, root);
+            vbmetaSha256.Add(slot, sha);
+        }
+
+        if (roots.Values.All(IsAosp)) return null;
+
+        foreach (string slot in selected)
+        {
+            if (IsAosp(roots[slot])) continue;
             if (!referencedAblKeySha256.TryGetValue(slot, out string[]? keys)
                 || keys is null
                 || !keys.Any(IsAosp)) return null;
-        }
-
-        var roots = new Dictionary<string, string>(originalRootKeys, StringComparer.Ordinal);
-        var vbmetaSha256 = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (string slot in roots.Keys)
-        {
-            vbmetaSha256.Add(slot, currentVbmetaSha256[slot]);
         }
 
         return new BootMaintenanceAblRecovery(

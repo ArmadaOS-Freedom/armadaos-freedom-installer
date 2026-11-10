@@ -134,8 +134,8 @@ public partial class MainWindow
             LogEmptyText.Visibility = Visibility.Collapsed;
         }
 
-        // 工作会话已经存在时，这一行立即落盘；会话尚未建立时不做任何声明，只在关闭窗口时再尝试。
-        PersistWorkLogIfActive();
+        // 工作会话已经存在时，这一行以不可变快照进入后台队列；会话尚未建立时不做任何声明，只在关闭窗口时再尝试。
+        QueueWorkLogPersistence();
     }
 
     /// <summary>

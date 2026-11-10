@@ -85,6 +85,40 @@ public sealed class DirectAospAblTrustTests
         Assert.StartsWith("requires-compatible-bootloader:", error.Message);
     }
 
+    /// <summary>
+    /// When the strict inactive-slot proof maps both targets to slot A, slot B is not a source: its stale
+    /// vbmeta facts must neither be authenticated nor authorize anything, and they cannot block the proof.
+    /// </summary>
+    [Fact]
+    public async Task UnusedMappedSlotIsNeitherAuthenticatedNorAuthorized()
+    {
+        using var fixture = new DirectAvbSourceTestFixture(DirectAvbSourceKind.Oem);
+
+        var sourceSlots = new Dictionary<string, string>(StringComparer.Ordinal) { ["a"] = "a", ["b"] = "a" };
+
+        // Slot B facts are offered deliberately (stale root and stale vbmeta hash) but no AOSP evidence.
+        object? proof = CreateDirectProof(
+            BootloaderState.Locked,
+            sourceSlots,
+            OriginalRootKeys(fixture),
+            CurrentVbmeta(fixture),
+            new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["a"] = KeyHashes(AblAvbTrustTests.DualKeyImage()),
+            });
+
+        Assert.NotNull(proof);
+
+        // Only the selected source keeps authenticated facts; the unused physical slot was never read.
+        Assert.Equal(new[] { "a" }, RetainedSlots(proof!, "_rootKeys"));
+        Assert.Equal(new[] { "a" }, RetainedSlots(proof!, "_vbmetaSha256"));
+
+        object nodeA = await ResignOemRootAsync(fixture.Sources["vbmeta_a"]);
+        object nodeB = await ResignOemRootAsync(fixture.Sources["vbmeta_b"]);
+        Assert.True(AuthorizesRoot(proof!, "a", nodeA));
+        Assert.False(AuthorizesRoot(proof!, "b", nodeB));
+    }
+
     /// <summary>All original roots already use the AOSP key: the existing path owns them and no proof is made.</summary>
     [Fact]
     public void AllAospOriginalRootsReturnNull()
@@ -210,6 +244,15 @@ public sealed class DirectAospAblTrustTests
     private static int ReplacementCount(object proof) =>
         ((IEnumerable)RecoveryType.GetProperty("Replacements", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(proof)!).Cast<object>().Count();
+
+    /// <summary>The source slots whose authenticated facts the proof actually retains.</summary>
+    private static string[] RetainedSlots(object proof, string fieldName) =>
+        ((IReadOnlyDictionary<string, string>)RecoveryType
+            .GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(proof)!)
+        .Keys
+        .OrderBy(slot => slot, StringComparer.Ordinal)
+        .ToArray();
 
     private static bool MatchesReplacement(object proof) =>
         (bool)RecoveryType.GetMethod("MatchesReplacement", BindingFlags.Instance | BindingFlags.NonPublic)!
