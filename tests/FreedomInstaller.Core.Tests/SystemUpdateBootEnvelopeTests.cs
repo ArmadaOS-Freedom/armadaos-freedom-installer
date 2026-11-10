@@ -84,6 +84,29 @@ public sealed class SystemUpdateBootEnvelopeTests : IClassFixture<EdlRawGblEnvel
     }
 
     [Fact]
+    public async Task PrepareSystemUpdateEnvelopeAsync_AospSourceCannotBypassResigningThroughGbl()
+    {
+        using var scope = CreateCaseScope();
+        EdlRawBuiltBoot built = _fx.NormalBuilt;
+        using var aospKey = LoadPublicTestRsa();
+        using var aospAvb = new AvbFixture(aospKey);
+        SlotInputs inputs = CreateSlotInputs("a");
+        VerifiedEdlFile vbmeta = WriteVbmetaRoot(scope.DirectoryPath, "vbmeta-aosp.img", aospAvb, aospAvb);
+        VerifiedEdlFile changedRaw = CreateChangedRawCopy(built.PackedRaw, Path.Combine(scope.DirectoryPath, "changed-raw.bin"));
+        string outputPath = Path.Combine(scope.DirectoryPath, "candidate.img");
+        var snapshot = SnapshotFiles(built.CandidateBoot, vbmeta, changedRaw);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EdlRawBootBuilder.PrepareSystemUpdateEnvelopeAsync(
+                "a", built.CandidateBoot, inputs.VendorBoot, inputs.InitBoot, inputs.Abl,
+                inputs.XblConfig, vbmeta, changedRaw, built.SlotMaterial.LoaderBudget.MaxRawBytes,
+                outputPath, SystemUpdateEnvelopeMode.GblPreserveMetadata));
+        Assert.Contains("AOSP resign", error.Message);
+        Assert.False(File.Exists(outputPath));
+        AssertSnapshotUnchanged(snapshot);
+    }
+
+    [Fact]
     public async Task PrepareSystemUpdateEnvelopeAsync_GblPreserveMetadata_PreservesExactSignedBlobWithChangedRaw()
     {
         using var scope = CreateCaseScope();

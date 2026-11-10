@@ -119,6 +119,11 @@ public static partial class EdlRawBootBuilder
                     throw new InvalidDataException("The AOSP route requires the source boot payload digest to match its signed metadata.");
             }
 
+            if (mode == SystemUpdateEnvelopeMode.GblPreserveMetadata &&
+                HashEquals(root.PublicKeySha256, SigningPublicKeySha256) &&
+                HashEquals(sourceLeaf.KeySha256, SigningPublicKeySha256))
+                throw new InvalidDataException("An AOSP-signed source must use the AOSP resign route.");
+
             VerifiedEdlFile candidate;
             if (mode == SystemUpdateEnvelopeMode.AospResign)
             {

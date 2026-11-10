@@ -160,9 +160,7 @@ namespace FreedomInstaller.App
         {
             if (!_workDirectoryReady || _workDirectory == null || string.IsNullOrWhiteSpace(_workDirectory.RootPath))
                 throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorWorkDirNotReady"));
-            string root = Path.Combine(_workDirectory.RootPath, "records", "offline-upgrades");
-            Directory.CreateDirectory(root);
-            return root;
+            return OfflineUpdateRecordsDirectory.Resolve(BundledTools.GetCacheRoot(), _workDirectory.RootPath);
         }
 
         private async Task RunOfflineUpgradeAsync(Func<long, CancellationToken, Task> action)
@@ -391,7 +389,7 @@ namespace FreedomInstaller.App
             var ssh = _offlineSsh;
             try
             {
-                DisposeImportedPackageAndInvalidate();
+                DisposeImportedPackageAndInvalidate(disconnecting: true);
             }
             finally
             {
@@ -407,7 +405,7 @@ namespace FreedomInstaller.App
             }
         }
 
-        private void DisposeImportedPackageAndInvalidate()
+        private void DisposeImportedPackageAndInvalidate(bool disconnecting = false)
         {
             ClearOfflineSelectionState();
             _suppressOfflineSessionSelectionChanged = true;
@@ -419,6 +417,8 @@ namespace FreedomInstaller.App
             _offlinePackage = null;
             pkg?.Dispose();
             SetText(OfflineUpgradePanel.PackageText, "Static.OfflineUpdate.PackagePending");
+            if (!disconnecting && _offlineSsh != null)
+                LoadSavedOfflineSessionsForDevice();
         }
 
         private void ClearOfflineSelectionState()
@@ -659,7 +659,7 @@ namespace FreedomInstaller.App
                 !OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null) || OfflineUpgradePanel.ConfirmCheck.IsChecked != true)
                 return;
 
-            string modelName = LocalizeModelName(_offlineConnectedModel ?? string.Empty);
+            UiMessage modelName = LocalizeModelName(_offlineConnectedModel ?? string.Empty);
             string msg = T("Dynamic.OfflineUpdate.ConfirmExecutePrompt", modelName, _offlinePackage.Descriptor.Version, _offlinePackage.Descriptor.ReleaseId);
             var res = MessageBox.Show(this, msg, T("Static.OfflineUpdate.Title"), MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
             if (res != MessageBoxResult.Yes)
@@ -738,7 +738,7 @@ namespace FreedomInstaller.App
             }
 
             _offlineUpgradeCloseApproved = true;
-            Close();
+            Dispatcher.BeginInvoke(new Action(Close));
         }
 
         private async Task ApplyQueriedReceiptState(JsonElement receipt, string sessionRoot, CancellationToken ct, bool allowLoadRecovery)
@@ -807,7 +807,7 @@ namespace FreedomInstaller.App
                 default:
                     ClearOfflineActionEligibility();
                     _offlineLastReceipt = null;
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorStateNotActionable", _uiText.Format(LocalizePhase(state))));
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorStateNotActionable", LocalizePhase(state)));
             }
         }
 
@@ -912,10 +912,10 @@ namespace FreedomInstaller.App
                     break;
                 default:
                     SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StatePersistedResult",
-                        _uiText.Format(LocalizePhase(state)));
+                        LocalizePhase(state));
                     break;
             }
-            AppendOfflineLog("Dynamic.OfflineUpdate.LogPersistedResult", _uiText.Format(LocalizePhase(state)));
+            AppendOfflineLog("Dynamic.OfflineUpdate.LogPersistedResult", LocalizePhase(state));
         }
 
         private JsonElement? TryLoadPersistedOfflineReceipt(OfflineUpdateSession session)
@@ -1178,12 +1178,12 @@ namespace FreedomInstaller.App
             return false;
         }
 
-        private string LocalizeModelName(string model) => model.ToUpperInvariant() switch
+        private UiMessage LocalizeModelName(string model) => model.ToUpperInvariant() switch
         {
-            "TB322FC" => T("Static.ModelName.Tb322fc"),
-            "TB323FU" => T("Static.ModelName.Tb323fu"),
-            "TB710FU" => T("Static.ModelName.Tb710fu"),
-            _ => string.IsNullOrWhiteSpace(model) ? "?" : model
+            "TB322FC" => M("Static.ModelName.Tb322fc"),
+            "TB323FU" => M("Static.ModelName.Tb323fu"),
+            "TB710FU" => M("Static.ModelName.Tb710fu"),
+            _ => M("Dynamic.OfflineUpdate.Value", string.IsNullOrWhiteSpace(model) ? "?" : model)
         };
 
         private static string GetThreePartInstallerVersion()
