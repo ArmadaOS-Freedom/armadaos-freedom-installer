@@ -461,41 +461,11 @@ namespace FreedomInstaller.App
 
                     _offlinePackage = imported;
                     _offlineDescriptorSha256 = descSha;
-                    _offlineSessions = sessions;
 
                     SetText(OfflineUpgradePanel.PackageText, "Dynamic.OfflineUpdate.PackageValidated", imported.Descriptor.Version, imported.Descriptor.ReleaseId);
                     AppendOfflineLog("Dynamic.OfflineUpdate.LogPackageValidated", imported.Descriptor.Version, imported.Descriptor.ReleaseId);
 
-                    _suppressOfflineSessionSelectionChanged = true;
-                    OfflineUpgradePanel.SessionCombo.ItemsSource = _offlineSessions;
-                    if (_offlineSessions.Count == 1)
-                    {
-                        OfflineUpgradePanel.SessionCombo.SelectedItem = _offlineSessions[0];
-                        _offlineSelectedSession = _offlineSessions[0];
-                        _offlineLastReceipt = TryLoadPersistedOfflineReceipt(_offlineSelectedSession);
-                        if (_offlineLastReceipt.HasValue)
-                        {
-                            UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
-                            ShowPersistedOfflineResult(_offlineLastReceipt.Value);
-                        }
-                        else
-                        {
-                            SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateSingleSessionMatched", _offlineSelectedSession.SessionId);
-                        }
-                    }
-                    else if (_offlineSessions.Count > 1)
-                    {
-                        OfflineUpgradePanel.SessionCombo.SelectedIndex = -1;
-                        _offlineSelectedSession = null;
-                        SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateMultipleSessionsFound", _offlineSessions.Count);
-                    }
-                    else
-                    {
-                        OfflineUpgradePanel.SessionCombo.SelectedIndex = -1;
-                        _offlineSelectedSession = null;
-                        SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateReadyToPrepareNew");
-                    }
-                    _suppressOfflineSessionSelectionChanged = false;
+                    ApplyFilteredOfflineSessions(sessions);
                 }
                 catch
                 {
@@ -504,6 +474,50 @@ namespace FreedomInstaller.App
                     throw;
                 }
             });
+        }
+
+        /// <summary>Install the matched sessions, dropping the older package's receipt, live flag, completion and recovery.</summary>
+        private void ApplyFilteredOfflineSessions(IReadOnlyList<OfflineUpdateSession> sessions)
+        {
+            ClearOfflineSelectionState();
+            _offlineSessions = sessions;
+
+            _suppressOfflineSessionSelectionChanged = true;
+            try
+            {
+                OfflineUpgradePanel.SessionCombo.ItemsSource = _offlineSessions;
+                if (_offlineSessions.Count == 1)
+                {
+                    OfflineUpgradePanel.SessionCombo.SelectedItem = _offlineSessions[0];
+                    _offlineSelectedSession = _offlineSessions[0];
+                    _offlineLastReceipt = TryLoadPersistedOfflineReceipt(_offlineSelectedSession);
+                    if (_offlineLastReceipt.HasValue)
+                    {
+                        UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
+                        ShowPersistedOfflineResult(_offlineLastReceipt.Value);
+                    }
+                    else
+                    {
+                        SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateSingleSessionMatched", _offlineSelectedSession.SessionId);
+                    }
+                }
+                else if (_offlineSessions.Count > 1)
+                {
+                    OfflineUpgradePanel.SessionCombo.SelectedIndex = -1;
+                    _offlineSelectedSession = null;
+                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateMultipleSessionsFound", _offlineSessions.Count);
+                }
+                else
+                {
+                    OfflineUpgradePanel.SessionCombo.SelectedIndex = -1;
+                    _offlineSelectedSession = null;
+                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateReadyToPrepareNew");
+                }
+            }
+            finally
+            {
+                _suppressOfflineSessionSelectionChanged = false;
+            }
         }
 
         private void OnOfflineSessionSelectionChanged(object? sender, SelectionChangedEventArgs e)
