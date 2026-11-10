@@ -92,16 +92,18 @@ public partial class MainWindow
             ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
     }
 
-    private void SaveWorkLogOnClose()
+    private void SaveWorkLogOnClose() => PersistWorkLogIfActive();
+
+    /// <summary>
+    /// 工作会话存在时把当前日志写进会话目录。追加一行后立即调用，因此窗口不关闭也能看到最新日志；
+    /// 会话尚未建立时什么也不做，绝不声称更早的日志行已经保存。
+    /// </summary>
+    private void PersistWorkLogIfActive()
     {
         if (_workSession is null) return;
-        try
-        {
-            File.WriteAllLines(Path.Combine(_workSession.DirectoryPath, "installer.log"),
-                System.Linq.Enumerable.Select(_localizedLogRows, row => row.Row.Text));
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        InstallerLog.TryPersist(
+            _workSession.DirectoryPath,
+            System.Linq.Enumerable.Select(_localizedLogRows, row => row.Row.Text));
     }
 
     private void CleanWorkFilesOnClose(bool preserveRecovery)

@@ -734,6 +734,7 @@ public partial class MainWindow
                     StringComparison.Ordinal))
                 {
                     // 只有后端明确报告备份缺少含 efisp 的完整启动恢复资料时才换成专用提示。
+                    AppendInternalInstallPreparationFailure(exception);
                     SetInternalInstallConfirmStatus(
                         M("Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired"));
                 }
@@ -742,6 +743,7 @@ public partial class MainWindow
                     StringComparison.Ordinal))
                 {
                     // 只有后端明确报告签名链不匹配时才换成专用提示；其余异常保留原始消息。
+                    AppendInternalInstallPreparationFailure(exception);
                     SetInternalInstallConfirmStatus(
                         M("Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch"));
                 }
@@ -750,6 +752,7 @@ public partial class MainWindow
                     StringComparison.Ordinal))
                 {
                     // 只有后端明确报告地区无法确认或两槽冲突时才换成专用提示，绝不按语言猜地区。
+                    AppendInternalInstallPreparationFailure(exception);
                     SetInternalInstallConfirmStatus(
                         M("Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown"));
                 }
@@ -758,6 +761,7 @@ public partial class MainWindow
                     StringComparison.Ordinal))
                 {
                     // 只有后端明确要求匹配的引导加载器时才换成兼容性提示；其余异常保留原始消息。
+                    AppendInternalInstallPreparationFailure(exception);
                     SetInternalInstallConfirmStatus(
                         M("Dynamic.InternalInstall.Prepared.CompatibilityRequired"));
                 }
@@ -770,6 +774,7 @@ public partial class MainWindow
                     or NotImplementedException
                     or MaintenanceException)
                 {
+                    AppendInternalInstallPreparationFailure(exception);
                     SetInternalInstallConfirmStatus(
                         M("Dynamic.InternalInstall.Prepared.Failed", exception.Message));
                 }
@@ -798,6 +803,13 @@ public partial class MainWindow
             RefreshInternalInstallActions();
         }
     }
+
+    /// <summary>
+    /// 准备失败先留下真实诊断：异常类型与完整消息进入日志，之后界面才可以把它替换成简体提示。
+    /// 取消不是失败，因此不经过这里。
+    /// </summary>
+    private void AppendInternalInstallPreparationFailure(Exception exception) =>
+        AppendLocalizedLog(M("Dynamic.RawValue", InstallerLog.DescribeFailure(exception)));
 
     /// <summary>确认页摘要只使用真实后端与方案对象的实际字段，不声称任何写入已完成。</summary>
     private void RenderInternalInstallPreparedSummary(

@@ -389,7 +389,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         BootloaderState observedFastbootLockState = BootloaderState.Locked,
         bool poisonExpandedRoot = false,
         Action<int, int, int>? onPreparationFailure = null,
-        DirectAvbSourceKind? slotBAvbSourceKind = null)
+        DirectAvbSourceKind? slotBAvbSourceKind = null,
+        string? ablFixturePath = null)
     {
         ArgumentNullException.ThrowIfNull(toolchainFixture);
 
@@ -405,7 +406,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
             observedFastbootLockState,
             poisonExpandedRoot,
             onPreparationFailure,
-            slotBAvbSourceKind);
+            slotBAvbSourceKind,
+            ablFixturePath: ablFixturePath);
     }
 
     /// <summary>
@@ -419,6 +421,11 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
     /// capture it removes exactly that one EFISP claim from the session's own manifest and disk, then reopens
     /// the set through production, while the device's GPT keeps the claim. It is test-only and refused
     /// without <paramref name="gblSources"/>.
+    /// </para>
+    /// <para>
+    /// <paramref name="ablFixturePath"/> optionally points at a checked-in synthetic ABL container that
+    /// replaces the <c>abl_a</c>/<c>abl_b</c> claims of the generated slot fixtures. It is measured like every
+    /// other claim, so the device capture carries exactly those bytes; null keeps the existing defaults.
     /// </para>
     /// </summary>
     internal static async Task<DirectInstallReadyTestSession> CreateAsync(
@@ -436,7 +443,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         DirectAvbSourceKind? slotBAvbSourceKind = null,
         GblDirectSourceFixture? gblSources = null,
         bool omitEfispBackup = false,
-        string? smallSystemSlot = null)
+        string? smallSystemSlot = null,
+        string? ablFixturePath = null)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -575,6 +583,27 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 sources["init_boot_" + zeroSlot] = inactiveTarget.InitBoot;
                 sources["abl_" + zeroSlot] = inactiveTarget.Abl;
                 sources["xbl_config_" + zeroSlot] = inactiveTarget.XblConfig;
+            }
+
+            if (ablFixturePath is not null)
+            {
+                // AVB02: the caller's checked-in synthetic ELF/FV/LZMA container replaces the ABL claim of both
+                // slots, so the production decoder and the referenced-key evidence path run for real. The claim
+                // is re-measured from the actual file; the device copies and zero-pads it like any other claim.
+                Assert.True(
+                    File.Exists(ablFixturePath),
+                    "the synthetic ABL fixture does not exist: " + ablFixturePath);
+                byte[] ablBytes = File.ReadAllBytes(ablFixturePath);
+                Assert.True(ablBytes.Length > 0, "the synthetic ABL fixture is empty: " + ablFixturePath);
+                string syntheticAblPath = Path.Combine(
+                    root, "synthetic-abl-" + Guid.NewGuid().ToString("N") + ".bin");
+                File.WriteAllBytes(syntheticAblPath, ablBytes);
+                var syntheticAbl = new VerifiedEdlFile(
+                    syntheticAblPath,
+                    ablBytes.LongLength,
+                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(ablBytes)));
+                sources["abl_a"] = syntheticAbl;
+                sources["abl_b"] = syntheticAbl;
             }
 
             // The factual AVB origin handed to the device assembly and reported by the session: the local

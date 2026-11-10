@@ -557,6 +557,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         List<EdlRawBuiltBoot> builds = new();
         VerifiedGblPlan? gblPlan = null;
         GblPreparationInputs? gblInputs = null;
+        BootMaintenanceAblRecovery? directAblProof = null;
         Dictionary<string, EdlRawInactiveSlotBackup> inactiveTargets = new(StringComparer.Ordinal);
         bool transferred = false;
 
@@ -576,6 +577,23 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 inactiveTargets,
                 cancellationToken).ConfigureAwait(false);
 
+            // A locked TB322FC whose current ABL already references the AOSP key beside the OEM key gets a
+            // direct proof from this backup alone. It is decided before the GBL gate, so a first install
+            // without efisp is not refused as unavailable GBL. A null proof leaves every existing path as is,
+            // and the boot-only route never reads ABL evidence it would not use.
+            if (!UsesPreservedAospChain(profile.Model))
+            {
+                directAblProof = await BootMaintenanceAblRecovery
+                    .CreateDirectAsync(backup, deviceCheck.FastbootLockState, sourceSlots, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (directAblProof is not null)
+                {
+                    directAblProof.RequireBinding(backup, deviceCheck.FastbootLockState, sourceSlots);
+                    await directAblProof.RevalidateAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
             // The verified GBL gate decides whether this source is a real GBL source before any raw expansion,
             // but it authenticates the original root and the entry, region and EFI eligibility only. The
             // wrapper, the child and the current-XBL capacity are completed from the actual builds later, not
@@ -590,7 +608,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 preservedAvbRoles = await RequireDirectPreservedAospChainAsync(sourceSlots, backupFacts, cancellationToken)
                     .ConfigureAwait(false);
             }
-            else
+            else if (directAblProof is null)
             {
                 gblInputs = await PrepareDirectGblInputsAsync(
                     deviceCheck.CurrentSlot,
@@ -612,7 +630,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                     backupFacts.Files,
                     evidenceDirectory,
                     claims,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    directAblProof).ConfigureAwait(false);
             }
             else
             {
@@ -868,6 +887,10 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         }
         finally
         {
+            // The direct AOSP proof is kept alive through the signed roots and metadata nodes it authorizes
+            // and is released here, before any early return can leak it. It never carries an ABL replacement.
+            directAblProof?.Dispose();
+
             // Any proof the early gate bought whose build never ran - a refused package, asset, root or a
             // cancellation - is released here, so no path leaves an inactive-slot lease open. A proof is only
             // released after its own build finished, because the slot loop removes it there.
