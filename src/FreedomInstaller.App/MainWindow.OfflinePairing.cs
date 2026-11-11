@@ -37,10 +37,14 @@ namespace FreedomInstaller.App
             await RunOfflineUpgradeAsync(async (_, ct) =>
             {
                 ClearOfflinePairing();
-                var candidate = await OfflineUpdateSshEnrollment.DiscoverUsbHostAsync(_runner, token: ct);
 
                 if (keyMode)
                 {
+                    // Host-key discovery runs ssh-keyscan, so it belongs only to
+                    // the key flow; the password flow must work on Windows hosts
+                    // without OpenSSH installed.
+                    var candidate = await OfflineUpdateSshEnrollment.DiscoverUsbHostAsync(_runner, token: ct);
+
                     // Existing one-time public-key pairing stays available unchanged.
                     var identity = await OfflineUpdateSshIdentityStore.EnsureAsync(
                         Path.Combine(BundledTools.GetCacheRoot(), "connections", "offline-upgrade"), _runner, token: ct);
@@ -64,6 +68,16 @@ namespace FreedomInstaller.App
                     return;
                 }
 
+                OfflineUpdateUsbEndpoint endpoint;
+                try
+                {
+                    endpoint = await OfflineUpdateUsbDiscovery.FindSingleAsync(_runner, token: ct);
+                }
+                catch (IOException ex)
+                {
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorUsbConnection", ex.Message));
+                }
+
                 var defaultCredential = OfflineUpdateSshDefaultCredentials.Instance;
                 string enteredUser = OfflineUpgradePanel.UserBox.Text.Trim();
                 string enteredPassword = OfflineUpgradePanel.PasswordBox.Password;
@@ -72,7 +86,7 @@ namespace FreedomInstaller.App
                 if (enteredPassword.Length > 0 && string.IsNullOrEmpty(enteredUser))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorInvalidConnectionFields"));
 
-                string endpointKey = OfflineUpdateSshAuthPolicy.EndpointKey(candidate.Endpoint.Host, 22);
+                string endpointKey = OfflineUpdateSshAuthPolicy.EndpointKey(endpoint.Host, 22);
 
                 if (manualCredentials && enteredPassword.Length == 0)
                 {
@@ -95,12 +109,12 @@ namespace FreedomInstaller.App
                 }
 
                 var options = new OfflineUpdateSshPasswordOptions(
-                    candidate.Endpoint.Host,
+                    endpoint.Host,
                     22,
                     usingDefault ? defaultCredential.UserName : enteredUser,
                     usingDefault ? defaultCredential.Password : enteredPassword,
                     GetOfflineHostTrustDirectory(),
-                    candidate.Endpoint.LocalAddress)
+                    endpoint.LocalAddress)
                 {
                     ApproveHostKey = ApproveOfflineSshHostKeyAsync,
                 };
