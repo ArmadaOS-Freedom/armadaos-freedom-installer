@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using FreedomInstaller.App;
 using FreedomInstaller.Core;
 using Xunit;
 
@@ -489,6 +490,13 @@ public sealed partial class OfflineUpdatePackageTests
         public bool AttentionRequired { get; set; }
         public bool CorruptPlanPackageHash { get; set; }
         public bool ExecuteTerminalFailure { get; set; }
+
+        /// <summary>
+        /// Whether <c>info</c> advertises <see cref="OfflineUpdateUiState.PreflightSessionCapability"/>.
+        /// It describes the runtime only; a preflight that names a session is
+        /// always answered with that session, whatever this flag says.
+        /// </summary>
+        public bool SessionPreflightCapability { get; set; }
         public List<string> Methods { get; } = [];
         public List<long> UploadOffsets { get; } = [];
         public List<int> ExportLengths { get; } = [];
@@ -575,6 +583,8 @@ public sealed partial class OfflineUpdatePackageTests
                 ["recoveryPartUuid"] = RecoveryPartUuid,
                 ["channel"] = "testing"
             };
+            if (SessionPreflightCapability)
+                info["capabilities"] = new JsonArray(OfflineUpdateUiState.PreflightSessionCapability);
             if (LegacyController)
             {
                 info["actualSlot"] = null;
@@ -598,6 +608,15 @@ public sealed partial class OfflineUpdatePackageTests
                 sessionId.ValueKind == JsonValueKind.String
                 ? sessionId.GetString()
                 : null;
+
+            if (PreflightSessionId is not null)
+            {
+                // The session credits the bytes it already stores, so it must be
+                // asked about the same signed package document.
+                var document = Convert.FromBase64String(p.GetProperty("document").GetString()!);
+                Assert.Equal(Hash(_descriptorBytes), Hash(document));
+            }
+
             var result = new JsonObject
             {
                 ["schemaVersion"] = 1,
