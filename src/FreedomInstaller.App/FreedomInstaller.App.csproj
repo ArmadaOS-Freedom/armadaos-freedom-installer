@@ -43,6 +43,23 @@
                       WithCulture="false" />
   </ItemGroup>
 
+  <!-- Offline-updater bootstrap inputs from the system worker: a standalone Python
+       bootstrap script and the compressed ARM64 updater bundle. They are explicit
+       build inputs, embedded byte-for-byte under fixed logical names and never
+       downloaded or regenerated here. A normal source build may omit them; a
+       single-file publish fails if either is missing. -->
+  <ItemGroup Condition="'$(BundledOfflineBootstrapScript)' != '' and Exists('$(BundledOfflineBootstrapScript)')">
+    <EmbeddedResource Include="$(BundledOfflineBootstrapScript)"
+                      LogicalName="FreedomInstaller.OfflineBootstrap.Script.py"
+                      WithCulture="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(BundledOfflineUpdaterBundle)' != '' and Exists('$(BundledOfflineUpdaterBundle)')">
+    <EmbeddedResource Include="$(BundledOfflineUpdaterBundle)"
+                      LogicalName="FreedomInstaller.OfflineBootstrap.Updater.tar.gz"
+                      WithCulture="false" />
+  </ItemGroup>
+
   <!-- Bundled platform-tools: only embedded when the build supplies an existing archive.
        The archive must be the official platform-tools-windows.zip; it is never downloaded here. -->
   <ItemGroup Condition="'$(BundledPlatformToolsArchive)' != '' and Exists('$(BundledPlatformToolsArchive)')">
@@ -185,6 +202,21 @@
     <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledQualcommDriverArchive)' != '' and !Exists('$(BundledQualcommDriverArchive)')"
            Code="FRDM1024"
            Text="BundledQualcommDriverArchive '$(BundledQualcommDriverArchive)' does not exist. Point it at the existing Qualcomm USB driver pack archive; the build never downloads or generates it." />
+    <!-- The offline service deployment and its verifier are wired into the
+         connection path; a single-file publish without them would silently
+         leave tablets unable to receive the updater. -->
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineBootstrapScript)' == ''"
+           Code="FRDM1027"
+           Text="BundledOfflineBootstrapScript is not set. Set it to the absolute path of the existing armada-offline-bootstrap script before publishing the single-file installer; the build never downloads it." />
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineBootstrapScript)' != '' and !Exists('$(BundledOfflineBootstrapScript)')"
+           Code="FRDM1028"
+           Text="BundledOfflineBootstrapScript '$(BundledOfflineBootstrapScript)' does not exist. Point it at the existing armada-offline-bootstrap script; the build never downloads it." />
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineUpdaterBundle)' == ''"
+           Code="FRDM1029"
+           Text="BundledOfflineUpdaterBundle is not set. Set it to the absolute path of the existing armada-offline-updater.tar.gz bundle before publishing the single-file installer; the build never downloads it." />
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineUpdaterBundle)' != '' and !Exists('$(BundledOfflineUpdaterBundle)')"
+           Code="FRDM1030"
+           Text="BundledOfflineUpdaterBundle '$(BundledOfflineUpdaterBundle)' does not exist. Point it at the existing armada-offline-updater.tar.gz bundle; the build never downloads it." />
   </Target>
 
 </Project>

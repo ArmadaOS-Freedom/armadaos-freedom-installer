@@ -3,6 +3,7 @@
 
 Phases
 ------
+0. optional paired offline bootstrap input validation (cheap, before any build)
 1. manifest load + strict vendor file validation (before any download/compile)
 2. official input fetch into a real cache, per-run isolated directories
 3. compile all three tools from checked-in source
@@ -12,7 +13,9 @@ Phases
 7. emit MSBuild props + build record (atomic last-success pointers)
 
 After prepare(), the CLI optionally runs `dotnet publish` of the WPF app against
-the freshly generated props file.
+the freshly generated props file.  A publish requires the paired
+--offline-bootstrap-script and --offline-updater-bundle inputs; they are local
+artefacts of the system offline updater bundle build, never downloaded here.
 
 Stdlib only. No GitHub API, no auth, no devices, no broad cleanup.
 """
@@ -51,6 +54,18 @@ _PROPERTY_NAMES = (
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
 )
+
+# Optional paired inputs: embedded only when supplied, and required for a
+# single-file publish.  They are built by the system repository's
+# build_files/build-offline-updater-bundle.py from a full ARM64 image root and
+# copied into the build environment as ordinary local files; this build never
+# downloads or regenerates them.
+_OFFLINE_PROPERTY_NAMES = (
+    "BundledOfflineBootstrapScript",
+    "BundledOfflineUpdaterBundle",
+)
+
+_OFFLINE_ASSET_SOURCE = "system build_files/build-offline-updater-bundle.py"
 
 _TOOL_NAMES = ("client", "packer", "unpacker")
 
@@ -155,6 +170,43 @@ def _validate_vendor_files(repo_root, manifest):
             )
         results[rel] = resolved
     return results
+
+
+def _validate_offline_inputs(script, bundle):
+    """Validate the optional paired offline-bootstrap inputs.
+
+    Both paths must be supplied together, and each must be an existing,
+    readable regular file.  This runs before the expensive build phases so a
+    typo never costs a full tool compilation.  Returns a mapping of props name
+    to the resolved absolute path, or an empty mapping when both are omitted.
+    """
+    if script is None and bundle is None:
+        return {}
+    if script is None or bundle is None:
+        missing = (
+            "--offline-bootstrap-script" if script is None
+            else "--offline-updater-bundle"
+        )
+        raise SystemExit(
+            f"offline assets error: {missing} is missing; the bootstrap script "
+            "and updater bundle must be supplied together"
+        )
+    resolved = {}
+    for prop, raw in (
+        ("BundledOfflineBootstrapScript", script),
+        ("BundledOfflineUpdaterBundle", bundle),
+    ):
+        path = Path(raw).expanduser()
+        if not path.exists():
+            raise SystemExit(f"offline assets error: {prop} not found: {path}")
+        if not path.is_file():
+            raise SystemExit(
+                f"offline assets error: {prop} is not a regular file: {path}"
+            )
+        if not os.access(str(path), os.R_OK):
+            raise SystemExit(f"offline assets error: {prop} is not readable: {path}")
+        resolved[prop] = str(path.resolve())
+    return resolved
 
 
 def _make_controlled_env(work_dir):
@@ -344,6 +396,13 @@ def _write_props(path, inputs):
             raise SystemExit(f"props error: missing input property {prop}")
         value = str(Path(inputs[prop]).resolve())
         lines.append(f"    <{prop}>{_xml_escape(value)}</{prop}>")
+    # The offline bootstrap pair is optional: a prepare-only run may omit it,
+    # while a single-file publish requires both.
+    for prop in _OFFLINE_PROPERTY_NAMES:
+        if prop not in inputs:
+            continue
+        value = str(Path(inputs[prop]).resolve())
+        lines.append(f"    <{prop}>{_xml_escape(value)}</{prop}>")
     lines.append("  </PropertyGroup>")
     lines.append("</Project>")
     lines.append("")
@@ -355,8 +414,14 @@ def _write_props(path, inputs):
 # ---------------------------------------------------------------------------
 
 
-def prepare(repo_root, work_dir, manifest_path=None):
+def prepare(repo_root, work_dir, manifest_path=None,
+            offline_bootstrap_script=None, offline_updater_bundle=None):
     """Run the source build input preparation.
+
+    ``offline_bootstrap_script`` and ``offline_updater_bundle`` are optional
+    but paired: when supplied they are validated as readable regular files
+    before any expensive phase, recorded with size and SHA-256, and written
+    into the generated props for the single-file publish.
 
     Returns a record dict describing every generated artefact.
     """
@@ -365,6 +430,13 @@ def prepare(repo_root, work_dir, manifest_path=None):
     if manifest_path is None:
         manifest_path = repo_root / "maintenance" / "build-inputs.json"
     manifest_path = Path(manifest_path)
+
+    # --- Phase 0: offline bootstrap pair (cheap, before any build) -------
+    offline_inputs = _validate_offline_inputs(
+        offline_bootstrap_script, offline_updater_bundle
+    )
+    if offline_inputs:
+        _log("offline", "paired bootstrap script and updater bundle OK")
 
     # --- Phase 1a: manifest load -----------------------------------------
     _log("manifest", f"loading {manifest_path}")
@@ -559,9 +631,22 @@ def prepare(repo_root, work_dir, manifest_path=None):
         "BundledGblPrcEfi": str(Path(fetched["gblPrc"]).resolve()),
         "BundledGblRowEfi": str(Path(fetched["gblRow"]).resolve()),
     }
+    inputs.update(offline_inputs)
     for prop, path_str in inputs.items():
         if not Path(path_str).is_file():
             raise SystemExit(f"props error: missing input for {prop}: {path_str}")
+
+    offline_assets = {}
+    for prop, path_str in offline_inputs.items():
+        n, sha = _hash_file(path_str)
+        offline_assets[prop] = {
+            "path": path_str,
+            "bytes": n,
+            "sha256": sha,
+            "source": _OFFLINE_ASSET_SOURCE,
+        }
+    if offline_assets:
+        _log("offline", "hashed paired bootstrap script and updater bundle")
 
     props_xml = _write_props(None, inputs)
     marker = "  <PropertyGroup>\n"
@@ -591,6 +676,7 @@ def prepare(repo_root, work_dir, manifest_path=None):
         "tools": {name: dict(tools[name]) for name in _TOOL_NAMES},
         "toolPaths": tool_paths,
         "inputs": {k: str(Path(v).resolve()) for k, v in inputs.items()},
+        "offlineBootstrap": offline_assets,
         "toolPinsJson": str(tool_pins_json_path.resolve()),
         "toolPinsSource": str(pins_cs_path.resolve()),
         "propsPath": str(props_path.resolve()),
@@ -647,16 +733,51 @@ def main(argv=None):
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--manifest", default=None)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument(
+        "--offline-bootstrap-script",
+        default=None,
+        help=(
+            "Existing armada-offline-bootstrap script built by the system "
+            "build_files/build-offline-updater-bundle.py; required with "
+            "--offline-updater-bundle for a single-file publish."
+        ),
+    )
+    parser.add_argument(
+        "--offline-updater-bundle",
+        default=None,
+        help=(
+            "Existing armada-offline-updater.tar.gz bundle built by the system "
+            "build_files/build-offline-updater-bundle.py; required with "
+            "--offline-bootstrap-script for a single-file publish."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    if not args.prepare_only and not args.output_dir:
-        parser.error("--output-dir is required unless --prepare-only is set")
+    if not args.prepare_only:
+        if not args.output_dir:
+            parser.error("--output-dir is required unless --prepare-only is set")
+        # A single-file publish without the offline bootstrap pair would
+        # silently ship an installer that cannot deploy the updater.  Fail
+        # here, before prepare() starts compiling anything.
+        if not args.offline_bootstrap_script or not args.offline_updater_bundle:
+            parser.error(
+                "single-file publish requires both --offline-bootstrap-script "
+                "and --offline-updater-bundle (the paired local artefacts from "
+                "the system offline updater bundle build); use --prepare-only "
+                "only when you do not intend to publish the single EXE"
+            )
 
     repo_root = Path(_HERE).resolve().parent
     work_dir = Path(args.work_dir).resolve()
     manifest_path = Path(args.manifest).resolve() if args.manifest else None
 
-    record = prepare(repo_root, work_dir, manifest_path=manifest_path)
+    record = prepare(
+        repo_root,
+        work_dir,
+        manifest_path=manifest_path,
+        offline_bootstrap_script=args.offline_bootstrap_script,
+        offline_updater_bundle=args.offline_updater_bundle,
+    )
     print(f"prepare complete: {record['propsPath']}", flush=True)
 
     if args.prepare_only:

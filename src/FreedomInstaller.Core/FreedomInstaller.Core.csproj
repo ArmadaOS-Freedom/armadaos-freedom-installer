@@ -35,6 +35,14 @@
   <ItemGroup>
     <PackageReference Include="SharpCompress" Version="0.50.6" />
     <PackageReference Include="System.IO.Ports" Version="10.0.0" />
+    <!-- Managed SSH transport for password authentication. Pinned; no native helper. -->
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+  </ItemGroup>
+
+  <!-- The password transport's internal transport seam is exercised by the focused
+       core tests with an in-memory fake; no production type becomes public for it. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="FreedomInstaller.Core.Tests" />
   </ItemGroup>
 
   <!-- Fixed AOSP AVB public test RSA4096 signing material, supplied by the build

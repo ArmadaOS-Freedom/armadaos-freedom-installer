@@ -2,6 +2,46 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="{DynamicResource CanvasBrush}">
+    <UserControl.Resources>
+        <!-- PasswordBox keeps its own masked DP; this mirrors the InputTextBox look
+             without retargeting a TextBox style at a different control type. -->
+        <Style x:Key="OfflinePasswordBox" TargetType="PasswordBox">
+            <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CaretBrush" Value="{DynamicResource InkBrush}" />
+            <Setter Property="SelectionBrush" Value="{DynamicResource SelectedBrush}" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="PasswordBox">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="10">
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          Margin="{TemplateBinding Padding}"
+                                          VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.55" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <Grid Margin="20">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -14,11 +54,56 @@
                     <StackPanel>
                         <TextBlock Style="{DynamicResource H2Text}" Text="{DynamicResource Static.OfflineUpdate.SectionConnection}"/>
                         <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.ConnectionHelper}" TextWrapping="Wrap" Margin="0,4,0,10"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+
+                        <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.AuthMode}" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="AuthModeCombo" Style="{DynamicResource ThemeComboBox}" SelectedIndex="0" Margin="0,0,0,10">
+                            <ComboBoxItem x:Name="AuthModePasswordItem" Content="{DynamicResource Static.OfflineUpdate.AuthModePassword}"/>
+                            <ComboBoxItem x:Name="AuthModeKeyItem" Content="{DynamicResource Static.OfflineUpdate.AuthModeKey}"/>
+                        </ComboBox>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110"/><ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="110"/><ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                            <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Host}" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                            <TextBox x:Name="HostBox" Grid.Column="1" Style="{DynamicResource InputTextBox}" Margin="0,0,14,8"/>
+                            <TextBlock Grid.Column="2" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Port}" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                            <TextBox x:Name="PortBox" Grid.Column="3" Style="{DynamicResource InputTextBox}" Text="22" Margin="0,0,0,8"/>
+                            <TextBlock Grid.Row="1" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.User}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox x:Name="UserBox" Grid.Row="1" Grid.Column="1" Style="{DynamicResource InputTextBox}"/>
+                        </Grid>
+
+                        <StackPanel x:Name="PasswordPanel">
+                            <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Password}" Margin="0,10,0,4"/>
+                            <PasswordBox x:Name="PasswordBox" Style="{DynamicResource OfflinePasswordBox}" MaxLength="512"/>
+                            <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.PasswordPrivacy}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        </StackPanel>
+
+                        <StackPanel x:Name="KeyFieldsPanel" Visibility="Collapsed">
+                            <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.KeyPath}" Margin="0,10,0,4"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="KeyPathBox" Style="{DynamicResource InputTextBox}" Margin="0,0,8,0"/>
+                                <Button x:Name="BrowseKeyButton" Grid.Column="1" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.BrowseKey}"/>
+                            </Grid>
+                            <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.KeyPrivacy}" TextWrapping="Wrap" Margin="0,4,0,8"/>
+                            <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.KnownHosts}" Margin="0,0,0,4"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="KnownHostsBox" Style="{DynamicResource InputTextBox}" Margin="0,0,8,0"/>
+                                <Button x:Name="BrowseHostsButton" Grid.Column="1" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.BrowseHosts}"/>
+                            </Grid>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                             <Button x:Name="UsbConnectButton" Style="{DynamicResource PrimaryButton}" Content="{DynamicResource Static.OfflineUpdate.UsbConnect}" Margin="0,0,8,0"/>
+                            <Button x:Name="ConnectButton" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.Connect}" Margin="0,0,8,0"/>
                             <Button x:Name="DisconnectButton" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.Disconnect}" IsEnabled="False"/>
                         </StackPanel>
-                        <StackPanel x:Name="PairingPanel" Visibility="Collapsed" Margin="0,0,0,10">
+
+                        <StackPanel x:Name="PairingPanel" Visibility="Collapsed" Margin="0,10,0,0">
                             <TextBlock Style="{DynamicResource H2Text}" Text="{DynamicResource Static.OfflineUpdate.PairingHeading}" Margin="0,0,0,4"/>
                             <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.PairingInstructions}" TextWrapping="Wrap" Margin="0,0,0,8"/>
                             <TextBlock x:Name="PairingHostText" Style="{DynamicResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
@@ -29,40 +114,7 @@
                             <TextBox x:Name="PairingReceiptBox" Style="{DynamicResource InputTextBox}" MaxLength="4096" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" MaxHeight="105" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"/>
                             <Button x:Name="ConfirmPairingButton" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.ConfirmPairing}" HorizontalAlignment="Left" IsEnabled="False"/>
                         </StackPanel>
-                        <Expander x:Name="ConnectionDetails" Style="{DynamicResource SectionExpander}" IsExpanded="False" Header="{DynamicResource Static.OfflineUpdate.ConnectionDetails}" Margin="0,0,0,0">
-                            <StackPanel>
-                                <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.ManualConnectionHelp}" TextWrapping="Wrap" Margin="0,4,0,10"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="110"/><ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="110"/><ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                                    <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Host}" VerticalAlignment="Center" Margin="0,0,8,8"/>
-                                    <TextBox x:Name="HostBox" Grid.Column="1" Style="{DynamicResource InputTextBox}" Margin="0,0,14,8"/>
-                                    <TextBlock Grid.Column="2" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Port}" VerticalAlignment="Center" Margin="0,0,8,8"/>
-                                    <TextBox x:Name="PortBox" Grid.Column="3" Style="{DynamicResource InputTextBox}" Text="22" Margin="0,0,0,8"/>
-                                    <TextBlock Grid.Row="1" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.User}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                    <TextBox x:Name="UserBox" Grid.Row="1" Grid.Column="1" Style="{DynamicResource InputTextBox}"/>
-                                </Grid>
-                                <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.KeyPath}" Margin="0,10,0,4"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBox x:Name="KeyPathBox" Style="{DynamicResource InputTextBox}" Margin="0,0,8,0"/>
-                                    <Button x:Name="BrowseKeyButton" Grid.Column="1" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.BrowseKey}"/>
-                                </Grid>
-                                <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.KeyPrivacy}" TextWrapping="Wrap" Margin="0,4,0,8"/>
-                                <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.KnownHosts}" Margin="0,0,0,4"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBox x:Name="KnownHostsBox" Style="{DynamicResource InputTextBox}" Margin="0,0,8,0"/>
-                                    <Button x:Name="BrowseHostsButton" Grid.Column="1" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.BrowseHosts}"/>
-                                </Grid>
-                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                    <Button x:Name="ConnectButton" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.Connect}" Margin="0,0,8,0"/>
-                                </StackPanel>
-                            </StackPanel>
-                        </Expander>
+
                         <TextBlock x:Name="DeviceText" Style="{DynamicResource FieldValueText}" Text="{DynamicResource Static.OfflineUpdate.DevicePending}" TextWrapping="Wrap" Margin="0,10,0,0"/>
                     </StackPanel>
                 </Border>

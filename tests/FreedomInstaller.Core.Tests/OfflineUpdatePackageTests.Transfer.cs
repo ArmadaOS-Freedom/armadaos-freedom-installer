@@ -95,6 +95,30 @@ public sealed partial class OfflineUpdatePackageTests
     }
 
     [Fact]
+    public async Task Transfer_Legacy07InfoAndReceipts_AreAcceptedForBothSlotFlow()
+    {
+        var c = new Case(Path.Combine(root, "legacy07"));
+        var work = Directory.CreateDirectory(Path.Combine(root, "legacy07-work")).FullName;
+        using var imported = await Import(c.ArchivePath, Model, "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer(Model, c.DescriptorBytes, c.Entries["images/linux-root.img.gz"], [1, 2], [3, 4])
+        {
+            LegacyController = true,
+        };
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+
+        var session = await transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask);
+        var prepared = await transfer.PrepareAsync(imported, session);
+
+        Assert.Equal("prepared", prepared.GetProperty("state").GetString());
+        var physical = prepared.GetProperty("physical");
+        Assert.True(!physical.TryGetProperty("actualSlot", out var actual) || actual.ValueKind == JsonValueKind.Null);
+        Assert.Equal("b", physical.GetProperty("selectedSlot").GetString());
+        Assert.Equal("legacy-controller", prepared.GetProperty("physical").GetProperty("bootContext").GetString());
+        Assert.Equal(0, server.ExecuteCalls);
+    }
+
+    [Fact]
     public async Task Transfer_PersistenceCallbackFails_AbortsBeforeUploadPrepareOrExecute()
     {
         var c = new Case(Path.Combine(root, "persist-fail"));
@@ -492,17 +516,34 @@ public sealed partial class OfflineUpdatePackageTests
             return Encoding.UTF8.GetBytes(response.ToJsonString());
         }
 
-        private JsonObject BuildInfo() => new()
+        public bool LegacyController { get; set; }
+
+        private JsonObject BuildInfo()
         {
-            ["schemaVersion"] = 1,
-            ["updaterVersion"] = "0.8.1",
-            ["model"] = _model,
-            ["actualSlot"] = "a",
-            ["inactiveSlot"] = "b",
-            ["deployment"] = new string('a', 64) + ".0",
-            ["recoveryPartUuid"] = RecoveryPartUuid,
-            ["channel"] = "testing"
-        };
+            var info = new JsonObject
+            {
+                ["schemaVersion"] = 1,
+                ["updaterVersion"] = "0.8.1",
+                ["model"] = _model,
+                ["deployment"] = new string('a', 64) + ".0",
+                ["recoveryPartUuid"] = RecoveryPartUuid,
+                ["channel"] = "testing"
+            };
+            if (LegacyController)
+            {
+                info["actualSlot"] = null;
+                info["inactiveSlot"] = null;
+                info["selectedSlot"] = "b";
+                info["bootContext"] = "legacy-controller";
+            }
+            else
+            {
+                info["actualSlot"] = "a";
+                info["inactiveSlot"] = "b";
+            }
+
+            return info;
+        }
 
         private JsonObject HandleBegin(JsonElement p)
         {
@@ -597,14 +638,25 @@ public sealed partial class OfflineUpdatePackageTests
                 ["model"] = _model,
                 ["channel"] = "testing",
                 ["receivedBytes"] = _uploadBuffer.Length,
-                ["physical"] = new JsonObject
-                {
-                    ["model"] = _model,
-                    ["actualSlot"] = "a",
-                    ["inactiveSlot"] = "b",
-                    ["deployment"] = new string('a', 64) + ".0",
-                    ["recoveryPartUuid"] = RecoveryPartUuid
-                },
+                ["physical"] = LegacyController
+                    ? new JsonObject
+                    {
+                        ["model"] = _model,
+                        ["actualSlot"] = null,
+                        ["inactiveSlot"] = null,
+                        ["selectedSlot"] = "b",
+                        ["bootContext"] = "legacy-controller",
+                        ["deployment"] = new string('a', 64) + ".0",
+                        ["recoveryPartUuid"] = RecoveryPartUuid
+                    }
+                    : new JsonObject
+                    {
+                        ["model"] = _model,
+                        ["actualSlot"] = "a",
+                        ["inactiveSlot"] = "b",
+                        ["deployment"] = new string('a', 64) + ".0",
+                        ["recoveryPartUuid"] = RecoveryPartUuid
+                    },
                 ["payload"] = new JsonObject
                 {
                     ["path"] = "images/linux-root.img.gz",

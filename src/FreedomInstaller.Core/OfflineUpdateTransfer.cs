@@ -50,6 +50,39 @@ public sealed class OfflineUpdateTransfer
     private sealed record DeviceInfo(string Model, string RecoveryPartUuid);
     private sealed record ExportMetadata(string TransactionId, string PlanSha256, string RecoveryManifestSha256);
 
+    /// <summary>
+    /// A 0.7 controller reports no proven actual slot: it exposes only the
+    /// selected slot plus <c>bootContext=legacy-controller</c>. Such a response
+    /// is accepted for the BOTH-slot flow but is never presented as proof of
+    /// the running slot.
+    /// </summary>
+    private readonly record struct SlotInfo(
+        string? ActualSlot,
+        string? InactiveSlot,
+        string? SelectedSlot,
+        bool LegacyController);
+
+    /// <summary>
+    /// Read-only preflight of the signed package document. The tablet may
+    /// inspect the device model, deployment, slots and storage, but this call
+    /// creates no session and does not prepare or write anything.
+    /// </summary>
+    public async Task<JsonElement> PreflightAsync(
+        ImportedUpdatePackage package,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        token.ThrowIfCancellationRequested();
+        var stage = GetStage(package);
+        var document = ReadBoundedFile(package.DescriptorPath, stage, MaxMetadataBytes, token);
+        var signature = ReadBoundedFile(package.SignaturePath, stage, MaxSignatureBytes, token);
+        var result = await _client.PreflightAsync(document, signature, token).ConfigureAwait(false);
+        if (result.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("preflight 响应必须是 JSON 对象。");
+
+        return result.Clone();
+    }
+
     public async Task<OfflineUpdateSession> CreateSessionAsync(
         ImportedUpdatePackage package,
         Func<OfflineUpdateSession, CancellationToken, Task> persistSession,
@@ -387,10 +420,7 @@ public sealed class OfflineUpdateTransfer
         Require(info, "model", model);
         if (ParseVersion(RequiredString(info, "updaterVersion", "info")) < minimum)
             throw new InvalidDataException("设备 updater 版本低于描述文件最低要求。");
-        var actual = RequiredString(info, "actualSlot", "info");
-        var inactive = RequiredString(info, "inactiveSlot", "info");
-        if (!((actual == "a" && inactive == "b") || (actual == "b" && inactive == "a")))
-            throw new InvalidDataException("设备槽位信息非法。");
+        _ = ReadSlots(info, "info");
         _ = RequiredString(info, "deployment", "info");
         var uuid = GuidD(RequiredString(info, "recoveryPartUuid", "info"));
         if (expectedUuid is not null && uuid != expectedUuid) throw new InvalidDataException("恢复分区 UUID 已变化。");
@@ -406,10 +436,7 @@ public sealed class OfflineUpdateTransfer
         Schema(info);
         Require(info, "model", session.DeviceModel);
         _ = RequiredString(info, "updaterVersion", "info");
-        var actual = RequiredString(info, "actualSlot", "info");
-        var inactive = RequiredString(info, "inactiveSlot", "info");
-        if (!((actual == "a" && inactive == "b") || (actual == "b" && inactive == "a")))
-            throw new InvalidDataException("设备槽位信息非法。");
+        _ = ReadSlots(info, "info");
         _ = RequiredString(info, "deployment", "info");
         // The saved session is only reusable on the same physical device.
         Require(info, "recoveryPartUuid", session.RecoveryPartUuid);
@@ -429,10 +456,7 @@ public sealed class OfflineUpdateTransfer
             throw new InvalidDataException("receipt 缺少 physical。");
         Require(physical, "model", session.DeviceModel);
         Require(physical, "recoveryPartUuid", session.RecoveryPartUuid);
-        var actual = RequiredString(physical, "actualSlot", "status");
-        var inactive = RequiredString(physical, "inactiveSlot", "status");
-        if (!((actual == "a" && inactive == "b") || (actual == "b" && inactive == "a")))
-            throw new InvalidDataException("receipt 槽位非法。");
+        _ = ReadSlots(physical, "status");
         _ = RequiredString(physical, "deployment", "status");
         if (!receipt.TryGetProperty("payload", out var body) || body.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("receipt 缺少 payload。");
@@ -455,10 +479,7 @@ public sealed class OfflineUpdateTransfer
             throw new InvalidDataException("receipt 缺少 physical。");
         Require(physical, "model", model);
         Require(physical, "recoveryPartUuid", uuid);
-        var actual = RequiredString(physical, "actualSlot", label);
-        var inactive = RequiredString(physical, "inactiveSlot", label);
-        if (!((actual == "a" && inactive == "b") || (actual == "b" && inactive == "a")))
-            throw new InvalidDataException("receipt 槽位非法。");
+        _ = ReadSlots(physical, label);
         _ = RequiredString(physical, "deployment", label);
         if (!receipt.TryGetProperty("payload", out var body) || body.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("receipt 缺少 payload。");
@@ -618,6 +639,40 @@ public sealed class OfflineUpdateTransfer
     private static void Require(JsonElement value, string name, string expected)
     {
         if (RequiredString(value, name, "json") != expected) throw new InvalidDataException($"字段 {name} 不匹配。");
+    }
+
+    /// <summary>
+    /// 0.8 reports a proven actual/inactive pair. 0.7 reports
+    /// actualSlot=null, inactiveSlot=null, selectedSlot=a|b and
+    /// bootContext=legacy-controller. Only that exact legacy shape is accepted;
+    /// a half-populated pair is still rejected.
+    /// </summary>
+    private static SlotInfo ReadSlots(JsonElement value, string label)
+    {
+        var bootContext = OptionalString(value, "bootContext");
+        var actual = OptionalString(value, "actualSlot");
+        var inactive = OptionalString(value, "inactiveSlot");
+        var selected = OptionalString(value, "selectedSlot");
+
+        if (string.Equals(bootContext, "legacy-controller", StringComparison.Ordinal))
+        {
+            if (actual is not null || inactive is not null)
+                throw new InvalidDataException($"{label} 旧版槽位字段非法。");
+            if (selected is not ("a" or "b"))
+                throw new InvalidDataException($"{label} 旧版 selectedSlot 非法。");
+            return new SlotInfo(null, null, selected, LegacyController: true);
+        }
+
+        if (!((actual == "a" && inactive == "b") || (actual == "b" && inactive == "a")))
+            throw new InvalidDataException($"{label} 槽位信息非法。");
+        return new SlotInfo(actual, inactive, selected, LegacyController: false);
+    }
+
+    private static string? OptionalString(JsonElement value, string name)
+    {
+        if (!value.TryGetProperty(name, out var property))
+            return null;
+        return property.ValueKind == JsonValueKind.String ? property.GetString() : null;
     }
 
     private static bool Beneath(string path, string root)

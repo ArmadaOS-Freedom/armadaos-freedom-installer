@@ -5,7 +5,9 @@ construction, and CLI wiring.  Compiler calls and official input fetching are
 patched at phase boundaries for realistic hashes on small fake outputs.
 """
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import sys
@@ -281,7 +283,7 @@ class PrepareTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _run_prepare(self):
+    def _run_prepare(self, **prepare_kwargs):
         def fake_package(ns):
             out = Path(ns.output)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -299,8 +301,19 @@ class PrepareTests(unittest.TestCase):
                 self.repo_root,
                 self.work_dir,
                 manifest_path=self.repo_root / "maintenance" / "build-inputs.json",
+                **prepare_kwargs,
             )
         return record, fetch_mock, run_mock, pkg_mock
+
+    def _offline_assets(self):
+        root = self.work_parent / "offline & inputs"
+        script = _write(
+            root / "armada-offline-bootstrap", b"#!/bin/sh\necho bootstrap\n"
+        )
+        bundle = _write(
+            root / "armada-offline-updater.tar.gz", b"fake updater bundle\n"
+        )
+        return script, bundle
 
     def test_full_pipeline_and_artifacts(self):
         record, fetch_mock, run_mock, pkg_mock = self._run_prepare()
@@ -327,10 +340,14 @@ class PrepareTests(unittest.TestCase):
             self.assertEqual((self.work_dir / "build-record.json").stat().st_mode & 0o777, 0o644)
         props_xml = props_path.read_text(encoding="utf-8")
 
-        # all nine properties present, absolute-injected
+        # all eleven properties present, absolute-injected
         for prop in build_installer._PROPERTY_NAMES:
             self.assertIn(f"<{prop}>", props_xml)
         self.assertIn("<BundledToolPinsSource>", props_xml)
+        # no offline inputs supplied: the optional pair stays out of props
+        for prop in build_installer._OFFLINE_PROPERTY_NAMES:
+            self.assertNotIn(f"<{prop}>", props_xml)
+        self.assertEqual(record["offlineBootstrap"], {})
 
         # fresh tool pins on disk match record.tools
         pins_json = json.loads(Path(record["toolPinsJson"]).read_text(encoding="utf-8"))
@@ -412,6 +429,90 @@ class PrepareTests(unittest.TestCase):
         fetch_mock.assert_not_called()
         run_mock.assert_not_called()
 
+    def test_offline_assets_bind_props_and_record(self):
+        script, bundle = self._offline_assets()
+        record, _, _, _ = self._run_prepare(
+            offline_bootstrap_script=str(script),
+            offline_updater_bundle=str(bundle),
+        )
+
+        props_xml = Path(record["propsPath"]).read_text(encoding="utf-8")
+        for prop, provided in (
+            ("BundledOfflineBootstrapScript", script),
+            ("BundledOfflineUpdaterBundle", bundle),
+        ):
+            resolved = str(provided.resolve())
+            self.assertIn(
+                f"<{prop}>{build_installer._xml_escape(resolved)}</{prop}>",
+                props_xml,
+            )
+            self.assertEqual(record["inputs"][prop], resolved)
+            entry = record["offlineBootstrap"][prop]
+            self.assertEqual(Path(entry["path"]).resolve(), Path(resolved))
+            self.assertEqual(entry["bytes"], provided.stat().st_size)
+            self.assertEqual(entry["sha256"], _sha(provided.read_bytes()))
+            self.assertEqual(entry["source"], build_installer._OFFLINE_ASSET_SOURCE)
+
+        # the original eleven properties are unaffected by the optional pair
+        for prop in build_installer._PROPERTY_NAMES:
+            self.assertIn(f"<{prop}>", props_xml)
+        for prop in build_installer._OFFLINE_PROPERTY_NAMES:
+            self.assertNotIn(prop, build_installer._PROPERTY_NAMES)
+        self.assertIn("<BundledToolPinsSource>", props_xml)
+
+    def test_offline_assets_must_be_supplied_together(self):
+        script, bundle = self._offline_assets()
+        for kwargs in (
+            {"offline_bootstrap_script": str(script)},
+            {"offline_updater_bundle": str(bundle)},
+        ):
+            with self.subTest(kwargs=kwargs):
+                with mock.patch.object(
+                    fetch_build_inputs, "fetch_all"
+                ) as fetch_mock, mock.patch.object(
+                    build_installer, "_run"
+                ) as run_mock:
+                    with self.assertRaises(SystemExit):
+                        build_installer.prepare(
+                            self.repo_root,
+                            self.work_dir,
+                            manifest_path=(
+                                self.repo_root / "maintenance" / "build-inputs.json"
+                            ),
+                            **kwargs,
+                        )
+                fetch_mock.assert_not_called()
+                run_mock.assert_not_called()
+
+    def test_offline_asset_invalid_path_fails_before_build(self):
+        script, bundle = self._offline_assets()
+        missing = self.work_parent / "offline & inputs" / "does-not-exist"
+        directory = self.work_parent / "offline & inputs" / "a-directory"
+        directory.mkdir(parents=True, exist_ok=True)
+
+        for label, other in (
+            ("missing path", missing),
+            ("directory instead of file", directory),
+        ):
+            with self.subTest(case=label):
+                with mock.patch.object(
+                    fetch_build_inputs, "fetch_all"
+                ) as fetch_mock, mock.patch.object(
+                    build_installer, "_run"
+                ) as run_mock:
+                    with self.assertRaises(SystemExit):
+                        build_installer.prepare(
+                            self.repo_root,
+                            self.work_dir,
+                            manifest_path=(
+                                self.repo_root / "maintenance" / "build-inputs.json"
+                            ),
+                            offline_bootstrap_script=str(script),
+                            offline_updater_bundle=str(other),
+                        )
+                fetch_mock.assert_not_called()
+                run_mock.assert_not_called()
+
 
 def _fake_split_scripts(argv, cwd, env, phase):
     '''Distinguishable _run hook for the CLI test that yields fresh outputs.'''
@@ -459,6 +560,14 @@ class CliTests(unittest.TestCase):
             repo_root, _ = _build_fixture_repo(tmp / "repo & dst")
             work_dir = tmp / "work dir"
             output_dir = tmp / "publish out & x"
+            script = _write(
+                tmp / "offline & inputs" / "armada-offline-bootstrap",
+                b"#!/bin/sh\necho bootstrap\n",
+            )
+            bundle = _write(
+                tmp / "offline & inputs" / "armada-offline-updater.tar.gz",
+                b"fake updater bundle\n",
+            )
 
             published_calls = []
 
@@ -490,6 +599,8 @@ class CliTests(unittest.TestCase):
                         "--work-dir", str(work_dir),
                         "--output-dir", str(output_dir),
                         "--manifest", str(repo_root / "maintenance" / "build-inputs.json"),
+                        "--offline-bootstrap-script", str(script),
+                        "--offline-updater-bundle", str(bundle),
                     ]
                 )
             self.assertEqual(rc, 0)
@@ -506,6 +617,52 @@ class CliTests(unittest.TestCase):
             self.assertEqual(publish_argv[cfg_idx + 1], "Release")
             self.assertNotIn("/releases/download/build-inputs", joined)
             self.assertNotIn("old-release", joined)
+            # the publish props carry both offline assets
+            props_xml = props_path.read_text(encoding="utf-8")
+            for prop, provided in (
+                ("BundledOfflineBootstrapScript", script),
+                ("BundledOfflineUpdaterBundle", bundle),
+            ):
+                value = build_installer._xml_escape(str(provided.resolve()))
+                self.assertIn(f"<{prop}>{value}</{prop}>", props_xml)
+
+    def test_publish_without_offline_assets_fails_before_prepare(self):
+        with tempfile.TemporaryDirectory(prefix="bi cli \u2013 ") as tmp:
+            tmp = Path(tmp)
+            repo_root, _ = _build_fixture_repo(tmp / "repo & dst")
+            work_dir = tmp / "work dir"
+            output_dir = tmp / "publish out"
+            script = _write(tmp / "offline" / "bootstrap", b"#!/bin/sh\n")
+            bundle = _write(tmp / "offline" / "updater.tar.gz", b"bundle\n")
+
+            cases = (
+                [],
+                ["--offline-bootstrap-script", str(script)],
+                ["--offline-updater-bundle", str(bundle)],
+            )
+            stderr = io.StringIO()
+            with mock.patch.object(
+                fetch_build_inputs, "fetch_all"
+            ) as fetch_mock, mock.patch.object(
+                build_installer, "_run"
+            ) as run_mock, mock.patch.object(
+                build_installer, "_HERE", repo_root / "maintenance"
+            ), contextlib.redirect_stderr(stderr):
+                for extra in cases:
+                    with self.subTest(extra=extra):
+                        with self.assertRaises(SystemExit):
+                            build_installer.main(
+                                [
+                                    "--work-dir", str(work_dir),
+                                    "--output-dir", str(output_dir),
+                                    "--manifest", str(
+                                        repo_root / "maintenance" / "build-inputs.json"
+                                    ),
+                                ] + extra
+                            )
+            fetch_mock.assert_not_called()
+            run_mock.assert_not_called()
+            self.assertIn("--offline-bootstrap-script", stderr.getvalue())
 
 
 if __name__ == "__main__":

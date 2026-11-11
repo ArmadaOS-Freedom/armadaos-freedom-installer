@@ -15,7 +15,7 @@ public sealed record OfflineUpdateSshOptions(
     string? SshExecutable = null,
     string? BindAddress = null);
 
-public sealed class OfflineUpdateSshConnection : IAsyncDisposable
+public sealed class OfflineUpdateSshConnection : IOfflineUpdateConnection
 {
     private const int DiagnosticsLimit = 8192;
     private const string RootRemoteCommand = "/usr/bin/python3 -I /usr/libexec/armada/armada-offline-update";
@@ -151,9 +151,9 @@ public sealed class OfflineUpdateSshConnection : IAsyncDisposable
         sb.Append("Failed to establish the offline update SSH connection: ").Append(ex.Message).AppendLine();
         sb.AppendLine("Troubleshooting:");
         sb.AppendLine("- Verify the host key is already enrolled in the configured known-hosts file; unknown hosts are never accepted automatically.");
-        sb.AppendLine("- Verify the identity file is authorized for this user on the device (public key authentication only). No passwords are supported.");
+        sb.AppendLine("- Verify the identity file is authorized for this user on the device (public key authentication only on this transport).");
         sb.AppendLine("- For non-root users, the remote command uses 'sudo -n' and requires an existing explicit noninteractive sudo authorization on the device.");
-        sb.AppendLine("- Verify the fixed offline updater entry (/usr/libexec/armada/armada-offline-update) is present on the device and the protocol version is supported.");
+        sb.AppendLine("- Verify the fixed offline updater entry (/usr/libexec/armada/armada-offline-update) is present on the device and the protocol version is supported. If it is missing, deploy the offline update components on the tablet first; this connection cannot install them.");
         if (diagnostics.Length > 0)
         {
             sb.AppendLine("OpenSSH diagnostics:").Append(diagnostics);
@@ -230,7 +230,7 @@ public sealed class OfflineUpdateSshConnection : IAsyncDisposable
         return psi;
     }
 
-    private static string? ValidateBindAddress(string? bindAddress)
+    internal static string? ValidateBindAddress(string? bindAddress)
     {
         if (bindAddress is null)
             return null;
@@ -282,7 +282,7 @@ public sealed class OfflineUpdateSshConnection : IAsyncDisposable
         return fullPath;
     }
 
-    private static string ValidateHost(string host)
+    internal static string ValidateHost(string host)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
         if (host.IndexOfAny(new[] { ' ', '\t', '@', '/', '\n', '\r', '\0', '\'', '\"', '%', '[', ']' }) >= 0 ||
@@ -307,7 +307,7 @@ public sealed class OfflineUpdateSshConnection : IAsyncDisposable
         return host.ToLowerInvariant();
     }
 
-    private static string ValidateUserName(string userName)
+    internal static string ValidateUserName(string userName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userName);
         if (!System.Text.RegularExpressions.Regex.IsMatch(userName, @"\A[a-z_][a-z0-9_.-]{0,63}\z"))

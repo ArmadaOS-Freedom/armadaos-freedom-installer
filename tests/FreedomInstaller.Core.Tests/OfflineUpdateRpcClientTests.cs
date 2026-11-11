@@ -60,6 +60,26 @@ public sealed class OfflineUpdateRpcClientTests
     }
 
     [Fact]
+    public async Task Preflight_uses_begin_field_names_without_a_session_id()
+    {
+        using var io = new IoStream();
+        ReplyOk(io, 1, "{\"state\":\"preflight_passed\",\"model\":\"TB323FU\"}");
+        await using var client = new OfflineUpdateRpcClient(io, io);
+
+        var document = new byte[] { 1, 2, 3 };
+        var signature = new byte[] { 4, 5 };
+        var result = await client.PreflightAsync(document, signature);
+
+        Assert.Equal("preflight_passed", result.GetProperty("state").GetString());
+        var frame = Frame(io, 0);
+        Assert.Equal("preflight", frame.GetProperty("method").GetString());
+        var parameters = frame.GetProperty("params");
+        Assert.Equal(Convert.ToBase64String(document), parameters.GetProperty("document").GetString());
+        Assert.Equal(Convert.ToBase64String(signature), parameters.GetProperty("signature").GetString());
+        Assert.False(parameters.TryGetProperty("sessionId", out _));
+    }
+
+    [Fact]
     public async Task Carryover_and_fragmented_utf8_are_preserved()
     {
         using var io = new IoStream();

@@ -22,7 +22,13 @@ namespace FreedomInstaller.App
         private bool _offlineUpgradeCloseApproved;
         private bool _offlineUpgradeCloseInProgress;
         private bool _suppressOfflineSessionSelectionChanged;
-        private OfflineUpdateSshConnection? _offlineSsh;
+
+        // Endpoints whose one automatic factory-credential attempt was actually
+        // rejected. Only a real authentication rejection is recorded, so a
+        // cancelled host-key prompt or a network failure can retry.
+        private readonly HashSet<string> _offlineDefaultCredentialRejected =
+            new(StringComparer.OrdinalIgnoreCase);
+        private IOfflineUpdateConnection? _offlineSsh;
         private OfflineUpdateTransfer? _offlineTransfer;
         private ImportedUpdatePackage? _offlinePackage;
         private string? _offlineDescriptorSha256;
@@ -36,6 +42,11 @@ namespace FreedomInstaller.App
         private bool _offlineReceiptLive;
         private string? _offlineLastLoggedPhase;
         private string? _offlineLastCompletionState;
+        // The read-only preflight is bound to this exact package and this exact
+        // tablet connection. It is recorded only after the device returns the
+        // exact success schema and is cleared by every package/device change.
+        private bool _offlinePreflightPassed;
+        private string? _offlinePreflightError;
         private long _offlineOperationGeneration;
         private readonly List<UiMessage> _offlineLogEntries = new();
 
@@ -47,6 +58,7 @@ namespace FreedomInstaller.App
             _offlineUpgradeInitialized = true;
             OfflineUpgradePanel.SessionCombo.DisplayMemberPath = nameof(OfflineUpdateSession.SessionId);
             OfflineUpgradePanel.BackButton.Click += OnOfflineUpgradeBackAsync;
+            OfflineUpgradePanel.AuthModeCombo.SelectionChanged += OnOfflineAuthModeChanged;
             OfflineUpgradePanel.BrowseKeyButton.Click += OnBrowseOfflineKey;
             OfflineUpgradePanel.BrowseHostsButton.Click += OnBrowseOfflineKnownHosts;
             OfflineUpgradePanel.ConnectButton.Click += OnConnectOfflineSshAsync;
@@ -94,17 +106,23 @@ namespace FreedomInstaller.App
             bool imported = _offlinePackage != null && !string.IsNullOrEmpty(_offlineDescriptorSha256);
             // 关闭等待期间同样按忙碌处理：按钮全部禁用，直到清理完成。
             bool busy = _busy || _offlineUpgradeCloseInProgress;
-            bool preparedReady = OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null);
+            bool preparedReady = OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null, _offlinePreflightPassed);
 
             OfflineUpgradePanel.BackButton.IsEnabled = !busy;
-            OfflineUpgradePanel.HostBox.IsEnabled = !busy && !connected;
-            OfflineUpgradePanel.PortBox.IsEnabled = !busy && !connected;
-            OfflineUpgradePanel.UserBox.IsEnabled = !busy && !connected;
-            OfflineUpgradePanel.KeyPathBox.IsEnabled = !busy && !connected;
-            OfflineUpgradePanel.KnownHostsBox.IsEnabled = !busy && !connected;
-            OfflineUpgradePanel.BrowseKeyButton.IsEnabled = !busy && !connected;
-            OfflineUpgradePanel.BrowseHostsButton.IsEnabled = !busy && !connected;
-            OfflineUpgradePanel.ConnectButton.IsEnabled = !busy && !connected;
+            var authFields = OfflineUpdateSshAuthPolicy.Fields(SelectedOfflineAuthMode);
+            bool fieldsEnabled = !busy && !connected;
+            OfflineUpgradePanel.AuthModeCombo.IsEnabled = fieldsEnabled;
+            OfflineUpgradePanel.HostBox.IsEnabled = fieldsEnabled;
+            OfflineUpgradePanel.PortBox.IsEnabled = fieldsEnabled;
+            OfflineUpgradePanel.UserBox.IsEnabled = fieldsEnabled;
+            OfflineUpgradePanel.PasswordPanel.Visibility = authFields.ShowPassword ? Visibility.Visible : Visibility.Collapsed;
+            OfflineUpgradePanel.PasswordBox.IsEnabled = fieldsEnabled && authFields.ShowPassword;
+            OfflineUpgradePanel.KeyFieldsPanel.Visibility = authFields.ShowKeyPath ? Visibility.Visible : Visibility.Collapsed;
+            OfflineUpgradePanel.KeyPathBox.IsEnabled = fieldsEnabled && authFields.ShowKeyPath;
+            OfflineUpgradePanel.KnownHostsBox.IsEnabled = fieldsEnabled && authFields.ShowKnownHosts;
+            OfflineUpgradePanel.BrowseKeyButton.IsEnabled = fieldsEnabled && authFields.ShowKeyPath;
+            OfflineUpgradePanel.BrowseHostsButton.IsEnabled = fieldsEnabled && authFields.ShowKnownHosts;
+            OfflineUpgradePanel.ConnectButton.IsEnabled = fieldsEnabled;
             bool pairingPending = _offlinePairingCandidate != null && _offlinePairingIdentity != null;
             OfflineUpgradePanel.UsbConnectButton.IsEnabled = !busy && !connected;
             OfflineUpgradePanel.CopyPairingCommandButton.IsEnabled = !busy && !connected && pairingPending;
@@ -121,7 +139,7 @@ namespace FreedomInstaller.App
             // one, while executing also needs the selected session.
             OfflineUpgradePanel.SessionCombo.IsEnabled = !busy && connected && _offlineSessions.Count > 0;
 
-            bool canPrepare = !busy && OfflineUpdateUiState.CanPrepareSession(connected, imported,
+            bool canPrepare = !busy && OfflineUpdateUiState.CanPrepareSession(connected, imported, _offlinePreflightPassed,
                 _offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null);
             OfflineUpgradePanel.PrepareButton.IsEnabled = canPrepare;
             OfflineUpgradePanel.RefreshButton.IsEnabled = !busy &&
@@ -316,19 +334,75 @@ namespace FreedomInstaller.App
             }
         }
 
+        private OfflineUpdateSshAuthMode SelectedOfflineAuthMode =>
+            OfflineUpdateSshAuthPolicy.FromSelectionIndex(OfflineUpgradePanel?.AuthModeCombo.SelectedIndex ?? 0);
+
+        private void OnOfflineAuthModeChanged(object? sender, SelectionChangedEventArgs e)
+        {
+            if (OfflineUpgradePanel == null)
+                return;
+            // The password is never carried across a switch to the key flow, and
+            // a pending key-pairing prompt is not valid for the password flow.
+            if (SelectedOfflineAuthMode == OfflineUpdateSshAuthMode.PublicKey)
+                OfflineUpgradePanel.PasswordBox.Clear();
+            else
+                ClearOfflinePairing();
+            RefreshOfflineUpgradeActions();
+        }
+
+        private string GetOfflineHostTrustDirectory() =>
+            Path.Combine(BundledTools.GetCacheRoot(), "connections", "offline-upgrade", "trusted-hosts");
+
         private async void OnConnectOfflineSshAsync(object? sender, RoutedEventArgs e)
         {
             await RunOfflineUpgradeAsync(async (_, ct) =>
             {
                 string host = OfflineUpgradePanel.HostBox.Text.Trim();
                 string user = OfflineUpgradePanel.UserBox.Text.Trim();
-                string keyPath = OfflineUpgradePanel.KeyPathBox.Text.Trim();
-                string hostsPath = OfflineUpgradePanel.KnownHostsBox.Text.Trim();
-                if (!int.TryParse(OfflineUpgradePanel.PortBox.Text.Trim(), out int port) || port <= 0 || port > 65535 ||
-                    string.IsNullOrEmpty(user) || string.IsNullOrEmpty(keyPath) || string.IsNullOrEmpty(hostsPath))
+                bool keyFlow = SelectedOfflineAuthMode == OfflineUpdateSshAuthMode.PublicKey;
+                if (!int.TryParse(OfflineUpgradePanel.PortBox.Text.Trim(), out int port) ||
+                    port <= 0 || port > 65535 ||
+                    (keyFlow && string.IsNullOrEmpty(user)))
                 {
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorInvalidConnectionFields"));
                 }
+
+                if (keyFlow)
+                {
+                    string keyPath = OfflineUpgradePanel.KeyPathBox.Text.Trim();
+                    string hostsPath = OfflineUpgradePanel.KnownHostsBox.Text.Trim();
+                    if (string.IsNullOrEmpty(keyPath) || string.IsNullOrEmpty(hostsPath))
+                        throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorInvalidConnectionFields"));
+
+                    string? keyBindAddress = null;
+                    if (string.IsNullOrEmpty(host))
+                    {
+                        OfflineUpdateUsbEndpoint endpoint;
+                        try
+                        {
+                            endpoint = await OfflineUpdateUsbDiscovery.FindSingleAsync(_runner, token: ct);
+                        }
+                        catch (IOException ex)
+                        {
+                            throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorUsbConnection", ex.Message));
+                        }
+                        host = endpoint.Host;
+                        keyBindAddress = endpoint.LocalAddress;
+                    }
+
+                    var keyOptions = new OfflineUpdateSshOptions(host, port, user, keyPath, hostsPath, BindAddress: keyBindAddress);
+                    ClearOfflinePairing();
+                    await ConnectOfflineOptionsAsync(keyOptions, ct);
+                    return;
+                }
+
+                var defaultCredential = OfflineUpdateSshDefaultCredentials.Instance;
+                string enteredUser = user;
+                string enteredPassword = OfflineUpgradePanel.PasswordBox.Password;
+                bool manualCredentials = OfflineUpdateSshAuthPolicy.HasManualCredentialInput(enteredUser, enteredPassword);
+
+                if (enteredPassword.Length > 0 && string.IsNullOrEmpty(enteredUser))
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorInvalidConnectionFields"));
 
                 string? bindAddress = null;
                 if (string.IsNullOrEmpty(host))
@@ -346,9 +420,55 @@ namespace FreedomInstaller.App
                     bindAddress = endpoint.LocalAddress;
                 }
 
-                var opts = new OfflineUpdateSshOptions(host, port, user, keyPath, hostsPath, BindAddress: bindAddress);
+                string endpointKey = OfflineUpdateSshAuthPolicy.EndpointKey(host, port);
+
+                if (manualCredentials && enteredPassword.Length == 0)
+                {
+                    // The user named an account. Never replace it with the
+                    // factory account behind their back; ask for the password.
+                    ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.ErrorPasswordRequired", setDefaultUserName: false);
+                    return;
+                }
+
+                bool usingDefault = !manualCredentials &&
+                    OfflineUpdateSshAuthPolicy.ShouldAttemptDefaultCredential(
+                        OfflineUpdateSshAuthMode.Password,
+                        credentialsSuppliedByUser: false,
+                        defaultAlreadyAttempted: _offlineDefaultCredentialRejected.Contains(endpointKey));
+
+                if (!manualCredentials && !usingDefault)
+                {
+                    ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.DefaultCredentialRejected", setDefaultUserName: true);
+                    return;
+                }
+
+                var options = new OfflineUpdateSshPasswordOptions(
+                    host,
+                    port,
+                    usingDefault ? defaultCredential.UserName : enteredUser,
+                    usingDefault ? defaultCredential.Password : enteredPassword,
+                    GetOfflineHostTrustDirectory(),
+                    bindAddress)
+                {
+                    ApproveHostKey = ApproveOfflineSshHostKeyAsync,
+                };
+
+                // Only a user-entered secret is cleared; the public factory
+                // credential is product configuration, not a stored user secret.
+                if (!usingDefault)
+                    OfflineUpgradePanel.PasswordBox.Clear();
                 ClearOfflinePairing();
-                await ConnectOfflineOptionsAsync(opts, ct);
+                try
+                {
+                    await ConnectOfflinePasswordAsync(options, ct);
+                }
+                catch (InvalidOperationException ex) when (usingDefault && IsOfflinePasswordRejection(ex))
+                {
+                    // Only a real authentication rejection consumes the single
+                    // automatic attempt for this endpoint.
+                    _offlineDefaultCredentialRejected.Add(endpointKey);
+                    ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.DefaultCredentialRejected", setDefaultUserName: true);
+                }
             });
         }
 
@@ -386,6 +506,7 @@ namespace FreedomInstaller.App
         private async Task DisconnectAndCleanupStageAsync()
         {
             ClearOfflinePairing();
+            ClearOfflinePasswordEntry();
             var ssh = _offlineSsh;
             try
             {
@@ -398,6 +519,7 @@ namespace FreedomInstaller.App
                 _offlineConnectedModel = null;
                 _offlineActualSlot = null;
                 _offlineRecoveryPartUuid = null;
+                ClearOfflinePreflightState();
                 SetText(OfflineUpgradePanel.DeviceText, "Static.OfflineUpdate.DevicePending");
                 SetText(OfflineUpgradePanel.DetailsText, "Static.OfflineUpdate.DetailsPending");
                 if (ssh != null)
@@ -405,8 +527,17 @@ namespace FreedomInstaller.App
             }
         }
 
+        private void ClearOfflinePasswordEntry()
+        {
+            // The rejected-endpoint set is intentionally kept: the automatic
+            // attempt is limited per endpoint, not reset by a disconnect.
+            if (OfflineUpgradePanel != null)
+                OfflineUpgradePanel.PasswordBox.Clear();
+        }
+
         private void DisposeImportedPackageAndInvalidate(bool disconnecting = false)
         {
+            ClearOfflinePreflightState();
             ClearOfflineSelectionState();
             _suppressOfflineSessionSelectionChanged = true;
             OfflineUpgradePanel.SessionCombo.ItemsSource = null;
@@ -438,6 +569,25 @@ namespace FreedomInstaller.App
                 OfflineUpgradePanel.ConfirmCheck.IsChecked = false;
         }
 
+        /// <summary>
+        /// The read-only preflight only covers the package and device it was
+        /// run against. Any package change, disconnect or invalidation drops
+        /// the pass so Prepare cannot run on stale evidence.
+        /// </summary>
+        private void ClearOfflinePreflightState()
+        {
+            _offlinePreflightPassed = false;
+            _offlinePreflightError = null;
+        }
+
+        private void MarkOfflinePreflightFailed(string reason)
+        {
+            _offlinePreflightPassed = false;
+            _offlinePreflightError = reason;
+            SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StatePreflightFailed", reason);
+            AppendOfflineLog("Dynamic.OfflineUpdate.LogPreflightFailed", reason);
+        }
+
         private async void OnValidateOfflinePackageAsync(object? sender, RoutedEventArgs e)
         {
             await RunOfflineUpgradeAsync(async (_, ct) =>
@@ -445,6 +595,7 @@ namespace FreedomInstaller.App
                 if (_offlineSsh == null || string.IsNullOrEmpty(_offlineConnectedModel) || string.IsNullOrEmpty(_offlineRecoveryPartUuid))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
 
+                ClearOfflinePreflightState();
                 string path = OfflineUpgradePanel.PackagePathBox.Text.Trim();
                 if (string.IsNullOrEmpty(path))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNoPackagePath"));
@@ -466,6 +617,45 @@ namespace FreedomInstaller.App
                     AppendOfflineLog("Dynamic.OfflineUpdate.LogPackageValidated", imported.Descriptor.Version, imported.Descriptor.ReleaseId);
 
                     ApplyFilteredOfflineSessions(sessions);
+
+                    // Read-only preflight. It never creates a session, prepares
+                    // a candidate or writes a slot. Only the exact success
+                    // schema unlocks Prepare; every failure keeps the package
+                    // imported for inspection but records the actionable
+                    // reason and blocks any new prepare/execute.
+                    var deviceInfo = _offlineSsh!.DeviceInfo;
+                    if (!OfflineUpdateUiState.IsUpdaterVersionAtLeast(deviceInfo, "0.8.0"))
+                    {
+                        MarkOfflinePreflightFailed(T("Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater",
+                            GetJsonString(deviceInfo, "updaterVersion") ?? "?"));
+                        return;
+                    }
+
+                    try
+                    {
+                        var preflight = await _offlineTransfer!.PreflightAsync(imported, ct);
+                        if (!OfflineUpdateUiState.PreflightPassed(preflight))
+                        {
+                            MarkOfflinePreflightFailed(T("Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse",
+                                OfflineUpdateUiState.PreflightPhase(preflight) ?? "?"));
+                            return;
+                        }
+
+                        _offlinePreflightPassed = true;
+                        _offlinePreflightError = null;
+                        AppendOfflineLog("Dynamic.OfflineUpdate.LogPreflightPassed",
+                            OfflineUpdateUiState.PreflightDeployment(preflight) ?? "?",
+                            OfflineUpdateUiState.PreflightPhase(preflight) ?? "?");
+                    }
+                    catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or ObjectDisposedException or OfflineUpdateTransferException)
+                    {
+                        // The device-side code (for example operation_failed)
+                        // names the rejected check; keep it next to its cause.
+                        string detail = ex is OfflineUpdateRemoteException remote
+                            ? $"{remote.Code}: {remote.Message}"
+                            : ex.Message;
+                        MarkOfflinePreflightFailed(T("Dynamic.OfflineUpdate.ErrorPreflightFailed", detail));
+                    }
                 }
                 catch
                 {
@@ -556,6 +746,10 @@ namespace FreedomInstaller.App
             await RunOfflineUpgradeAsync(async (gen, ct) =>
             {
                 EnsureReadyForSessionWork(requireSelectedSession: _offlineSessions.Count > 0);
+                if (!_offlinePreflightPassed)
+                    throw new InvalidOperationException(string.IsNullOrEmpty(_offlinePreflightError)
+                        ? T("Dynamic.OfflineUpdate.ErrorPreflightRequired")
+                        : _offlinePreflightError!);
                 if (!OfflineUpdateUiState.CanPrepare(_offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorStateNotActionable", _uiText.Format(LocalizePhase(GetReceiptState(_offlineLastReceipt)))));
                 ClearOfflineActionEligibility();
@@ -670,7 +864,7 @@ namespace FreedomInstaller.App
         private async void OnExecuteOfflineUpgradeAsync(object? sender, RoutedEventArgs e)
         {
             if (_busy || _offlineSsh == null || _offlinePackage == null || _offlineSelectedSession == null ||
-                !OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null) || OfflineUpgradePanel.ConfirmCheck.IsChecked != true)
+                !OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null, _offlinePreflightPassed) || OfflineUpgradePanel.ConfirmCheck.IsChecked != true)
                 return;
 
             UiMessage modelName = LocalizeModelName(_offlineConnectedModel ?? string.Empty);
@@ -682,7 +876,11 @@ namespace FreedomInstaller.App
             await RunOfflineUpgradeAsync(async (gen, ct) =>
             {
                 EnsureReadyForSessionWork(requireSelectedSession: true);
-                if (!OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null))
+                if (!_offlinePreflightPassed)
+                    throw new InvalidOperationException(string.IsNullOrEmpty(_offlinePreflightError)
+                        ? T("Dynamic.OfflineUpdate.ErrorPreflightRequired")
+                        : _offlinePreflightError!);
+                if (!OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null, _offlinePreflightPassed))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
                 if (_offlineSavedRecovery == null)
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
@@ -1114,7 +1312,9 @@ namespace FreedomInstaller.App
             _offlineActualSlot = null;
             _offlineRecoveryPartUuid = null;
             _offlineReceiptLive = false;
+            ClearOfflinePreflightState();
             ClearOfflinePairing();
+            ClearOfflinePasswordEntry();
             if (OfflineUpgradePanel != null)
             {
                 SetText(OfflineUpgradePanel.DeviceText, "Static.OfflineUpdate.DevicePending");

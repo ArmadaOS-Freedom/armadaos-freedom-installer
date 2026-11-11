@@ -84,6 +84,69 @@ namespace FreedomInstaller.App
             CompletionState(receipt) == "confirmed";
 
         /// <summary>
+        /// A 0.7 controller reports only a selected slot; it does not prove the
+        /// running slot. The UI must describe the BOTH-slot upgrade instead of
+        /// presenting selectedSlot as the actual slot.
+        /// </summary>
+        internal static bool IsLegacyController(JsonElement info) =>
+            info.ValueKind == JsonValueKind.Object &&
+            string.Equals(GetString(info, "bootContext"), "legacy-controller", StringComparison.Ordinal) &&
+            GetString(info, "actualSlot") is null &&
+            GetString(info, "inactiveSlot") is null &&
+            GetString(info, "selectedSlot") is "a" or "b";
+
+        internal static bool IsUpdaterVersionAtLeast(JsonElement info, string minimum)
+        {
+            var value = GetString(info, "updaterVersion");
+            return Version.TryParse(value, out var parsed) &&
+                   Version.TryParse(minimum, out var required) &&
+                   parsed >= required;
+        }
+
+        /// <summary>
+        /// The exact read-only preflight success contract. Only a v1 response
+        /// that explicitly reports the passed phase with no boot write started
+        /// unlocks Prepare. A legacy or malformed response, a device-side
+        /// <c>operation_failed</c>, or an older updater that cannot preflight
+        /// is never treated as a silent pass.
+        /// </summary>
+        internal static bool PreflightPassed(JsonElement? preflight)
+        {
+            if (!preflight.HasValue || preflight.Value.ValueKind != JsonValueKind.Object)
+                return false;
+
+            JsonElement value = preflight.Value;
+            return GetInt32(value, "schemaVersion") == 1 &&
+                   string.Equals(GetString(value, "phase"), "preflight_passed", StringComparison.Ordinal) &&
+                   string.Equals(GetString(value, "bootWriteState"), "not_started", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// The deployment reported by a successful preflight. The legacy
+        /// <c>deployment</c> field never existed and must not be read.
+        /// </summary>
+        internal static string? PreflightDeployment(JsonElement? preflight) =>
+            preflight.HasValue ? GetString(preflight.Value, "currentDeployment") : null;
+
+        internal static string? PreflightPhase(JsonElement? preflight) =>
+            preflight.HasValue ? GetString(preflight.Value, "phase") : null;
+
+        private static int? GetInt32(JsonElement info, string name) =>
+            info.ValueKind == JsonValueKind.Object &&
+            info.TryGetProperty(name, out var value) &&
+            value.ValueKind == JsonValueKind.Number &&
+            value.TryGetInt32(out int number)
+                ? number
+                : null;
+
+        private static string? GetString(JsonElement info, string name) =>
+            info.ValueKind == JsonValueKind.Object &&
+            info.TryGetProperty(name, out var value) &&
+            value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+
+        /// <summary>
         /// A session saved by an earlier run is bound to the device, so its
         /// status can be read with only a connection and a selected session.
         /// No package is needed for this read-only path.
@@ -99,15 +162,16 @@ namespace FreedomInstaller.App
             connected && imported && hasSelectedSession;
 
         /// <summary>
-        /// The complete prepare gate. A connection and a validated package are
-        /// required, but a session is not: the first upgrade of a tablet has no
-        /// session yet and preparing is what creates it. Whether an existing
-        /// selection is needed is decided by <see cref="CanPrepare"/> from the
-        /// receipt and the saved-session count.
+        /// The complete prepare gate. A connection, a validated package and a
+        /// passed read-only preflight are required, but a session is not: the
+        /// first upgrade of a tablet has no session yet and preparing is what
+        /// creates it. Whether an existing selection is needed is decided by
+        /// <see cref="CanPrepare"/> from the receipt and the saved-session
+        /// count.
         /// </summary>
-        internal static bool CanPrepareSession(bool connected, bool imported, JsonElement? receipt,
-            bool hasMatchingSessions, bool hasSelectedSession) =>
-            connected && imported &&
+        internal static bool CanPrepareSession(bool connected, bool imported, bool preflightPassed,
+            JsonElement? receipt, bool hasMatchingSessions, bool hasSelectedSession) =>
+            connected && imported && preflightPassed &&
             CanPrepare(receipt, hasMatchingSessions, hasSelectedSession);
 
         internal static bool CanPrepare(JsonElement? receipt, bool hasMatchingSessions, bool hasSelectedSession)
@@ -126,8 +190,8 @@ namespace FreedomInstaller.App
             return State(receipt) is "uploading" or "uploaded" or "prepare_queued" or "preparing" or "prepared";
         }
 
-        internal static bool CanExecute(JsonElement? receipt, bool hasSavedRecovery) =>
-            hasSavedRecovery && State(receipt) == "prepared" && !HasBlockingFlags(receipt);
+        internal static bool CanExecute(JsonElement? receipt, bool hasSavedRecovery, bool preflightPassed) =>
+            preflightPassed && hasSavedRecovery && State(receipt) == "prepared" && !HasBlockingFlags(receipt);
 
         private static bool GetBool(JsonElement receipt, string property) =>
             receipt.TryGetProperty(property, out JsonElement value) &&

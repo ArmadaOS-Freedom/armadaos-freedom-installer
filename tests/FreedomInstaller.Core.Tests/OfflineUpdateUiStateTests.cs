@@ -134,8 +134,8 @@ public class OfflineUpdateUiStateTests
     public void CanExecute_PreparedReceipt_TrueOnlyWithSavedRecovery()
     {
         var receipt = Receipt("prepared");
-        Assert.False(OfflineUpdateUiState.CanExecute(receipt, hasSavedRecovery: false));
-        Assert.True(OfflineUpdateUiState.CanExecute(receipt, hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(receipt, hasSavedRecovery: false, preflightPassed: true));
+        Assert.True(OfflineUpdateUiState.CanExecute(receipt, hasSavedRecovery: true, preflightPassed: true));
     }
 
     [Theory]
@@ -148,7 +148,7 @@ public class OfflineUpdateUiStateTests
     [InlineData("uploading")]
     public void CanExecute_NonPreparedStates_DeniedEvenWithSavedRecovery(string state)
     {
-        Assert.False(OfflineUpdateUiState.CanExecute(Receipt(state), hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(Receipt(state), hasSavedRecovery: true, preflightPassed: true));
     }
 
     [Fact]
@@ -156,11 +156,11 @@ public class OfflineUpdateUiStateTests
     {
         // Only the top-level state drives the gate; a nested result must never enable execution.
         var nested = Parse("{\"state\":\"prepared\",\"result\":{\"state\":\"awaiting_recovery_export\"}}");
-        Assert.True(OfflineUpdateUiState.CanExecute(nested, hasSavedRecovery: true));
-        Assert.False(OfflineUpdateUiState.CanExecute(nested, hasSavedRecovery: false));
+        Assert.True(OfflineUpdateUiState.CanExecute(nested, hasSavedRecovery: true, preflightPassed: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(nested, hasSavedRecovery: false, preflightPassed: true));
 
         var nestedOnly = Parse("{\"result\":{\"state\":\"prepared\"}}");
-        Assert.False(OfflineUpdateUiState.CanExecute(nestedOnly, hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(nestedOnly, hasSavedRecovery: true, preflightPassed: true));
     }
 
     [Theory]
@@ -168,15 +168,15 @@ public class OfflineUpdateUiStateTests
     [InlineData("{\"state\":\"prepared\",\"attentionRequired\":true}")]
     public void CanExecute_BlockingFlags_DeniedEvenForPrepared(string json)
     {
-        Assert.False(OfflineUpdateUiState.CanExecute(Parse(json), hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(Parse(json), hasSavedRecovery: true, preflightPassed: true));
     }
 
     [Fact]
     public void CanExecute_NullOrMalformedReceipt_Denied()
     {
-        Assert.False(OfflineUpdateUiState.CanExecute(null, hasSavedRecovery: true));
-        Assert.False(OfflineUpdateUiState.CanExecute(Parse("{}"), hasSavedRecovery: true));
-        Assert.False(OfflineUpdateUiState.CanExecute(Parse("{\"state\":5}"), hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(null, hasSavedRecovery: true, preflightPassed: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(Parse("{}"), hasSavedRecovery: true, preflightPassed: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(Parse("{\"state\":5}"), hasSavedRecovery: true, preflightPassed: true));
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public class OfflineUpdateUiStateTests
         var executingWithNestedPrepared = Parse("{\"state\":\"executing\",\"result\":{\"state\":\"prepared\"}}");
         Assert.Equal("executing", OfflineUpdateUiState.State(executingWithNestedPrepared));
         Assert.False(OfflineUpdateUiState.CanPrepare(executingWithNestedPrepared, hasMatchingSessions: true, hasSelectedSession: true));
-        Assert.False(OfflineUpdateUiState.CanExecute(executingWithNestedPrepared, hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(executingWithNestedPrepared, hasSavedRecovery: true, preflightPassed: true));
 
         var preparedWithNestedExport = Parse("{\"state\":\"prepared\",\"result\":{\"state\":\"awaiting_recovery_export\"}}");
         Assert.True(OfflineUpdateUiState.CanPrepare(preparedWithNestedExport, hasMatchingSessions: true, hasSelectedSession: true));
@@ -195,15 +195,15 @@ public class OfflineUpdateUiStateTests
     public void MatchingAndSelected_NoReceiptOrMalformedOrUnknownState_DeniesGates()
     {
         Assert.False(OfflineUpdateUiState.CanPrepare(null, hasMatchingSessions: true, hasSelectedSession: true));
-        Assert.False(OfflineUpdateUiState.CanExecute(null, hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(null, hasSavedRecovery: true, preflightPassed: true));
 
         var malformedNonString = Parse("{\"state\":[\"prepared\"]}");
         Assert.False(OfflineUpdateUiState.CanPrepare(malformedNonString, hasMatchingSessions: true, hasSelectedSession: true));
-        Assert.False(OfflineUpdateUiState.CanExecute(malformedNonString, hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(malformedNonString, hasSavedRecovery: true, preflightPassed: true));
 
         var unknownState = Parse("{\"state\":\"unknown_custom_state\"}");
         Assert.False(OfflineUpdateUiState.CanPrepare(unknownState, hasMatchingSessions: true, hasSelectedSession: true));
-        Assert.False(OfflineUpdateUiState.CanExecute(unknownState, hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(unknownState, hasSavedRecovery: true, preflightPassed: true));
     }
 
     // ---------- Completion ----------
@@ -377,20 +377,21 @@ public class OfflineUpdateUiStateTests
     // ---------- Combined prepare gate (exactly what the button uses) ----------
 
     [Fact]
-    public void CanPrepareSession_FirstUpgrade_NeedsOnlyAConnectionAndAPackage()
+    public void CanPrepareSession_FirstUpgrade_NeedsConnectionPackageAndPreflight()
     {
         // A tablet that has never been upgraded has no saved session and no
         // receipt yet; preparing is what creates the first session. Requiring a
         // selection here would disable Prepare forever on the first upgrade.
+        // The read-only preflight pass is still required.
         Assert.True(OfflineUpdateUiState.CanPrepareSession(
-            connected: true, imported: true, receipt: null,
+            connected: true, imported: true, preflightPassed: true, receipt: null,
             hasMatchingSessions: false, hasSelectedSession: false));
 
         Assert.False(OfflineUpdateUiState.CanPrepareSession(
-            connected: false, imported: true, receipt: null,
+            connected: false, imported: true, preflightPassed: true, receipt: null,
             hasMatchingSessions: false, hasSelectedSession: false));
         Assert.False(OfflineUpdateUiState.CanPrepareSession(
-            connected: true, imported: false, receipt: null,
+            connected: true, imported: false, preflightPassed: true, receipt: null,
             hasMatchingSessions: false, hasSelectedSession: false));
     }
 
@@ -401,14 +402,14 @@ public class OfflineUpdateUiStateTests
         // target the wrong transaction, so the button stays disabled until the
         // user selects one.
         Assert.False(OfflineUpdateUiState.CanPrepareSession(
-            connected: true, imported: true, receipt: Parse("{\"state\":\"uploaded\"}"),
+            connected: true, imported: true, preflightPassed: true, receipt: Parse("{\"state\":\"uploaded\"}"),
             hasMatchingSessions: true, hasSelectedSession: false));
 
         Assert.True(OfflineUpdateUiState.CanPrepareSession(
-            connected: true, imported: true, receipt: Parse("{\"state\":\"uploaded\"}"),
+            connected: true, imported: true, preflightPassed: true, receipt: Parse("{\"state\":\"uploaded\"}"),
             hasMatchingSessions: true, hasSelectedSession: true));
         Assert.True(OfflineUpdateUiState.CanPrepareSession(
-            connected: true, imported: true, receipt: Parse("{\"state\":\"prepare_queued\"}"),
+            connected: true, imported: true, preflightPassed: true, receipt: Parse("{\"state\":\"prepare_queued\"}"),
             hasMatchingSessions: true, hasSelectedSession: true));
     }
 
@@ -417,19 +418,123 @@ public class OfflineUpdateUiStateTests
     {
         // A finished upgrade is not preparable again.
         Assert.False(OfflineUpdateUiState.CanPrepareSession(
-            connected: true, imported: true, receipt: Parse("{\"state\":\"awaiting_reboot\"}"),
+            connected: true, imported: true, preflightPassed: true, receipt: Parse("{\"state\":\"awaiting_reboot\"}"),
             hasMatchingSessions: false, hasSelectedSession: false));
         Assert.False(OfflineUpdateUiState.CanPrepareSession(
-            connected: true, imported: true, receipt: Parse("{\"state\":\"failed\"}"),
+            connected: true, imported: true, preflightPassed: true, receipt: Parse("{\"state\":\"failed\"}"),
             hasMatchingSessions: false, hasSelectedSession: false));
 
         // A receipt nobody can interpret must be refreshed, not treated as
         // "no session yet".
         Assert.False(OfflineUpdateUiState.CanPrepareSession(
-            connected: true, imported: true, receipt: Parse("{}"),
+            connected: true, imported: true, preflightPassed: true, receipt: Parse("{}"),
             hasMatchingSessions: false, hasSelectedSession: false));
         Assert.False(OfflineUpdateUiState.CanPrepareSession(
-            connected: true, imported: true, receipt: Parse("[]"),
+            connected: true, imported: true, preflightPassed: true, receipt: Parse("[]"),
             hasMatchingSessions: false, hasSelectedSession: false));
+    }
+
+    [Theory]
+    [InlineData("{\"bootContext\":\"legacy-controller\",\"actualSlot\":null,\"inactiveSlot\":null,\"selectedSlot\":\"b\"}", true)]
+    [InlineData("{\"bootContext\":\"legacy-controller\",\"actualSlot\":\"a\",\"inactiveSlot\":\"b\",\"selectedSlot\":\"b\"}", false)]
+    [InlineData("{\"actualSlot\":\"a\",\"inactiveSlot\":\"b\"}", false)]
+    [InlineData("{\"bootContext\":\"legacy-controller\",\"actualSlot\":null,\"inactiveSlot\":null}", false)]
+    public void LegacyController_RequiresTheExactNullSlotShape(string json, bool expected)
+    {
+        Assert.Equal(expected, OfflineUpdateUiState.IsLegacyController(Parse(json)!.Value));
+    }
+
+    [Theory]
+    [InlineData("0.8.0", true)]
+    [InlineData("0.8.1", true)]
+    [InlineData("0.7.9", false)]
+    [InlineData("not-a-version", false)]
+    public void UpdaterVersion_ComparisonIsHonest(string version, bool expected)
+    {
+        var info = Parse("{\"updaterVersion\":\"" + version + "\"}")!.Value;
+        Assert.Equal(expected, OfflineUpdateUiState.IsUpdaterVersionAtLeast(info, "0.8.0"));
+    }
+
+    // ---------- Read-only preflight gate ----------
+
+    private const string ExactPreflight =
+        "{\"schemaVersion\":1," +
+        "\"phase\":\"preflight_passed\"," +
+        "\"bootWriteState\":\"not_started\"," +
+        "\"model\":\"TB323FU\"," +
+        "\"bootContext\":\"uefi\"," +
+        "\"actualSlot\":\"a\"," +
+        "\"selectedSlot\":\"b\"," +
+        "\"currentDeployment\":\"deployment-2026.11\"," +
+        "\"recoveryPartUuid\":\"11111111-2222-3333-4444-555555555555\"," +
+        "\"recoveryDescriptorVersion\":2," +
+        "\"recoveryMigrationRequired\":false," +
+        "\"channel\":\"stable\"}";
+
+    [Fact]
+    public void PreflightPassed_ExactSuccessSchema_IsARecordedPass()
+    {
+        var preflight = Parse(ExactPreflight);
+
+        Assert.True(OfflineUpdateUiState.PreflightPassed(preflight));
+        Assert.Equal("deployment-2026.11", OfflineUpdateUiState.PreflightDeployment(preflight));
+        Assert.Equal("preflight_passed", OfflineUpdateUiState.PreflightPhase(preflight));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("[]")]
+    [InlineData("\"preflight_passed\"")]
+    [InlineData("{}")]
+    // A legacy success shape must never count as a pass.
+    [InlineData("{\"deployment\":\"A\",\"state\":\"preflight_passed\"}")]
+    [InlineData("{\"deployment\":\"A\",\"status\":\"preflight_passed\"}")]
+    // Schema version is part of the contract.
+    [InlineData("{\"schemaVersion\":2,\"phase\":\"preflight_passed\",\"bootWriteState\":\"not_started\"}")]
+    [InlineData("{\"schemaVersion\":\"1\",\"phase\":\"preflight_passed\",\"bootWriteState\":\"not_started\"}")]
+    // Both the phase and the no-write proof are required.
+    [InlineData("{\"schemaVersion\":1,\"phase\":\"preflight_failed\",\"bootWriteState\":\"not_started\"}")]
+    [InlineData("{\"schemaVersion\":1,\"phase\":\"preflight_passed\"}")]
+    [InlineData("{\"schemaVersion\":1,\"phase\":\"preflight_passed\",\"bootWriteState\":\"started\"}")]
+    public void PreflightPassed_MalformedOrForeignShapes_AreNotAPass(string? json)
+    {
+        Assert.False(OfflineUpdateUiState.PreflightPassed(Parse(json)));
+    }
+
+    [Fact]
+    public void PreflightFields_UseCurrentDeploymentAndPhaseOnly()
+    {
+        var legacy = Parse("{\"deployment\":\"A\",\"state\":\"preflight_passed\",\"status\":\"preflight_passed\"}");
+        Assert.Null(OfflineUpdateUiState.PreflightDeployment(legacy));
+        Assert.Null(OfflineUpdateUiState.PreflightPhase(legacy));
+
+        var wrongTypes = Parse("{\"currentDeployment\":5,\"phase\":true}");
+        Assert.Null(OfflineUpdateUiState.PreflightDeployment(wrongTypes));
+        Assert.Null(OfflineUpdateUiState.PreflightPhase(wrongTypes));
+    }
+
+    [Fact]
+    public void CanPrepareSession_FailedOrResetPreflight_BlocksPrepare()
+    {
+        // A connection and a validated package are not enough: the preflight
+        // pass is bound to this package/device and may have been reset.
+        Assert.False(OfflineUpdateUiState.CanPrepareSession(
+            connected: true, imported: true, preflightPassed: false, receipt: null,
+            hasMatchingSessions: false, hasSelectedSession: false));
+
+        Assert.True(OfflineUpdateUiState.CanPrepareSession(
+            connected: true, imported: true, preflightPassed: true, receipt: null,
+            hasMatchingSessions: false, hasSelectedSession: false));
+    }
+
+    [Fact]
+    public void CanExecute_WithoutPassedPreflight_BlocksExecution()
+    {
+        var prepared = Receipt("prepared");
+
+        Assert.False(OfflineUpdateUiState.CanExecute(
+            prepared, hasSavedRecovery: true, preflightPassed: false));
+        Assert.True(OfflineUpdateUiState.CanExecute(
+            prepared, hasSavedRecovery: true, preflightPassed: true));
     }
 }

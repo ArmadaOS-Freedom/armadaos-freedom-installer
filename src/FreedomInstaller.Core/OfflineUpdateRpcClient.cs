@@ -93,6 +93,29 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
         }, cancellationToken);
     }
 
+    /// <summary>
+    /// Read-only package preflight. It sends the same base64 <c>document</c>
+    /// and <c>signature</c> fields as <see cref="BeginAsync"/> but creates no
+    /// session and never triggers prepare or a slot write.
+    /// </summary>
+    public Task<JsonElement> PreflightAsync(byte[] document, byte[] signature, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(signature);
+        if (document.Length is <= 0 or > MaxDocumentBytes)
+            throw new ArgumentOutOfRangeException(nameof(document), $"Document must be between 1 and {MaxDocumentBytes} bytes.");
+        if (signature.Length is <= 0 or > MaxSignatureBytes)
+            throw new ArgumentOutOfRangeException(nameof(signature), $"Signature must be between 1 and {MaxSignatureBytes} bytes.");
+
+        var docCopy = document.ToArray();
+        var sigCopy = signature.ToArray();
+        return SendAsync("preflight", new Dictionary<string, object?>(2)
+        {
+            ["document"] = docCopy,
+            ["signature"] = sigCopy,
+        }, cancellationToken);
+    }
+
     public Task<JsonElement> GetStatusAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         ValidateSessionId(sessionId);
