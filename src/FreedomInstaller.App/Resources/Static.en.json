@@ -287,7 +287,7 @@
   "Static.OfflineUpdate.AuthModePassword": "Password (recommended for USB and Wi-Fi)",
   "Static.OfflineUpdate.AuthModeKey": "SSH key (existing trusted setup)",
   "Static.OfflineUpdate.Password": "Password",
-  "Static.OfflineUpdate.PasswordPrivacy": "The password stays in memory for this connection attempt only. It is never saved, written to disk, or written to logs.",
+  "Static.OfflineUpdate.PasswordPrivacy": "The password is used only for this connection and kept in memory. It is not saved to disk or written to logs.",
   "Static.OfflineUpdate.Prepare": "Prepare upgrade",
   "Static.OfflineUpdate.Desc": "The tablet must be running Linux. The upgrade updates both A/B slots and keeps Android and Linux data, without repartitioning or initialization.",
   "Static.OfflineUpdate.Title": "Offline Upgrade",

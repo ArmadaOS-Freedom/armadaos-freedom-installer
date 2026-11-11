@@ -377,6 +377,49 @@ public sealed partial class OfflineUpdatePackageTests
         Assert.Equal("awaiting_reboot", failure.Receipt!.Value.GetProperty("state").GetString());
     }
 
+    [Fact]
+    public async Task Preflight_NamesTheSelectedSessionAndRejectsAnotherBinding()
+    {
+        var c = new Case(Path.Combine(root, "preflight-session"));
+        var work = Directory.CreateDirectory(Path.Combine(root, "preflight-session-work")).FullName;
+        using var imported = await Import(c.ArchivePath, Model, "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer(Model, c.DescriptorBytes, c.Entries["images/linux-root.img.gz"], [1], [2]);
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+        var session = await transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask);
+
+        server.Methods.Clear();
+        var plain = await transfer.PreflightAsync(imported);
+        Assert.Equal("preflight_passed", plain.GetProperty("phase").GetString());
+        Assert.Null(server.PreflightSessionId);
+        Assert.Equal(0, server.UploadCalls);
+        Assert.Equal(0, server.PrepareCalls);
+        Assert.Equal(0, server.ExecuteCalls);
+
+        var bound = await transfer.PreflightAsync(imported, session);
+        Assert.Equal(SessionIdConst, server.PreflightSessionId);
+        Assert.Equal(SessionIdConst, bound.GetProperty("sessionId").GetString());
+        Assert.Equal(["preflight", "preflight"], server.Methods);
+
+        // A session record for another descriptor is refused before any RPC.
+        server.Methods.Clear();
+        var otherDescriptor = session with { PackageDescriptorSha256 = new string('f', 64) };
+        await Assert.ThrowsAsync<InvalidDataException>(() => transfer.PreflightAsync(imported, otherDescriptor));
+        Assert.Empty(server.Methods);
+
+        // A session for another recovery partition is refused from the answer.
+        var otherDevice = session with { RecoveryPartUuid = Guid.NewGuid().ToString("D") };
+        await Assert.ThrowsAsync<InvalidDataException>(() => transfer.PreflightAsync(imported, otherDevice));
+        Assert.Equal(["preflight"], server.Methods);
+        Assert.Equal(0, server.ExecuteCalls);
+
+        // A session record for another model is refused before any RPC too.
+        server.Methods.Clear();
+        var otherModel = session with { DeviceModel = "TB322FC" };
+        await Assert.ThrowsAsync<InvalidDataException>(() => transfer.PreflightAsync(imported, otherModel));
+        Assert.Empty(server.Methods);
+    }
+
     private sealed class SyncProgress<T>(Action<T> handler) : IProgress<T>
     {
         public void Report(T value) => handler(value);
@@ -452,6 +495,8 @@ public sealed partial class OfflineUpdatePackageTests
         public int UploadCalls { get; private set; }
         public int PrepareCalls { get; private set; }
         public int ExecuteCalls { get; private set; }
+        public int PreflightCalls { get; private set; }
+        public string? PreflightSessionId { get; private set; }
         public byte[] ReceivedDescriptor { get; private set; } = [];
         public byte[] ReceivedSignature { get; private set; } = [];
         public byte[] ReceivedAck { get; private set; } = [];
@@ -496,6 +541,7 @@ public sealed partial class OfflineUpdatePackageTests
             JsonNode result = method switch
             {
                 "info" => BuildInfo(),
+                "preflight" => HandlePreflight(@params),
                 "begin" => HandleBegin(@params),
                 "status" => HandleStatus(@params),
                 "upload" => HandleUpload(@params),
@@ -543,6 +589,27 @@ public sealed partial class OfflineUpdatePackageTests
             }
 
             return info;
+        }
+
+        private JsonObject HandlePreflight(JsonElement p)
+        {
+            PreflightCalls++;
+            PreflightSessionId = p.TryGetProperty("sessionId", out var sessionId) &&
+                sessionId.ValueKind == JsonValueKind.String
+                ? sessionId.GetString()
+                : null;
+            var result = new JsonObject
+            {
+                ["schemaVersion"] = 1,
+                ["phase"] = "preflight_passed",
+                ["bootWriteState"] = "not_started",
+                ["model"] = _model,
+                ["recoveryPartUuid"] = RecoveryPartUuid,
+                ["currentDeployment"] = new string('a', 64) + ".0"
+            };
+            if (PreflightSessionId is not null)
+                result["sessionId"] = PreflightSessionId;
+            return result;
         }
 
         private JsonObject HandleBegin(JsonElement p)

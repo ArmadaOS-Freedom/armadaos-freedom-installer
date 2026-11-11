@@ -98,7 +98,17 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
     /// and <c>signature</c> fields as <see cref="BeginAsync"/> but creates no
     /// session and never triggers prepare or a slot write.
     /// </summary>
-    public Task<JsonElement> PreflightAsync(byte[] document, byte[] signature, CancellationToken cancellationToken = default)
+    public Task<JsonElement> PreflightAsync(byte[] document, byte[] signature, CancellationToken cancellationToken = default) =>
+        PreflightAsync(document, signature, null, cancellationToken);
+
+    /// <summary>
+    /// Read-only preflight that also names one existing protected session. The
+    /// tablet then binds that session's receipt, descriptor and stored payload
+    /// to this package and device, and credits only the bytes it already
+    /// stores. Passing <paramref name="sessionId"/> null keeps the plain
+    /// document+signature shape.
+    /// </summary>
+    public Task<JsonElement> PreflightAsync(byte[] document, byte[] signature, string? sessionId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(signature);
@@ -109,10 +119,21 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
 
         var docCopy = document.ToArray();
         var sigCopy = signature.ToArray();
-        return SendAsync("preflight", new Dictionary<string, object?>(2)
+        if (sessionId is null)
+        {
+            return SendAsync("preflight", new Dictionary<string, object?>(2)
+            {
+                ["document"] = docCopy,
+                ["signature"] = sigCopy,
+            }, cancellationToken);
+        }
+
+        ValidateSessionId(sessionId);
+        return SendAsync("preflight", new Dictionary<string, object?>(3)
         {
             ["document"] = docCopy,
             ["signature"] = sigCopy,
+            ["sessionId"] = sessionId,
         }, cancellationToken);
     }
 

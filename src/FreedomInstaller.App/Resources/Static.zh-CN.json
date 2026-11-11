@@ -287,7 +287,7 @@
   "Static.OfflineUpdate.AuthModePassword": "密码（USB 与 Wi-Fi 推荐）",
   "Static.OfflineUpdate.AuthModeKey": "SSH 密钥（已配置信任的环境）",
   "Static.OfflineUpdate.Password": "密码",
-  "Static.OfflineUpdate.PasswordPrivacy": "密码仅在本次连接尝试期间保存在内存中，不会保存到磁盘，也不会写入日志。",
+  "Static.OfflineUpdate.PasswordPrivacy": "密码仅在本次连接中使用，不保存到磁盘或日志。",
   "Static.OfflineUpdate.Prepare": "准备升级",
   "Static.OfflineUpdate.Desc": "平板需运行 Linux。升级会更新两个 A/B 槽位并保留安卓和 Linux 数据，不重新分区、不初始化。",
   "Static.OfflineUpdate.Title": "离线升级",

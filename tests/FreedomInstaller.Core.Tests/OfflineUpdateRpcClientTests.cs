@@ -80,6 +80,41 @@ public sealed class OfflineUpdateRpcClientTests
     }
 
     [Fact]
+    public async Task Preflight_with_a_session_id_adds_only_that_field()
+    {
+        using var io = new IoStream();
+        ReplyOk(io, 1, "{\"phase\":\"preflight_passed\",\"sessionId\":\"" + Session + "\"}");
+        await using var client = new OfflineUpdateRpcClient(io, io);
+
+        var document = new byte[] { 1, 2, 3 };
+        var signature = new byte[] { 4, 5 };
+        var result = await client.PreflightAsync(document, signature, Session);
+
+        Assert.Equal("preflight_passed", result.GetProperty("phase").GetString());
+        var parameters = Frame(io, 0).GetProperty("params");
+        Assert.Equal(3, Count(parameters));
+        Assert.Equal(Convert.ToBase64String(document), parameters.GetProperty("document").GetString());
+        Assert.Equal(Convert.ToBase64String(signature), parameters.GetProperty("signature").GetString());
+        Assert.Equal(Session, parameters.GetProperty("sessionId").GetString());
+    }
+
+    [Theory]
+    [InlineData("BAD")]
+    [InlineData("")]
+    [InlineData("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    public async Task Preflight_rejects_an_invalid_session_id_without_writing(string sessionId)
+    {
+        using var io = new IoStream();
+        await using var client = new OfflineUpdateRpcClient(io, io);
+
+        Assert.ThrowsAny<ArgumentException>(() =>
+        {
+            _ = client.PreflightAsync(new byte[] { 1 }, new byte[] { 2 }, sessionId);
+        });
+        Assert.Empty(io.Frames);
+    }
+
+    [Fact]
     public async Task Carryover_and_fragmented_utf8_are_preserved()
     {
         using var io = new IoStream();

@@ -67,8 +67,21 @@ public sealed class OfflineUpdateTransfer
     /// inspect the device model, deployment, slots and storage, but this call
     /// creates no session and does not prepare or write anything.
     /// </summary>
+    public Task<JsonElement> PreflightAsync(
+        ImportedUpdatePackage package,
+        CancellationToken token = default) =>
+        PreflightAsync(package, null, token);
+
+    /// <summary>
+    /// Read-only preflight bound to an existing session of this exact package
+    /// and device. The tablet credits the payload bytes the session already
+    /// stores, so reconnecting to a prepared session does not demand the whole
+    /// compressed payload again. A pass is accepted only when the response
+    /// names this session, model and recovery partition.
+    /// </summary>
     public async Task<JsonElement> PreflightAsync(
         ImportedUpdatePackage package,
+        OfflineUpdateSession? session,
         CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(package);
@@ -76,9 +89,24 @@ public sealed class OfflineUpdateTransfer
         var stage = GetStage(package);
         var document = ReadBoundedFile(package.DescriptorPath, stage, MaxMetadataBytes, token);
         var signature = ReadBoundedFile(package.SignaturePath, stage, MaxSignatureBytes, token);
-        var result = await _client.PreflightAsync(document, signature, token).ConfigureAwait(false);
+        if (session is null)
+        {
+            var plain = await _client.PreflightAsync(document, signature, token).ConfigureAwait(false);
+            if (plain.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("preflight 响应必须是 JSON 对象。");
+            return plain.Clone();
+        }
+
+        var normalized = ValidateSession(session, package.DeviceModel);
+        _ = VerifyPackage(package, normalized, token);
+        var result = await _client.PreflightAsync(document, signature, normalized.SessionId, token).ConfigureAwait(false);
         if (result.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("preflight 响应必须是 JSON 对象。");
+        // Evidence for another session, another model or another recovery
+        // partition never unlocks this session's prepare/execute.
+        Require(result, "sessionId", normalized.SessionId);
+        Require(result, "model", normalized.DeviceModel);
+        Require(result, "recoveryPartUuid", normalized.RecoveryPartUuid);
 
         return result.Clone();
     }

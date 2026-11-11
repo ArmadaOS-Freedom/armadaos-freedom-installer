@@ -153,20 +153,27 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
             transport = activeTransport;
 
             string? approvedFingerprint = null;
-            bool Approve(OfflineUpdateSshHostKey key)
-            {
-                var fingerprint = VerifyHostKey(options, trust, key, token);
-                if (fingerprint is null)
-                    return false;
-
-                approvedFingerprint = fingerprint;
-                return true;
-            }
 
             using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
+                var connectToken = connectCts.Token;
+
+                // The approval callback runs under the same token as the
+                // transport, so a decision that arrives after this attempt was
+                // cancelled is rejected instead of being written to the trust
+                // store of an abandoned connection.
+                bool Approve(OfflineUpdateSshHostKey key)
+                {
+                    var fingerprint = VerifyHostKey(options, trust, key, connectToken);
+                    if (fingerprint is null)
+                        return false;
+
+                    approvedFingerprint = fingerprint;
+                    return true;
+                }
+
                 var connectTask = Task.Run(
-                    () => activeTransport.Connect(connectTimeout, Approve, connectCts.Token),
+                    () => activeTransport.Connect(connectTimeout, Approve, connectToken),
                     CancellationToken.None);
 
                 // SSH.NET enforces connectTimeout on its own network work. This
@@ -399,6 +406,9 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
             if (!string.Equals(expected.Trim(), parsed.Fingerprint, StringComparison.Ordinal))
                 return null;
 
+            // A pin that only matched after the attempt was cancelled must not
+            // leave a trust record behind.
+            token.ThrowIfCancellationRequested();
             trust.Store(options.Host, options.Port, parsed);
             return parsed.Fingerprint;
         }
@@ -432,6 +442,9 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
         if (!approved)
             return null;
 
+        // The confirmation may have arrived after cancellation; re-check before
+        // persisting so a late Yes never trusts the key of an abandoned attempt.
+        token.ThrowIfCancellationRequested();
         trust.Store(options.Host, options.Port, parsed);
         return parsed.Fingerprint;
     }

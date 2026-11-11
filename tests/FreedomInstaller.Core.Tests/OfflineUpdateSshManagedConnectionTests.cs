@@ -360,6 +360,62 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Connect_LateHostKeyApprovalAfterCancellation_SavesNoTrustRecordAndStartsNoUpdater()
+    {
+        var hostKey = HostKey(24);
+        var approvalStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lateApproval = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = _ => new FakeChannel(ReadyOutput(), false, exited: false),
+        };
+        var options = Options(hostKey, approve: async (_, _) =>
+        {
+            approvalStarted.TrySetResult(true);
+            return await lateApproval.Task.ConfigureAwait(false);
+        });
+        using var cancelled = new CancellationTokenSource();
+
+        var connect = OfflineUpdateSshManagedConnection.ConnectCoreAsync(
+            options, TimeSpan.FromSeconds(5), cancelled.Token, Factory(transport));
+
+        await approvalStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cancelled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
+
+        // The user presses Yes only after the attempt has been cancelled.
+        lateApproval.TrySetResult(true);
+        await transport.ConnectFinished.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(0, transport.StartCount);
+        Assert.Empty(Directory.GetFiles(_trustDirectory));
+    }
+
+    [Fact]
+    public async Task Connect_ExpectedFingerprintCancelledBeforeTrust_SavesNoTrustRecordAndStartsNoUpdater()
+    {
+        // A pinned key needs no prompt, so the only cancellation window is
+        // between the key comparison and the trust write.
+        var key = HostKey(25);
+        using var cancelled = new CancellationTokenSource();
+        var transport = new FakeTransport(key)
+        {
+            BeforeHostKeyApproval = cancelled.Cancel,
+            ChannelFactory = _ => new FakeChannel(ReadyOutput(), false, exited: false),
+        };
+        var options = Options(key, approve: null);
+        options.ApproveHostKey = null;
+        options.ExpectedHostFingerprint = PublicKeyOf(key).Fingerprint;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            OfflineUpdateSshManagedConnection.ConnectCoreAsync(
+                options, TimeSpan.FromSeconds(5), cancelled.Token, Factory(transport)));
+
+        Assert.Equal(0, transport.StartCount);
+        Assert.Empty(Directory.GetFiles(_trustDirectory));
+    }
+
+    [Fact]
     public async Task Connect_AuthenticationFailure_IsNotRetried()
     {
         var hostKey = HostKey(14);
@@ -584,10 +640,14 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     private sealed class FakeTransport : IOfflineUpdateSshTransport
     {
         private readonly OfflineUpdateSshHostKey _hostKey;
+        private readonly TaskCompletionSource<bool> _connectFinished = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal FakeTransport(OfflineUpdateSshHostKey hostKey) => _hostKey = hostKey;
 
         internal List<string> Events { get; } = new();
+
+        /// <summary>Completes when Connect returned or threw.</summary>
+        internal Task ConnectFinished => _connectFinished.Task;
 
         internal int ConnectCount { get; private set; }
 
@@ -596,6 +656,8 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         internal int DisposeCount { get; private set; }
 
         internal bool FailAuthentication { get; init; }
+
+        internal Action? BeforeHostKeyApproval { get; init; }
 
         internal Func<string, FakeChannel> ChannelFactory { get; init; } =
             _ => new FakeChannel(ReadyOutput(), false, exited: false);
@@ -608,17 +670,26 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         public void Connect(TimeSpan timeout, Func<OfflineUpdateSshHostKey, bool> approveHostKey, CancellationToken token)
         {
-            ConnectCount++;
-            Events.Add("connect");
-            token.ThrowIfCancellationRequested();
+            try
+            {
+                ConnectCount++;
+                Events.Add("connect");
+                token.ThrowIfCancellationRequested();
 
-            if (FailAuthentication)
-                throw new OfflineUpdateSshAuthenticationException("denied");
+                if (FailAuthentication)
+                    throw new OfflineUpdateSshAuthenticationException("denied");
 
-            if (!approveHostKey(_hostKey))
-                throw new OfflineUpdateSshHostKeyRejectedException("rejected");
+                BeforeHostKeyApproval?.Invoke();
 
-            Events.Add("authenticated");
+                if (!approveHostKey(_hostKey))
+                    throw new OfflineUpdateSshHostKeyRejectedException("rejected");
+
+                Events.Add("authenticated");
+            }
+            finally
+            {
+                _connectFinished.TrySetResult(true);
+            }
         }
 
         public Task<OfflineUpdateSshProbeResult> RunAsync(
