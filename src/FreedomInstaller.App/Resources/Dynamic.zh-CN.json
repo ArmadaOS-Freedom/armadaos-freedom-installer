@@ -1289,8 +1289,10 @@
   "Dynamic.OfflineUpdate.Value": "{0}",
   "Dynamic.OfflineUpdate.Phase.Uploaded": "升级包已上传",
   "Dynamic.OfflineUpdate.PackageValidated": "版本 {0}（发布标识：{1}）",
-  "Dynamic.OfflineUpdate.ErrorInvalidConnectionFields": "请填写有效的端口和用户名，并按所选认证方式填写密码，或填写私钥路径与 known_hosts 路径（地址可留空以自动检测 USB 网络）。",
-  "Dynamic.OfflineUpdate.ErrorPasswordRequired": "请填写平板 SSH 密码。",
+  "Dynamic.OfflineUpdate.ErrorWifiAddressRequired": "请输入平板的 Wi-Fi 地址。",
+  "Dynamic.OfflineUpdate.ErrorWifiPortInvalid": "请输入 1 到 65535 之间的 Wi-Fi 端口。",
+  "Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired": "使用自定义账号登录时，请同时填写账号和密码。",
+  "Dynamic.OfflineUpdate.ErrorKeyCredentialsRequired": "使用 SSH 密钥登录时，请填写用户名、私钥和 known_hosts 文件。",
   "Dynamic.OfflineUpdate.HostKeyNewPrompt": "首次连接 {0}:{1}。\n\n主机密钥类型：ssh-ed25519\n主机密钥指纹：\n{2}\n\n请与平板核对指纹后再信任。只会保存该主机公钥；在您确认之前不会发送密码。",
   "Dynamic.OfflineUpdate.HostKeyChangedPrompt": "平板 {0}:{1} 返回的主机密钥已改变。\n\n新指纹：\n{2}\n此前信任的指纹：\n{3}\n\n系统重装或该地址上有其他设备应答时可能出现此情况。仅在您确认此变化符合预期时才允许；确认之前不会发送密码。",
   "Dynamic.OfflineUpdate.ErrorHostKeyRejected": "未确认平板主机密钥，已中止连接且未发送密码。{0}",
@@ -1299,7 +1301,7 @@
   "Dynamic.OfflineUpdate.ErrorSudoUnavailable": "平板无法通过 sudo 启动或部署升级程序。需要密码时，安装器只会在 sudo 明确提示后发送一次密码，不会猜测或重复尝试。请核对账户的 sudo 授权。{0}",
   "Dynamic.OfflineUpdate.ErrorConnectTimeout": "SSH 连接或升级程序启动超时。请检查地址后重试。{0}",
   "Dynamic.OfflineUpdate.ErrorConnectFailed": "无法通过 SSH 连接平板。{0}",
-  "Dynamic.OfflineUpdate.DefaultCredentialRejected": "出厂默认凭据已被拒绝一次。请在下方填写平板用户名和密码后重新连接。",
+  "Dynamic.OfflineUpdate.DefaultCredentialRejected": "出厂默认账号被拒绝，已切换到自定义账号密码。请输入平板密码后重新连接。",
   "Dynamic.OfflineUpdate.ErrorUsbConnection": "USB 网络检测失败：{0}",
   "Dynamic.OfflineUpdate.Phase.Preparing": "正在准备升级环境",
   "Dynamic.OfflineUpdate.StatePreparedMissingRecovery": "平板处于已准备状态，但本机缺少匹配的恢复资料，请重新点击“准备升级”导出恢复资料。",
@@ -1363,5 +1365,5 @@
   "Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse": "平板未报告通过只读预检（阶段：{0}）。",
   "Dynamic.OfflineUpdate.ErrorPreflightRequired": "请先校验升级包并通过只读预检，再准备本次升级。",
   "Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater": "平板上的离线升级组件不支持升级包预检（版本 {0}）。请先更新该组件，再准备本次升级。",
-  "Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired": "平板上的离线升级服务版本过低：不支持准备升级所依赖的只读预检步骤。公钥连接无法安装或验证该服务。\n\n请改用密码连接并连接一次，以安装或验证离线升级服务。主机密钥确认流程不变，在你确认之前不会发送密码。完成后公钥连接即可正常使用。"
+  "Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired": "平板上的离线升级服务版本过低：不支持准备升级所依赖的只读预检步骤。公钥连接无法安装或验证该服务。\n\n已切换到自定义账号密码，请连接一次以安装或验证离线升级服务。主机密钥确认流程不变，在你确认之前不会发送密码。完成后公钥连接即可正常使用。"
 }

@@ -1289,8 +1289,10 @@
   "Dynamic.OfflineUpdate.Value": "{0}",
   "Dynamic.OfflineUpdate.Phase.Uploaded": "Package uploaded",
   "Dynamic.OfflineUpdate.PackageValidated": "Version {0} (Release: {1})",
-  "Dynamic.OfflineUpdate.ErrorInvalidConnectionFields": "Please provide a valid port and username, plus the password or the key and known_hosts paths required by the selected authentication mode (Host may be left blank for automatic USB network detection).",
-  "Dynamic.OfflineUpdate.ErrorPasswordRequired": "Enter the tablet SSH password.",
+  "Dynamic.OfflineUpdate.ErrorWifiAddressRequired": "Enter the tablet Wi-Fi address.",
+  "Dynamic.OfflineUpdate.ErrorWifiPortInvalid": "Enter a Wi-Fi port between 1 and 65535.",
+  "Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired": "Enter both the account and the password for the custom sign-in.",
+  "Dynamic.OfflineUpdate.ErrorKeyCredentialsRequired": "Enter the username, private key and known_hosts file for SSH key sign-in.",
   "Dynamic.OfflineUpdate.HostKeyNewPrompt": "First connection to {0}:{1}.\n\nHost key type: ssh-ed25519\nHost key fingerprint:\n{2}\n\nCompare this fingerprint with the tablet before trusting it. Only this host public key is stored, and no password is sent before you approve.",
   "Dynamic.OfflineUpdate.HostKeyChangedPrompt": "The host key presented by {0}:{1} has changed.\n\nNew fingerprint:\n{2}\nPreviously trusted fingerprint:\n{3}\n\nThis can happen after a reinstall or when a different device answers on this address. Approve only if you expect this change; no password is sent before you approve.",
   "Dynamic.OfflineUpdate.ErrorHostKeyRejected": "The tablet host key was not approved, so the connection was aborted without sending the password. {0}",
@@ -1299,7 +1301,7 @@
   "Dynamic.OfflineUpdate.ErrorSudoUnavailable": "The tablet could not start or deploy the updater through sudo for this account. When a password is required, the installer sends it once only after sudo explicitly prompts; it never guesses or retries. Check the account's sudo authorization. {0}",
   "Dynamic.OfflineUpdate.ErrorConnectTimeout": "The SSH connection or updater startup timed out. Check the address and try again. {0}",
   "Dynamic.OfflineUpdate.ErrorConnectFailed": "The SSH connection to the tablet failed. {0}",
-  "Dynamic.OfflineUpdate.DefaultCredentialRejected": "The factory default credentials were rejected once. Enter the tablet username and password, then connect again.",
+  "Dynamic.OfflineUpdate.DefaultCredentialRejected": "The factory default account was rejected. Custom account and password is now selected; enter the tablet password and connect again.",
   "Dynamic.OfflineUpdate.ErrorUsbConnection": "USB network detection failed: {0}",
   "Dynamic.OfflineUpdate.Phase.Preparing": "Preparing upgrade",
   "Dynamic.OfflineUpdate.StatePreparedMissingRecovery": "Tablet is prepared, but matching local recovery data is missing. Click Prepare upgrade to export recovery data.",
@@ -1363,5 +1365,5 @@
   "Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse": "The tablet did not report a passed read-only preflight (phase: {0}).",
   "Dynamic.OfflineUpdate.ErrorPreflightRequired": "Validate the upgrade package and pass the read-only preflight before preparing this upgrade.",
   "Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater": "The tablet's offline update component does not support package preflight (version {0}). Update that component on the tablet before preparing this upgrade.",
-  "Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired": "The tablet's installed offline update service is older than this installer requires: it does not support the preflight step that preparing an upgrade depends on. A public-key connection cannot install or verify that service.\n\nSwitch to the password connection and connect once to install or verify the offline update service. The host-key approval is unchanged and no password is sent before you approve it. After that, the public-key connection works again."
+  "Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired": "The tablet's installed offline update service is older than this installer requires: it does not support the preflight step that preparing an upgrade depends on. A public-key connection cannot install or verify that service.\n\nCustom account and password is now selected; connect once to install or verify the offline update service. The host-key approval is unchanged and no password is sent before you approve it. After that, the public-key connection works again."
 }

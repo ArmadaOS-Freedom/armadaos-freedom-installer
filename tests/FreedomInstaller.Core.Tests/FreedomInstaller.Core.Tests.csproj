@@ -55,6 +55,20 @@
     <!-- Same reason: the offline update receipt classification helper is plain BCL + System.Text.Json;
          linking it lets OfflineUpdateUiStateTests exercise the real production gate headlessly. -->
     <Compile Include="..\..\src\FreedomInstaller.App\OfflineUpdateUiState.cs" Link="OfflineUpdateUiState.cs" />
+    <!-- Same reason: the connection panel decision helper is plain BCL code, so the six transport/auth
+         combinations and the route/credential rules are exercised without a WPF window. -->
+    <Compile Include="..\..\src\FreedomInstaller.App\OfflineUpdateConnectionUiState.cs" Link="OfflineUpdateConnectionUiState.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The connection panel is declared in XAML and wired in a partial class. Embedding the exact
+         sources lets the single-connect-action test read the real wiring without constructing WPF. -->
+    <EmbeddedResource Include="..\..\src\FreedomInstaller.App\OfflineUpgradeView.xaml"
+                      LogicalName="FreedomInstaller.Tests.OfflineUpgradeView.xaml"
+                      Link="OfflineUpgradeView.xaml" />
+    <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.OfflineUpgrade.cs"
+                      LogicalName="FreedomInstaller.Tests.MainWindow.OfflineUpgrade.cs"
+                      Link="MainWindow.OfflineUpgrade.cs" />
   </ItemGroup>
 
   <ItemGroup>

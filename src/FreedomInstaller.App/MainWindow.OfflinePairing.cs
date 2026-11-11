@@ -28,114 +28,40 @@ namespace FreedomInstaller.App
         private void OnOfflinePairingReceiptChanged(object sender, System.Windows.Controls.TextChangedEventArgs e) =>
             RefreshOfflineUpgradeActions();
 
-        private async void OnConnectOfflineUsbAsync(object sender, RoutedEventArgs e)
+        /// <summary>
+        /// The USB SSH-key route with no manual key files: discover the exact USB
+        /// endpoint, then reuse the existing one-time public-key pairing flow.
+        /// Supplying key files instead is an explicit key connection and never
+        /// reaches this method.
+        /// </summary>
+        private async Task BeginOfflineUsbKeyEnrollmentAsync(CancellationToken ct)
         {
-            if (_busy || _offlineSsh != null)
-                return;
+            ClearOfflinePairing();
 
-            bool keyMode = SelectedOfflineAuthMode == OfflineUpdateSshAuthMode.PublicKey;
-            await RunOfflineUpgradeAsync(async (_, ct) =>
+            // Host-key discovery runs ssh-keyscan, so it belongs only to the key
+            // flow; the password flow must work on Windows hosts without OpenSSH.
+            var candidate = await OfflineUpdateSshEnrollment.DiscoverUsbHostAsync(_runner, token: ct);
+
+            // Existing one-time public-key pairing stays available unchanged.
+            var identity = await OfflineUpdateSshIdentityStore.EnsureAsync(
+                Path.Combine(BundledTools.GetCacheRoot(), "connections", "offline-upgrade"), _runner, token: ct);
+            var keyOptions = OfflineUpdateSshTrustStore.TryLoadUsbHost(candidate, identity);
+            if (keyOptions == null)
             {
-                ClearOfflinePairing();
+                _offlinePairingCandidate = candidate;
+                _offlinePairingIdentity = identity;
+                OfflineUpgradePanel.PairingPanel.Visibility = Visibility.Visible;
+                OfflineUpgradePanel.PairingCommandBox.Text =
+                    OfflineUpdateSshEnrollment.BuildAuthorizationCommand(identity.PublicKey.PublicKey);
+                SetText(OfflineUpgradePanel.PairingHostText, "Dynamic.OfflineUpdate.PairingFingerprints",
+                    candidate.HostKey.Fingerprint, identity.PublicKey.Fingerprint);
+                SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.PairingNeeded");
+                AppendOfflineLog("Dynamic.OfflineUpdate.PairingNeeded");
+                RefreshOfflineUpgradeActions();
+                return;
+            }
 
-                if (keyMode)
-                {
-                    // Host-key discovery runs ssh-keyscan, so it belongs only to
-                    // the key flow; the password flow must work on Windows hosts
-                    // without OpenSSH installed.
-                    var candidate = await OfflineUpdateSshEnrollment.DiscoverUsbHostAsync(_runner, token: ct);
-
-                    // Existing one-time public-key pairing stays available unchanged.
-                    var identity = await OfflineUpdateSshIdentityStore.EnsureAsync(
-                        Path.Combine(BundledTools.GetCacheRoot(), "connections", "offline-upgrade"), _runner, token: ct);
-                    var keyOptions = OfflineUpdateSshTrustStore.TryLoadUsbHost(candidate, identity);
-                    if (keyOptions == null)
-                    {
-                        _offlinePairingCandidate = candidate;
-                        _offlinePairingIdentity = identity;
-                        OfflineUpgradePanel.PairingPanel.Visibility = Visibility.Visible;
-                        OfflineUpgradePanel.PairingCommandBox.Text =
-                            OfflineUpdateSshEnrollment.BuildAuthorizationCommand(identity.PublicKey.PublicKey);
-                        SetText(OfflineUpgradePanel.PairingHostText, "Dynamic.OfflineUpdate.PairingFingerprints",
-                            candidate.HostKey.Fingerprint, identity.PublicKey.Fingerprint);
-                        SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.PairingNeeded");
-                        AppendOfflineLog("Dynamic.OfflineUpdate.PairingNeeded");
-                        RefreshOfflineUpgradeActions();
-                        return;
-                    }
-
-                    await ConnectOfflineOptionsAsync(keyOptions, ct);
-                    return;
-                }
-
-                OfflineUpdateUsbEndpoint endpoint;
-                try
-                {
-                    endpoint = await OfflineUpdateUsbDiscovery.FindSingleAsync(_runner, token: ct);
-                }
-                catch (IOException ex)
-                {
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorUsbConnection", ex.Message));
-                }
-
-                var defaultCredential = OfflineUpdateSshDefaultCredentials.Instance;
-                string enteredUser = OfflineUpgradePanel.UserBox.Text.Trim();
-                string enteredPassword = OfflineUpgradePanel.PasswordBox.Password;
-                bool manualCredentials = OfflineUpdateSshAuthPolicy.HasManualCredentialInput(enteredUser, enteredPassword);
-
-                if (enteredPassword.Length > 0 && string.IsNullOrEmpty(enteredUser))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorInvalidConnectionFields"));
-
-                string endpointKey = OfflineUpdateSshAuthPolicy.EndpointKey(endpoint.Host, 22);
-
-                if (manualCredentials && enteredPassword.Length == 0)
-                {
-                    // The user named an account. Never replace it with the
-                    // factory account behind their back; ask for the password.
-                    ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.ErrorPasswordRequired", setDefaultUserName: false);
-                    return;
-                }
-
-                bool usingDefault = !manualCredentials &&
-                    OfflineUpdateSshAuthPolicy.ShouldAttemptDefaultCredential(
-                        OfflineUpdateSshAuthMode.Password,
-                        credentialsSuppliedByUser: false,
-                        defaultAlreadyAttempted: _offlineDefaultCredentialRejected.Contains(endpointKey));
-
-                if (!manualCredentials && !usingDefault)
-                {
-                    ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.DefaultCredentialRejected", setDefaultUserName: true);
-                    return;
-                }
-
-                var options = new OfflineUpdateSshPasswordOptions(
-                    endpoint.Host,
-                    22,
-                    usingDefault ? defaultCredential.UserName : enteredUser,
-                    usingDefault ? defaultCredential.Password : enteredPassword,
-                    GetOfflineHostTrustDirectory(),
-                    endpoint.LocalAddress)
-                {
-                    ApproveHostKey = ApproveOfflineSshHostKeyAsync,
-                };
-
-                // Only the user-entered secret is cleared here; the public factory
-                // credential is product configuration, not a stored user secret.
-                if (!usingDefault)
-                    OfflineUpgradePanel.PasswordBox.Clear();
-
-                try
-                {
-                    await ConnectOfflinePasswordAsync(options, ct);
-                }
-                catch (InvalidOperationException ex) when (usingDefault && IsOfflinePasswordRejection(ex))
-                {
-                    // Only a real authentication rejection consumes the single
-                    // automatic attempt for this endpoint.
-                    _offlineDefaultCredentialRejected.Add(endpointKey);
-                    ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.DefaultCredentialRejected", setDefaultUserName: true);
-                }
-            });
+            await ConnectOfflineOptionsAsync(keyOptions, ct);
         }
 
         private async void OnConfirmOfflinePairingAsync(object sender, RoutedEventArgs e)
@@ -162,6 +88,8 @@ namespace FreedomInstaller.App
                 var options = OfflineUpdateSshTrustStore.TrustUsbHost(candidate, identity, receipt);
                 await ConnectOfflineOptionsAsync(options, ct);
             });
+
+            FocusOfflinePasswordIfPending();
         }
 
         private void OnCopyOfflinePairingCommand(object sender, RoutedEventArgs e)
@@ -353,27 +281,30 @@ namespace FreedomInstaller.App
                 MessageBoxImage.Information);
 
             // The password route is the only one allowed to install or verify
-            // the updater, so its fields are revealed instead of leaving the
-            // key inputs in place. The existing manual/default password
+            // the updater, so the custom account is selected explicitly instead
+            // of leaving the key inputs in place. The existing password
             // workflow and its single host-key decision stay unchanged.
-            OfflineUpgradePanel.AuthModeCombo.SelectedIndex = OfflineUpdateSshAuthPolicy.PasswordSelectionIndex;
-            ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired", setDefaultUserName: true);
+            OfflineUpgradePanel.CredentialCombo.SelectedIndex = OfflineUpdateConnectionUiState.CustomCredentialIndex;
+            ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired");
         }
 
         /// <summary>
-        /// Clears only the secret field and asks the user to enter it. The
-        /// factory account name is shown only when the automatic attempt was
-        /// the one that failed; a name the user typed is never overwritten.
+        /// Selects the custom account explicitly, clears only the secret field
+        /// and asks the user to enter it. The factory account name is prefilled
+        /// only when the field is empty; a name the user typed is never
+        /// overwritten. Focus is applied once the busy state releases the
+        /// fields, so the visible password box is the next input.
         /// </summary>
-        private void ShowOfflinePasswordEntry(string messageKey, bool setDefaultUserName)
+        private void ShowOfflinePasswordEntry(string messageKey)
         {
             if (OfflineUpgradePanel == null)
                 return;
 
             OfflineUpgradePanel.PasswordBox.Clear();
-            if (setDefaultUserName && string.IsNullOrEmpty(OfflineUpgradePanel.UserBox.Text))
+            OfflineUpgradePanel.CredentialCombo.SelectedIndex = OfflineUpdateConnectionUiState.CustomCredentialIndex;
+            if (string.IsNullOrEmpty(OfflineUpgradePanel.UserBox.Text))
                 OfflineUpgradePanel.UserBox.Text = OfflineUpdateSshDefaultCredentials.Instance.UserName;
-            OfflineUpgradePanel.PasswordBox.Focus();
+            _offlineFocusPasswordOnIdle = true;
             SetText(OfflineUpgradePanel.StateText, messageKey);
             AppendOfflineLog(messageKey);
             RefreshOfflineUpgradeActions();
