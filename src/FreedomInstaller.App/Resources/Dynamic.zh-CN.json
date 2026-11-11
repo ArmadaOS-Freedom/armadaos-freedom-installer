@@ -1362,5 +1362,6 @@
   "Dynamic.OfflineUpdate.ErrorPreflightFailed": "平板拒绝了升级包只读预检。{0}",
   "Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse": "平板未报告通过只读预检（阶段：{0}）。",
   "Dynamic.OfflineUpdate.ErrorPreflightRequired": "请先校验升级包并通过只读预检，再准备本次升级。",
-  "Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater": "平板上的离线升级组件不支持升级包预检（版本 {0}）。请先更新该组件，再准备本次升级。"
+  "Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater": "平板上的离线升级组件不支持升级包预检（版本 {0}）。请先更新该组件，再准备本次升级。",
+  "Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired": "平板上的离线升级服务版本过低：不支持准备升级所依赖的只读预检步骤。公钥连接无法安装或验证该服务。\n\n请改用密码连接并连接一次，以安装或验证离线升级服务。主机密钥确认流程不变，在你确认之前不会发送密码。完成后公钥连接即可正常使用。"
 }

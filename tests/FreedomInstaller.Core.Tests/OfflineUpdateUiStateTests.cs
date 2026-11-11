@@ -455,6 +455,51 @@ public class OfflineUpdateUiStateTests
         Assert.Equal(expected, OfflineUpdateUiState.IsUpdaterVersionAtLeast(info, "0.8.0"));
     }
 
+    // ---------- Runtime capability gate ----------
+
+    [Fact]
+    public void PreflightSessionCapability_AdvertisedByTheUpdater_IsAccepted()
+    {
+        var info = Parse("{\"updaterVersion\":\"0.8.0\",\"capabilities\":[\"preflight-session-v1\"]}")!.Value;
+        Assert.True(OfflineUpdateUiState.SupportsPreflightSession(info));
+
+        // Unknown future capabilities are ignored rather than rejected.
+        var withExtras = Parse("{\"capabilities\":[\"something-new\",\"preflight-session-v1\"]}")!.Value;
+        Assert.True(OfflineUpdateUiState.SupportsPreflightSession(withExtras));
+    }
+
+    [Fact]
+    public void SameVersionWithoutTheCapability_IsRejectedEvenThoughTheVersionPasses()
+    {
+        // A 0.8 updater can lack the optional preflight session parameter, so
+        // the version string alone must never be accepted as proof.
+        var info = Parse("{\"updaterVersion\":\"0.8.0\"}")!.Value;
+        Assert.True(OfflineUpdateUiState.IsUpdaterVersionAtLeast(info, "0.8.0"));
+        Assert.False(OfflineUpdateUiState.SupportsPreflightSession(info));
+
+        var differentCapability =
+            Parse("{\"updaterVersion\":\"0.8.0\",\"capabilities\":[\"preflight-session-v2\"]}")!.Value;
+        Assert.False(OfflineUpdateUiState.SupportsPreflightSession(differentCapability));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"capabilities\":[]}")]
+    [InlineData("{\"capabilities\":null}")]
+    [InlineData("{\"capabilities\":\"preflight-session-v1\"}")]
+    [InlineData("{\"capabilities\":{\"preflight-session-v1\":true}}")]
+    [InlineData("{\"capabilities\":[1]}")]
+    [InlineData("{\"capabilities\":[null]}")]
+    [InlineData("{\"capabilities\":[\"preflight-session-v1\",5]}")]
+    [InlineData("{\"capabilities\":[\"preflight-session-v1 \"]}")]
+    [InlineData("{\"capabilities\":[\"PREFLIGHT-SESSION-V1\"]}")]
+    [InlineData("[]")]
+    [InlineData("\"preflight-session-v1\"")]
+    public void MissingOrMalformedCapabilityAdvertisement_IsRejected(string json)
+    {
+        Assert.False(OfflineUpdateUiState.SupportsPreflightSession(Parse(json)!.Value));
+    }
+
     // ---------- Read-only preflight gate ----------
 
     private const string ExactPreflight =

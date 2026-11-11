@@ -104,6 +104,40 @@ namespace FreedomInstaller.App
         }
 
         /// <summary>
+        /// The runtime capability that proves the connected offline updater
+        /// accepts the optional <c>sessionId</c> on <c>preflight</c>. It is
+        /// reported by the device service itself; a version string is not
+        /// evidence, because a build can share a version and still lack the
+        /// parameter.
+        /// </summary>
+        internal const string PreflightSessionCapability = "preflight-session-v1";
+
+        /// <summary>
+        /// True only when the device info advertises
+        /// <see cref="PreflightSessionCapability"/> in a well-formed string
+        /// array. A missing, non-array or mixed-type advertisement is treated
+        /// as unsupported: the caller must never assume the capability.
+        /// </summary>
+        internal static bool SupportsPreflightSession(JsonElement info)
+        {
+            if (info.ValueKind != JsonValueKind.Object ||
+                !info.TryGetProperty("capabilities", out JsonElement capabilities) ||
+                capabilities.ValueKind != JsonValueKind.Array)
+                return false;
+
+            bool advertised = false;
+            foreach (JsonElement entry in capabilities.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.String)
+                    return false;
+                if (string.Equals(entry.GetString(), PreflightSessionCapability, StringComparison.Ordinal))
+                    advertised = true;
+            }
+
+            return advertised;
+        }
+
+        /// <summary>
         /// The exact read-only preflight success contract. Only a v1 response
         /// that explicitly reports the passed phase with no boot write started
         /// unlocks Prepare. A legacy or malformed response, a device-side

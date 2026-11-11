@@ -184,6 +184,22 @@ namespace FreedomInstaller.App
         {
             AppendOfflineLog("Dynamic.OfflineUpdate.LogConnecting", opts.Host, opts.Port);
             var conn = await OfflineUpdateSshConnection.ConnectAsync(opts, null, ct);
+
+            // The authenticated info must prove the installed updater accepts
+            // the preflight session parameter before this connection is ever
+            // presented as usable. A key connection cannot install or repair
+            // the updater (the pairing key may be a forced command that can
+            // neither upload nor run sudo), so a device that does not
+            // advertise the capability is refused here instead of failing
+            // later in preflight or being accepted on its version alone.
+            if (!OfflineUpdateUiState.SupportsPreflightSession(conn.DeviceInfo))
+            {
+                await conn.DisposeAsync();
+                ClearOfflinePairing();
+                ShowOfflineUpdaterInstallPrompt();
+                return;
+            }
+
             await FinishOfflineConnectionAsync(conn, ct);
         }
 
@@ -312,6 +328,36 @@ namespace FreedomInstaller.App
                     MessageBoxImage.Warning,
                     MessageBoxResult.No) == MessageBoxResult.Yes;
             }).Task;
+        }
+
+        /// <summary>
+        /// The tablet answered <c>info</c> but does not advertise the
+        /// preflight-session capability this installer requires, so its
+        /// installed updater is older than the gates below assume. The
+        /// public-key route cannot deploy or verify it, while the password
+        /// route runs the build-supplied bootstrap after the same explicit
+        /// host-key approval. Nothing is retried or downgraded automatically:
+        /// the user is told why and offered the password route once.
+        /// </summary>
+        private void ShowOfflineUpdaterInstallPrompt()
+        {
+            if (OfflineUpgradePanel == null)
+                return;
+
+            string message = T("Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired");
+            MessageBox.Show(
+                this,
+                message,
+                T("Static.OfflineUpdate.Title"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            // The password route is the only one allowed to install or verify
+            // the updater, so its fields are revealed instead of leaving the
+            // key inputs in place. The existing manual/default password
+            // workflow and its single host-key decision stay unchanged.
+            OfflineUpgradePanel.AuthModeCombo.SelectedIndex = OfflineUpdateSshAuthPolicy.PasswordSelectionIndex;
+            ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired", setDefaultUserName: true);
         }
 
         /// <summary>

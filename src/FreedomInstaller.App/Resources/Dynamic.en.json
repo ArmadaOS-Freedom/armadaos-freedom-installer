@@ -1362,5 +1362,6 @@
   "Dynamic.OfflineUpdate.ErrorPreflightFailed": "The tablet rejected the read-only package preflight. {0}",
   "Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse": "The tablet did not report a passed read-only preflight (phase: {0}).",
   "Dynamic.OfflineUpdate.ErrorPreflightRequired": "Validate the upgrade package and pass the read-only preflight before preparing this upgrade.",
-  "Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater": "The tablet's offline update component does not support package preflight (version {0}). Update that component on the tablet before preparing this upgrade."
+  "Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater": "The tablet's offline update component does not support package preflight (version {0}). Update that component on the tablet before preparing this upgrade.",
+  "Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired": "The tablet's installed offline update service is older than this installer requires: it does not support the preflight step that preparing an upgrade depends on. A public-key connection cannot install or verify that service.\n\nSwitch to the password connection and connect once to install or verify the offline update service. The host-key approval is unchanged and no password is sent before you approve it. After that, the public-key connection works again."
 }
