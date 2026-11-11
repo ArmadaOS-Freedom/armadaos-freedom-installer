@@ -11,6 +11,7 @@ import io
 import json
 import os
 import sys
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -56,6 +57,45 @@ def _write(p, data):
         data = data.encode("utf-8")
     p.write_bytes(data)
     return p
+
+
+def _offline_manifest(**overrides):
+    document = {
+        "schemaVersion": 1,
+        "bundle": "armada-offline-updater",
+        "version": "0.8.0",
+        "format": "tar.gz",
+        "entry": "usr/libexec/armada/armada-offline-update",
+        "files": [
+            {
+                "path": "usr/libexec/armada/armada-offline-update",
+                "bytes": 1,
+                "sha256": "0" * 64,
+                "mode": "0755",
+            }
+        ],
+    }
+    document.update(overrides)
+    return document
+
+
+def _tar_gz_bytes(members):
+    """Build a real tar.gz from (name, bytes[, mode]) tuples."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for member in members:
+            info = tarfile.TarInfo(member[0])
+            info.size = len(member[1])
+            info.mode = member[2] if len(member) > 2 else 0o644
+            archive.addfile(info, io.BytesIO(member[1]))
+    return buffer.getvalue()
+
+
+def _offline_bundle_bytes(capabilities=("preflight-session-v1",), **overrides):
+    document = _offline_manifest(**overrides)
+    if capabilities is not None:
+        document["capabilities"] = list(capabilities)
+    return _tar_gz_bytes([("manifest.json", json.dumps(document).encode("utf-8"))])
 
 
 def _build_fixture_repo(root):
@@ -311,7 +351,7 @@ class PrepareTests(unittest.TestCase):
             root / "armada-offline-bootstrap", b"#!/bin/sh\necho bootstrap\n"
         )
         bundle = _write(
-            root / "armada-offline-updater.tar.gz", b"fake updater bundle\n"
+            root / "armada-offline-updater.tar.gz", _offline_bundle_bytes()
         )
         return script, bundle
 
@@ -513,6 +553,90 @@ class PrepareTests(unittest.TestCase):
                 fetch_mock.assert_not_called()
                 run_mock.assert_not_called()
 
+    def _prepare_with_bundle(self, bundle_bytes):
+        """Prepare with a paired script and this exact bundle payload."""
+        offline = self.work_parent / "offline & inputs"
+        script = _write(offline / "armada-offline-bootstrap", b"#!/bin/sh\n")
+        bundle = _write(offline / "armada-offline-updater.tar.gz", bundle_bytes)
+        with mock.patch.object(
+            fetch_build_inputs, "fetch_all"
+        ) as fetch_mock, mock.patch.object(
+            build_installer, "_run"
+        ) as run_mock:
+            with self.assertRaises(SystemExit) as caught:
+                build_installer.prepare(
+                    self.repo_root,
+                    self.work_dir,
+                    manifest_path=(
+                        self.repo_root / "maintenance" / "build-inputs.json"
+                    ),
+                    offline_bootstrap_script=str(script),
+                    offline_updater_bundle=str(bundle),
+                )
+        fetch_mock.assert_not_called()
+        run_mock.assert_not_called()
+        return str(caught.exception)
+
+    def test_offline_bundle_without_capability_fails_before_build(self):
+        # The earlier 0.8.0 bundle that only listed files must not be accepted.
+        message = self._prepare_with_bundle(_offline_bundle_bytes(capabilities=None))
+        self.assertIn(build_installer._OFFLINE_REQUIRED_CAPABILITY, message)
+
+    def test_offline_bundle_with_malformed_capabilities_fails_before_build(self):
+        cases = (
+            "preflight-session-v1",
+            [],
+            [1],
+            ["Preflight Session"],
+            ["preflight-session-v1", "preflight-session-v1"],
+            ["a" * (build_installer._OFFLINE_MAX_CAPABILITY_LENGTH + 1)],
+            ["cap-%d" % index
+             for index in range(build_installer._OFFLINE_MAX_CAPABILITIES + 1)],
+        )
+        for value in cases:
+            with self.subTest(capabilities=value):
+                message = self._prepare_with_bundle(
+                    _offline_bundle_bytes(capabilities=value))
+                self.assertIn("offline bundle error", message)
+
+    def test_offline_bundle_identity_and_version_are_validated(self):
+        cases = (
+            {"schemaVersion": 2},
+            {"bundle": "other-bundle"},
+            {"version": "not-a-version"},
+            {"entry": "usr/bin/other"},
+        )
+        for overrides in cases:
+            with self.subTest(**overrides):
+                message = self._prepare_with_bundle(
+                    _offline_bundle_bytes(**overrides))
+                self.assertIn("offline bundle error", message)
+
+    def test_offline_bundle_with_duplicate_manifest_fails_before_build(self):
+        data = json.dumps(_offline_manifest()).encode("utf-8")
+        message = self._prepare_with_bundle(
+            _tar_gz_bytes([("manifest.json", data), ("manifest.json", data)]))
+        self.assertIn("more than one manifest.json", message)
+
+    def test_offline_bundle_with_oversized_manifest_fails_before_build(self):
+        data = b" " * (build_installer._OFFLINE_MAX_MANIFEST_BYTES + 1)
+        message = self._prepare_with_bundle(_tar_gz_bytes([("manifest.json", data)]))
+        self.assertIn("size is out of bounds", message)
+
+    def test_offline_bundle_with_non_regular_manifest_fails_before_build(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            info = tarfile.TarInfo("manifest.json")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "elsewhere.json"
+            archive.addfile(info)
+        message = self._prepare_with_bundle(buffer.getvalue())
+        self.assertIn("not a regular file", message)
+
+    def test_offline_bundle_that_is_not_a_tar_gz_fails_before_build(self):
+        message = self._prepare_with_bundle(b"not a tar.gz\n")
+        self.assertIn("not a readable tar.gz", message)
+
 
 def _fake_split_scripts(argv, cwd, env, phase):
     '''Distinguishable _run hook for the CLI test that yields fresh outputs.'''
@@ -566,7 +690,7 @@ class CliTests(unittest.TestCase):
             )
             bundle = _write(
                 tmp / "offline & inputs" / "armada-offline-updater.tar.gz",
-                b"fake updater bundle\n",
+                _offline_bundle_bytes(),
             )
 
             published_calls = []
@@ -633,7 +757,8 @@ class CliTests(unittest.TestCase):
             work_dir = tmp / "work dir"
             output_dir = tmp / "publish out"
             script = _write(tmp / "offline" / "bootstrap", b"#!/bin/sh\n")
-            bundle = _write(tmp / "offline" / "updater.tar.gz", b"bundle\n")
+            bundle = _write(tmp / "offline" / "updater.tar.gz",
+                            _offline_bundle_bytes())
 
             cases = (
                 [],

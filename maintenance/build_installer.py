@@ -24,8 +24,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import uuid
 import zipfile
@@ -66,6 +68,23 @@ _OFFLINE_PROPERTY_NAMES = (
 )
 
 _OFFLINE_ASSET_SOURCE = "system build_files/build-offline-updater-bundle.py"
+
+# The bundle contract is explicit.  A bundle manifest names the capabilities
+# the runtime it carries provides; the installer refuses any bundle that does
+# not declare the one it requires, so an older bundle that merely unpacks is
+# not accepted and cannot fail later during a resumed upgrade.
+_OFFLINE_MANIFEST_NAME = "manifest.json"
+_OFFLINE_BUNDLE_NAME = "armada-offline-updater"
+_OFFLINE_ENTRY = "usr/libexec/armada/armada-offline-update"
+_OFFLINE_REQUIRED_CAPABILITY = "preflight-session-v1"
+_OFFLINE_MAX_BUNDLE_BYTES = 512 * 1024 * 1024
+_OFFLINE_MAX_MEMBER_BYTES = 128 * 1024 * 1024
+_OFFLINE_MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+_OFFLINE_MAX_MEMBERS = 4096
+_OFFLINE_MAX_CAPABILITIES = 16
+_OFFLINE_MAX_CAPABILITY_LENGTH = 64
+_OFFLINE_CAPABILITY = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z", re.ASCII)
+_OFFLINE_VERSION = re.compile(r"\d+(?:\.\d+)*\Z", re.ASCII)
 
 _TOOL_NAMES = ("client", "packer", "unpacker")
 
@@ -172,13 +191,115 @@ def _validate_vendor_files(repo_root, manifest):
     return results
 
 
+def _offline_capability_message():
+    return (
+        f"bundle does not declare the required capability "
+        f"{_OFFLINE_REQUIRED_CAPABILITY!r}; rebuild it with system "
+        f"build_files/build-offline-updater-bundle.py from a runtime that "
+        f"supports a preflight sessionId"
+    )
+
+
+def _offline_manifest_document(bundle):
+    """Read the one manifest.json from a bundle tar.gz without extracting it.
+
+    Only the manifest member is read into memory, and every bound is enforced
+    before its bytes are consumed.  Nothing is written or executed.
+    """
+    prefix = f"offline bundle error: {bundle}: "
+    try:
+        size = Path(bundle).stat().st_size
+    except OSError as error:
+        raise SystemExit(prefix + f"cannot read bundle: {error}")
+    if not 0 < size <= _OFFLINE_MAX_BUNDLE_BYTES:
+        raise SystemExit(prefix + "bundle size is out of bounds")
+    raw = None
+    count = 0
+    try:
+        with tarfile.open(str(bundle), mode="r:gz") as archive:
+            for member in archive:
+                count += 1
+                if count > _OFFLINE_MAX_MEMBERS:
+                    raise SystemExit(prefix + "bundle has too many members")
+                if member.size > _OFFLINE_MAX_MEMBER_BYTES:
+                    raise SystemExit(prefix + "bundle member size is out of bounds")
+                if member.name != _OFFLINE_MANIFEST_NAME:
+                    continue
+                if raw is not None:
+                    raise SystemExit(
+                        prefix + f"bundle has more than one {_OFFLINE_MANIFEST_NAME}"
+                    )
+                if not member.isreg():
+                    raise SystemExit(
+                        prefix + f"{_OFFLINE_MANIFEST_NAME} is not a regular file"
+                    )
+                if not 0 < member.size <= _OFFLINE_MAX_MANIFEST_BYTES:
+                    raise SystemExit(
+                        prefix + f"{_OFFLINE_MANIFEST_NAME} size is out of bounds"
+                    )
+                raw = archive.extractfile(member).read(_OFFLINE_MAX_MANIFEST_BYTES + 1)
+                if len(raw) > _OFFLINE_MAX_MANIFEST_BYTES:
+                    raise SystemExit(
+                        prefix + f"{_OFFLINE_MANIFEST_NAME} exceeds its size limit"
+                    )
+    except (OSError, tarfile.TarError) as error:
+        raise SystemExit(prefix + f"bundle is not a readable tar.gz: {error}")
+    if raw is None:
+        raise SystemExit(prefix + f"bundle has no {_OFFLINE_MANIFEST_NAME}")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise SystemExit(prefix + f"{_OFFLINE_MANIFEST_NAME} is not valid JSON: {error}")
+
+
+def _validate_offline_manifest(bundle, document):
+    """Validate bundle identity, version and the required capability."""
+    prefix = f"offline bundle error: {bundle}: "
+    if not isinstance(document, dict):
+        raise SystemExit(prefix + "manifest must be a JSON object")
+    if document.get("schemaVersion") != 1:
+        raise SystemExit(prefix + "manifest schemaVersion must be 1")
+    if document.get("bundle") != _OFFLINE_BUNDLE_NAME:
+        raise SystemExit(prefix + f"manifest bundle must be {_OFFLINE_BUNDLE_NAME!r}")
+    version = document.get("version")
+    if not isinstance(version, str) or not _OFFLINE_VERSION.fullmatch(version):
+        raise SystemExit(prefix + "manifest version is not a version string")
+    if document.get("entry") != _OFFLINE_ENTRY:
+        raise SystemExit(prefix + f"manifest entry must be {_OFFLINE_ENTRY!r}")
+    files = document.get("files")
+    if not isinstance(files, list) or not files:
+        raise SystemExit(prefix + "manifest files must be a non-empty list")
+    capabilities = document.get("capabilities")
+    if not isinstance(capabilities, list):
+        raise SystemExit(prefix + _offline_capability_message())
+    if len(capabilities) > _OFFLINE_MAX_CAPABILITIES:
+        raise SystemExit(prefix + "manifest declares too many capabilities")
+    seen = set()
+    for capability in capabilities:
+        if (
+            not isinstance(capability, str)
+            or not capability
+            or len(capability) > _OFFLINE_MAX_CAPABILITY_LENGTH
+            or not _OFFLINE_CAPABILITY.fullmatch(capability)
+        ):
+            raise SystemExit(prefix + "manifest capabilities are malformed")
+        if capability in seen:
+            raise SystemExit(prefix + "manifest capabilities must be unique")
+        seen.add(capability)
+    if _OFFLINE_REQUIRED_CAPABILITY not in seen:
+        raise SystemExit(prefix + _offline_capability_message())
+
+
 def _validate_offline_inputs(script, bundle):
     """Validate the optional paired offline-bootstrap inputs.
 
     Both paths must be supplied together, and each must be an existing,
-    readable regular file.  This runs before the expensive build phases so a
-    typo never costs a full tool compilation.  Returns a mapping of props name
-    to the resolved absolute path, or an empty mapping when both are omitted.
+    readable regular file.  The bundle's manifest is then read in place from
+    the tar.gz - bounded, without extraction or execution - and must declare
+    the capability this installer requires.  This runs before the expensive
+    build phases so a typo or a stale bundle never costs a full tool
+    compilation.  Returns a mapping of props name to the resolved absolute
+    path, or an empty mapping when both are omitted.
     """
     if script is None and bundle is None:
         return {}
@@ -206,6 +327,8 @@ def _validate_offline_inputs(script, bundle):
         if not os.access(str(path), os.R_OK):
             raise SystemExit(f"offline assets error: {prop} is not readable: {path}")
         resolved[prop] = str(path.resolve())
+    bundle_path = resolved["BundledOfflineUpdaterBundle"]
+    _validate_offline_manifest(bundle_path, _offline_manifest_document(bundle_path))
     return resolved
 
 
