@@ -119,6 +119,45 @@ public sealed class DirectAospAblTrustTests
         Assert.False(AuthorizesRoot(proof!, "b", nodeB));
     }
 
+    /// <summary>
+    /// The proof authorizes only the vbmeta bytes it actually recorded. An otherwise valid proof whose
+    /// selected slot carries a different 64-hex vbmeta hash must refuse a genuinely resigned node of the real
+    /// backup, so stale evidence can never silently authorize a changed vbmeta.
+    /// </summary>
+    [Theory]
+    [InlineData("a")]
+    [InlineData("b")]
+    public async Task ChangedRecordedVbmetaCannotAuthorizeResignedNode(string slot)
+    {
+        using var fixture = new DirectAvbSourceTestFixture(DirectAvbSourceKind.Oem);
+        object node = await ResignOemRootAsync(fixture.Sources["vbmeta_" + slot]);
+
+        object? genuine = CreateDirectProof(
+            BootloaderState.Locked,
+            SelfSourcedBothSlots(),
+            OriginalRootKeys(fixture),
+            CurrentVbmeta(fixture),
+            DualKeyEvidenceForBothSlots());
+        Assert.NotNull(genuine);
+        Assert.True(AuthorizesRoot(genuine!, slot, node));
+
+        Dictionary<string, string> stale = CurrentVbmeta(fixture);
+        string recorded = stale[slot];
+        stale[slot] = (recorded[0] == '0' ? "1" : "0") + recorded[1..];
+        Assert.Equal(64, stale[slot].Length);
+        Assert.NotEqual(recorded, stale[slot]);
+
+        object? tampered = CreateDirectProof(
+            BootloaderState.Locked,
+            SelfSourcedBothSlots(),
+            OriginalRootKeys(fixture),
+            stale,
+            DualKeyEvidenceForBothSlots());
+        Assert.NotNull(tampered);
+
+        Assert.False(AuthorizesRoot(tampered!, slot, node));
+    }
+
     /// <summary>All original roots already use the AOSP key: the existing path owns them and no proof is made.</summary>
     [Fact]
     public void AllAospOriginalRootsReturnNull()
