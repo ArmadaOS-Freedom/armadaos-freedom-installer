@@ -36,14 +36,7 @@ public sealed class DirectAospFirstInstallIntegrationTests
     [Fact]
     public async Task LockedOemFirstInstallWithAospAblEvidenceSelectsAospResign()
     {
-        string fixturePath = Path.Combine(
-            AppContext.BaseDirectory,
-            FixtureRelativePath.Replace('/', Path.DirectorySeparatorChar));
-        Assert.True(
-            File.Exists(fixturePath),
-            "the synthetic ABL container is missing; generate it with "
-            + "`python validation/generate_direct_aosp_abl.py --key <avb-test-key.pem>`: " + fixturePath);
-
+        string fixturePath = RequireAblFixture();
         Assert.Equal(Model, _toolchain.Toolchain.Model);
 
         using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
@@ -66,7 +59,64 @@ public sealed class DirectAospFirstInstallIntegrationTests
         Assert.Equal(0, session.EdlRunner.ResetCount);
         Assert.Equal(6, session.NativeCommandCount);
 
+        AssertOriginalCaptureReadsBothLiveAbls(prepared);
         AssertAospSignedMetadataWithoutGblOrAblRoles(prepared);
+    }
+
+    /// <summary>
+    /// REVIEW02: a live loader that changed after the backup is refused by the existing pre-write recheck,
+    /// before any write is issued. Only the device's own abl_a bytes change; the local evidence stays intact.
+    /// </summary>
+    [Fact]
+    public async Task ChangedLiveAblIsRefusedBeforeAnyWrite()
+    {
+        string fixturePath = RequireAblFixture();
+        Assert.Equal(Model, _toolchain.Toolchain.Model);
+
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _toolchain,
+            _rawShared,
+            avbSourceKind: DirectAvbSourceKind.Oem,
+            observedFastbootLockState: BootloaderState.Locked,
+            ablFixturePath: fixturePath);
+
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+        Assert.Equal(InternalInstallStage.Prepared, session.Backend.Snapshot.Stage);
+        Assert.Equal(0, session.EdlRunner.Writes.Count);
+
+        // One byte of the live device copy changes after preparation; the length stays identical.
+        session.Device.MutateDirectSourceByte("abl_a", 0);
+
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            prepared.ConfirmationId,
+            userdataEraseConfirmed: true);
+
+        // The existing fresh-content gate stops the run at the recheck, so nothing is written or reset.
+        Assert.Equal(InternalInstallOutcome.Failed, result.Outcome);
+        Assert.Equal(InternalInstallWriteState.NoneIssued, result.WriteState);
+        Assert.Equal(0, session.EdlRunner.Writes.Count);
+        Assert.Equal(0, session.EdlRunner.ResetCount);
+
+        // The execute-direct read payload exists and really differs from the verified backup claim.
+        string liveRead = Path.Combine(prepared.EvidenceDirectory, "execute-direct-abl_a.bin");
+        Assert.True(File.Exists(liveRead), "the pre-write capture did not read the live ABL: " + liveRead);
+        string liveSha = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(liveRead)));
+        Assert.NotEqual(session.Backup.Files["abl_a"].Sha256, liveSha);
+    }
+
+    /// <summary>
+    /// REVIEW02: the original capture must actually read the live ABL of every selected source slot, so a
+    /// loader that changed after the backup cannot reach the write plan behind this proof.
+    /// </summary>
+    private static void AssertOriginalCaptureReadsBothLiveAbls(InternalInstallPrepared prepared)
+    {
+        foreach (string slot in new[] { "a", "b" })
+        {
+            string path = Path.Combine(prepared.EvidenceDirectory, "original-abl_" + slot + ".bin");
+            Assert.True(File.Exists(path), "the original capture did not read the live ABL: " + path);
+            Assert.True(new FileInfo(path).Length > 0, "the captured live ABL is empty: " + path);
+        }
     }
 
     /// <summary>
@@ -110,6 +160,19 @@ public sealed class DirectAospFirstInstallIntegrationTests
 
         // Two self-sourced slots, each with recovery, vbmeta_system and vbmeta.
         Assert.Equal(6, nodes);
+    }
+
+    /// <summary>Resolves the checked-in synthetic ABL container and fails with the generation command.</summary>
+    private static string RequireAblFixture()
+    {
+        string path = Path.Combine(
+            AppContext.BaseDirectory,
+            FixtureRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        Assert.True(
+            File.Exists(path),
+            "the synthetic ABL container is missing; generate it with "
+            + "`python validation/generate_direct_aosp_abl.py --key <avb-test-key.pem>`: " + path);
+        return path;
     }
 
     /// <summary>Reads the internal AOSP target pin by reflection so the test never duplicates it.</summary>

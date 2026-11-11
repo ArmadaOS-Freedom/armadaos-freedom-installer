@@ -19,23 +19,33 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
     private readonly string _model;
     private readonly Dictionary<string, string> _rootKeys;
     private readonly IReadOnlyDictionary<string, string> _vbmetaSha256;
+    private readonly IReadOnlyList<string> _ablGuardRoles;
     private readonly List<VerifiedEdlFile> _claims;
     private bool _disposed;
 
     private BootMaintenanceAblRecovery(InternalBackupSet? current, InternalBackupSet? original, string model,
         Dictionary<string, string> rootKeys, IReadOnlyDictionary<string, string> vbmetaSha256,
-        Dictionary<string, VerifiedEdlFile> replacements, List<VerifiedEdlFile> claims)
+        Dictionary<string, VerifiedEdlFile> replacements, List<VerifiedEdlFile> claims,
+        IReadOnlyList<string>? ablGuardRoles = null)
     {
         _current = current;
         _original = original;
         _model = model;
         _rootKeys = rootKeys;
         _vbmetaSha256 = vbmetaSha256;
+        _ablGuardRoles = Array.AsReadOnly((ablGuardRoles ?? Array.Empty<string>()).ToArray());
         Replacements = new ReadOnlyDictionary<string, VerifiedEdlFile>(replacements);
         _claims = claims;
     }
 
     internal IReadOnlyDictionary<string, VerifiedEdlFile> Replacements { get; }
+
+    /// <summary>
+    /// The exact <c>abl_{slot}</c> roles of the selected source slots. A direct proof reads them again in every
+    /// original-device capture, so a live loader that changed after the backup cannot receive AOSP metadata.
+    /// Always empty for a repair proof, which keeps its own guarded roles.
+    /// </summary>
+    internal IReadOnlyList<string> AblGuardRoles => _ablGuardRoles;
 
     internal static async Task<BootMaintenanceAblRecovery?> CreateAsync(
         EdlClient client, InternalBackupSet current, BootloaderState lockState,
@@ -111,9 +121,10 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
     /// <summary>
     /// First-install proof for a locked TB322FC whose current ABL already carries the AOSP key beside the
     /// OEM key. It reads only the current complete backup: no original or historical directory is opened,
-    /// no replacement is created and no ABL is ever substituted, restored or written. Every source slot
-    /// that still has an OEM original root must actually reference the AOSP key in that same slot's
-    /// current ABL; otherwise this returns null and the existing GBL / fail-closed gates decide.
+    /// no replacement is created and no ABL is ever substituted, restored or written. Every selected source
+    /// slot must reference the AOSP key in that same slot's current ABL, and both its vbmeta and ABL are kept
+    /// as held claims and named as direct guard roles; otherwise this returns null and the existing GBL /
+    /// fail-closed gates decide.
     /// </summary>
     internal static async Task<BootMaintenanceAblRecovery?> CreateDirectAsync(
         InternalBackupSet current,
@@ -141,12 +152,18 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         }
         if (roots.Count == 0) return null;
 
+        // An all-AOSP source map is owned by the existing eligibility path and buys no ABL evidence at all.
+        if (roots.Values.All(IsAosp)) return null;
+
         var referenced = new Dictionary<string, string[]>(StringComparer.Ordinal);
         var claims = new List<VerifiedEdlFile>();
         foreach (string slot in selected)
         {
             ct.ThrowIfCancellationRequested();
-            if (!roots.TryGetValue(slot, out string? root) || root is null || IsAosp(root)) continue;
+
+            // A selected source without its own non-empty authenticated root is not evidence; the existing
+            // GBL / fail-closed paths decide instead.
+            if (!roots.ContainsKey(slot)) return null;
 
             VerifiedEdlFile ablClaim;
             IReadOnlyList<EdlRawBootBuilder.AblAvbKeyFacts> keys;
@@ -162,6 +179,10 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
                 return null;
             }
 
+            // Every selected source slot must reference the AOSP key, including a mixed slot whose original
+            // root already is the AOSP key: the live ABL of both slots is guarded by the direct proof.
+            if (!keys.Any(key => IsAosp(key.KeySha256))) return null;
+
             claims.Add(ablClaim);
             claims.Add(Claim(current, "vbmeta_" + slot));
             referenced[slot] = keys.Select(key => key.KeySha256).ToArray();
@@ -171,9 +192,9 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
     }
 
     /// <summary>
-    /// The pure trust decision behind <see cref="CreateDirectAsync"/>: every required source slot with a
-    /// non-empty OEM original root must reference the AOSP signing key in its own current ABL. The facts
-    /// are already authenticated; this method never reads, writes or replaces anything.
+    /// The pure trust decision behind <see cref="CreateDirectAsync"/>: every selected source slot must reference
+    /// the AOSP signing key in its own current ABL, including a mixed slot whose original root already is the
+    /// AOSP key. The facts are already authenticated; this method never reads, writes or replaces anything.
     /// </summary>
     internal static BootMaintenanceAblRecovery? CreateDirect(
         string model,
@@ -210,7 +231,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
 
         foreach (string slot in selected)
         {
-            if (IsAosp(roots[slot])) continue;
+            // Evidence is required for every selected source, never only for an OEM-root one.
             if (!referencedAblKeySha256.TryGetValue(slot, out string[]? keys)
                 || keys is null
                 || !keys.Any(IsAosp)) return null;
@@ -223,7 +244,8 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
             roots,
             vbmetaSha256,
             new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal),
-            claims ?? new List<VerifiedEdlFile>());
+            claims ?? new List<VerifiedEdlFile>(),
+            selected.Select(slot => "abl_" + slot).ToArray());
     }
 
     internal void RequireBinding(InternalBackupSet backup, BootloaderState state,
