@@ -485,6 +485,12 @@ public sealed partial class OfflineUpdatePackageTests
 
         public string RecoveryPartUuid { get; set; } = RecoveryUuidConst;
         public string State { get; set; } = "uploading";
+        /// <summary>
+        /// What <c>info</c> reports for <c>updaterVersion</c>. A bootstrap
+        /// fixture lowers it so an install can change the code without also
+        /// changing the reported version.
+        /// </summary>
+        public string UpdaterVersion { get; set; } = "0.8.1";
         public Queue<string> StateQueue { get; } = new();
         public bool JobInterrupted { get; set; }
         public bool AttentionRequired { get; set; }
@@ -577,7 +583,7 @@ public sealed partial class OfflineUpdatePackageTests
             var info = new JsonObject
             {
                 ["schemaVersion"] = 1,
-                ["updaterVersion"] = "0.8.1",
+                ["updaterVersion"] = UpdaterVersion,
                 ["model"] = _model,
                 ["deployment"] = new string('a', 64) + ".0",
                 ["recoveryPartUuid"] = RecoveryPartUuid,

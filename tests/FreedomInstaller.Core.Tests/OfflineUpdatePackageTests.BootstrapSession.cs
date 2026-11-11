@@ -40,19 +40,24 @@ public sealed partial class OfflineUpdatePackageTests
 
         // The tablet is already prepared for this exact package and session; only
         // the updater runtime reachable by the key route is too old to name it.
+        // Its reported version stays 0.8.0 across the bootstrap: the helper
+        // replaces the code, not the version string it advertises.
         var server = new FakeDeviceServer(Model, c.DescriptorBytes, payload, [1], [2])
         {
             State = "prepared",
+            UpdaterVersion = "0.8.0",
         };
         // The prepared session already stores the whole payload; the bound
         // preflight must credit it instead of asking for another upload.
         server.SeedResumeOffset(payload.Length);
 
-        // 1. Key route: the updater reports 0.8.x but not the capability, so the
-        //    pairing gate refuses this connection and never asks for a preflight.
+        // 1. Key route: the updater reports the expected 0.8.0 but not the
+        //    capability, so the pairing gate refuses this connection and never
+        //    asks for a preflight.
         await using (var keyClient = server.CreateClient())
         {
             var info = await keyClient.GetInfoAsync();
+            Assert.Equal("0.8.0", info.GetProperty("updaterVersion").GetString());
             Assert.True(OfflineUpdateUiState.IsUpdaterVersionAtLeast(info, "0.8.0"));
             Assert.False(OfflineUpdateUiState.SupportsPreflightSession(info));
 
@@ -94,6 +99,9 @@ public sealed partial class OfflineUpdatePackageTests
         await using (var passwordClient = server.CreateClient())
         {
             var upgradedInfo = await passwordClient.GetInfoAsync();
+            // The bootstrap changed the code, not the version it reports, so
+            // the capability alone is what unlocks the bound preflight.
+            Assert.Equal("0.8.0", upgradedInfo.GetProperty("updaterVersion").GetString());
             Assert.True(OfflineUpdateUiState.SupportsPreflightSession(upgradedInfo));
 
             var transfer = new OfflineUpdateTransfer(passwordClient, TimeSpan.FromMilliseconds(1));
@@ -122,6 +130,7 @@ public sealed partial class OfflineUpdatePackageTests
         var failing = new FakeDeviceServer(Model, c.DescriptorBytes, payload, [3], [4])
         {
             State = "prepared",
+            UpdaterVersion = "0.8.0",
         };
         var failingBootstrap = new BootstrapManagedSession(failing, Model) { FailInstall = true };
         var failure = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(
@@ -132,7 +141,9 @@ public sealed partial class OfflineUpdatePackageTests
         Assert.Equal(1, failingBootstrap.InstallCount);
 
         await using var failingClient = failing.CreateClient();
-        Assert.False(OfflineUpdateUiState.SupportsPreflightSession(await failingClient.GetInfoAsync()));
+        var failingInfo = await failingClient.GetInfoAsync();
+        Assert.Equal("0.8.0", failingInfo.GetProperty("updaterVersion").GetString());
+        Assert.False(OfflineUpdateUiState.SupportsPreflightSession(failingInfo));
         Assert.Equal(["info"], failing.Methods);
         Assert.Equal(0, failing.PreflightCalls);
         Assert.Null(failing.PreflightSessionId);
