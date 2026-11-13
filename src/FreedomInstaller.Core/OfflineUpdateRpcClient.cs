@@ -308,8 +308,8 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
             {
                 ioToken.ThrowIfCancellationRequested();
                 sendAttempted = true;
-                await _requestOutput.WriteAsync(frame, ioToken).ConfigureAwait(false);
-                await _requestOutput.FlushAsync(ioToken).ConfigureAwait(false);
+                await WriteBoundedAsync(frame, ioToken).ConfigureAwait(false);
+                await FlushBoundedAsync(ioToken).ConfigureAwait(false);
                 var responseLine = await ReadResponseFrameAsync(ioToken).ConfigureAwait(false);
                 return convertResult(ParseAndValidateResponse(responseLine, requestId));
             }
@@ -440,13 +440,67 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
         {
             // WaitAsync abandons, rather than cancels, the physical read.
             // Keep watching it so a late failure cannot become unobserved.
-            _ = readTask.ContinueWith(
-                static task => _ = task.Exception,
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+            ObserveLateCompletion(readTask, buffer);
             throw;
         }
+    }
+
+    /// <summary>
+    /// The write half of <see cref="ReadBoundedAsync"/>: a stream that ignores
+    /// the token would otherwise hold the exchange gate open after the request
+    /// was already cancelled or timed out. The frame stays referenced by the
+    /// abandoned write until it finishes, so its backing array remains valid.
+    /// </summary>
+    private async ValueTask WriteBoundedAsync(ReadOnlyMemory<byte> frame, CancellationToken cancellationToken)
+    {
+        var writeTask = _requestOutput.WriteAsync(frame, cancellationToken).AsTask();
+        try
+        {
+            await writeTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            ObserveLateCompletion(writeTask, frame);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The flush half of <see cref="ReadBoundedAsync"/>: the same abandoned
+    /// operation stays observable so a late flush fault is never unobserved.
+    /// </summary>
+    private async ValueTask FlushBoundedAsync(CancellationToken cancellationToken)
+    {
+        var flushTask = _requestOutput.FlushAsync(cancellationToken);
+        try
+        {
+            await flushTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            ObserveLateCompletion(flushTask, null);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Keeps watching an abandoned physical operation so a late failure is
+    /// observed instead of surfacing as an unobserved task exception, and so
+    /// <paramref name="lifetime"/> — the buffer the operation may still touch —
+    /// stays reachable until the operation has finished.
+    /// </summary>
+    private static void ObserveLateCompletion(Task task, object? lifetime)
+    {
+        _ = task.ContinueWith(
+            static (completed, state) =>
+            {
+                _ = completed.Exception;
+                GC.KeepAlive(state);
+            },
+            lifetime,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private static JsonElement ParseAndValidateResponse(byte[] utf8Line, int expectedId)

@@ -287,6 +287,11 @@ namespace FreedomInstaller.App
                     Interlocked.Increment(ref _offlineOperationGeneration);
                     _offlineUpgradeActive = false;
                     SetOfflineIndeterminateProgress(false);
+                    // 失败的交换即使被记录后继续，也可能已让请求/响应流不可用。
+                    // 因此每次操作结束都检查一次：只释放传输层，已导入的包和
+                    // 持久化的会话记录都保留，操作员可以重连后继续同一会话。
+                    if (_offlineSsh != null && _offlineSsh.Rpc.IsPoisoned)
+                        await ReleasePoisonedOfflineConnectionAsync();
                     RefreshActions();
                 }
             });

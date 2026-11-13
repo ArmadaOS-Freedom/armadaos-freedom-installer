@@ -420,7 +420,7 @@ public sealed class OfflineUpdateRecoveryTests
     [InlineData("short")]
     [InlineData("oversized")]
     [InlineData("same-size-wrong-hash")]
-    public async Task BadSourceContent_DisposesSourceAndRetainsPartialStageWithoutAck(string mode)
+    public async Task BadSourceContent_DisposesSourceAndRemovesTheNewAttemptWithoutAck(string mode)
     {
         using var root = new TestRoot();
         var fixture = CreateFixture(files: new[]
@@ -435,11 +435,13 @@ public sealed class OfflineUpdateRecoveryTests
             _ => MutateFirstByte(original)
         };
         TrackingMemoryStream? remote = null;
+        string? attempt = null;
         var calls = new List<string>();
 
         Task<Stream> OpenSource(string path, CancellationToken token)
         {
             calls.Add(path);
+            attempt = Assert.Single(FindStages(root));
             remote = new TrackingMemoryStream(supplied, writable: false);
             return Task.FromResult<Stream>(remote);
         }
@@ -455,9 +457,10 @@ public sealed class OfflineUpdateRecoveryTests
         Assert.Equal(new[] { FirstPath }, calls);
         Assert.NotNull(remote);
         Assert.True(remote.Disposed);
-        var stage = Assert.Single(FindStages(root));
-        Assert.True(Directory.Exists(stage));
-        Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+        Assert.NotNull(attempt);
+        Assert.False(Directory.Exists(attempt));
+        Assert.Empty(FindStages(root));
+        Assert.False(File.Exists(Path.Combine(attempt, AckFileName)));
         Assert.Equal(original, fixture.Files[0].Bytes);
         Assert.Equal(root.WorkNeighborContents, File.ReadAllBytes(root.WorkNeighborPath));
     }
@@ -498,9 +501,11 @@ public sealed class OfflineUpdateRecoveryTests
             });
             using var cancellation = new CancellationTokenSource();
             CancelAfterReadMemoryStream? remote = null;
+            string? attempt = null;
 
             Task<Stream> OpenSource(string path, CancellationToken token)
             {
+                attempt = Assert.Single(FindStages(root));
                 remote = new CancelAfterReadMemoryStream(fixture.Files[0].Bytes, cancellation);
                 return Task.FromResult<Stream>(remote);
             }
@@ -515,8 +520,9 @@ public sealed class OfflineUpdateRecoveryTests
                     token: cancellation.Token));
             Assert.NotNull(remote);
             Assert.True(remote.Disposed);
-            var stage = Assert.Single(FindStages(root));
-            Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+            Assert.NotNull(attempt);
+            Assert.False(Directory.Exists(attempt));
+            Assert.Empty(FindStages(root));
         }
 
         using (var root = new TestRoot())
@@ -528,9 +534,11 @@ public sealed class OfflineUpdateRecoveryTests
             var cause = new InlineProgressException("inline progress failed");
             var progress = new InlineProgress<OfflineUpdateRecoveryProgress>(_ => throw cause);
             TrackingMemoryStream? remote = null;
+            string? attempt = null;
 
             Task<Stream> OpenSource(string path, CancellationToken token)
             {
+                attempt = Assert.Single(FindStages(root));
                 remote = new TrackingMemoryStream(fixture.Files[0].Bytes, writable: false);
                 return Task.FromResult<Stream>(remote);
             }
@@ -546,8 +554,9 @@ public sealed class OfflineUpdateRecoveryTests
             Assert.Same(cause, actual);
             Assert.NotNull(remote);
             Assert.True(remote.Disposed);
-            var stage = Assert.Single(FindStages(root));
-            Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+            Assert.NotNull(attempt);
+            Assert.False(Directory.Exists(attempt));
+            Assert.Empty(FindStages(root));
         }
     }
 
@@ -562,12 +571,13 @@ public sealed class OfflineUpdateRecoveryTests
             });
             TamperOnDisposeMemoryStream? remote = null;
             var calls = new List<string>();
+            string? attempt = null;
 
             Task<Stream> OpenSource(string path, CancellationToken token)
             {
                 calls.Add(path);
-                var stage = Assert.Single(FindStages(root));
-                var target = Path.Combine(stage, FirstPath.Replace('/', Path.DirectorySeparatorChar));
+                attempt = Assert.Single(FindStages(root));
+                var target = Path.Combine(attempt, FirstPath.Replace('/', Path.DirectorySeparatorChar));
                 remote = new TamperOnDisposeMemoryStream(fixture.Files[0].Bytes, target);
                 return Task.FromResult<Stream>(remote);
             }
@@ -583,8 +593,9 @@ public sealed class OfflineUpdateRecoveryTests
             Assert.NotNull(remote);
             Assert.True(remote.Disposed);
             Assert.True(remote.Tampered);
-            var stage = Assert.Single(FindStages(root));
-            Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+            Assert.NotNull(attempt);
+            Assert.False(Directory.Exists(attempt));
+            Assert.Empty(FindStages(root));
         }
 
         using (var root = new TestRoot())
@@ -602,8 +613,7 @@ public sealed class OfflineUpdateRecoveryTests
                     fixture.ManifestBytes,
                     OpenSource));
             Assert.Same(cause, actual);
-            var stage = Assert.Single(FindStages(root));
-            Assert.False(File.Exists(Path.Combine(stage, AckFileName)));
+            Assert.Empty(FindStages(root));
         }
 
         using (var root = new TestRoot())
@@ -629,6 +639,109 @@ public sealed class OfflineUpdateRecoveryTests
             Assert.Equal(0, sourceCalls);
             Assert.Empty(FindStages(root));
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedAttempt_RemovesOnlyTheNewAttemptAndKeepsTheExistingBundle(bool cancel)
+    {
+        using var root = new TestRoot();
+        var fixture = CreateFixture();
+        string existing = await SaveBundleAsync(root.WorkRoot, fixture);
+        string existingAck = Path.Combine(existing, AckFileName);
+        string existingPayload = Path.Combine(existing, FirstPath.Replace('/', Path.DirectorySeparatorChar));
+        byte[] ackBefore = File.ReadAllBytes(existingAck);
+        byte[] payloadBefore = File.ReadAllBytes(existingPayload);
+
+        var failing = CreateFixture(files: new[] { new RecoveryPayload(FirstPath, Bytes(8193, 19)) });
+        using var cancellation = new CancellationTokenSource();
+        string? attempt = null;
+
+        Task<Stream> OpenSource(string path, CancellationToken token)
+        {
+            attempt = FindStages(root).Single(stage => !string.Equals(stage, existing, StringComparison.Ordinal));
+            return Task.FromResult<Stream>(cancel
+                ? new CancelAfterReadMemoryStream(failing.Files[0].Bytes, cancellation)
+                : new MemoryStream(failing.Files[0].Bytes[..^1], writable: false));
+        }
+
+        Func<Task> save = () => PackageImporter.SaveOfflineUpdateRecoveryAsync(
+            root.WorkRoot,
+            failing.Context,
+            failing.PlanBytes,
+            failing.ManifestBytes,
+            OpenSource,
+            token: cancel ? cancellation.Token : default);
+
+        if (cancel)
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(save);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(save);
+        }
+
+        Assert.NotNull(attempt);
+        Assert.False(Directory.Exists(attempt));
+        Assert.Equal(new[] { existing }, FindStages(root));
+        Assert.Equal(ackBefore, File.ReadAllBytes(existingAck));
+        Assert.Equal(payloadBefore, File.ReadAllBytes(existingPayload));
+    }
+
+    [LinuxFact]
+    public async Task LoadCanonicalizesLinkedAncestorsLikeSaveAndRejectsLinkNodes()
+    {
+        using var root = new TestRoot();
+        string descriptorSha = new('d', 64);
+        var fixture = CreateBoundFixture(descriptorSha);
+
+        string realParent = Path.Combine(root.Root, "real-parent");
+        string workRoot = Path.Combine(realParent, "work");
+        Directory.CreateDirectory(workRoot);
+        string linkParent = Path.Combine(root.Root, "linked-parent");
+        Directory.CreateSymbolicLink(linkParent, realParent);
+        string linkedWork = Path.Combine(linkParent, "work");
+
+        // Saving through the linked ancestor stores the canonical path, and loading back through the
+        // same link has to resolve to exactly that path.
+        string saved = await SaveBundleAsync(linkedWork, fixture);
+        Assert.True(
+            saved.StartsWith(Path.GetFullPath(workRoot) + Path.DirectorySeparatorChar, StringComparison.Ordinal),
+            saved);
+
+        var loaded = PackageImporter.LoadOfflineUpdateRecovery(
+            Path.Combine(linkedWork, Path.GetFileName(saved)), fixture.Context, descriptorSha);
+        Assert.Equal(saved, loaded.DirectoryPath);
+
+        // A bundle directory that is itself a link is never followed.
+        string linkedBundle = Path.Combine(workRoot, "linked-bundle");
+        Directory.CreateSymbolicLink(linkedBundle, saved);
+        Assert.Throws<InvalidDataException>(() => PackageImporter.LoadOfflineUpdateRecovery(
+            linkedBundle, fixture.Context, descriptorSha));
+
+        // Neither is a link anywhere below the bundle directory.
+        string shared = Path.Combine(root.Root, "shared-target");
+        Directory.CreateDirectory(shared);
+        Directory.CreateSymbolicLink(Path.Combine(saved, "linked-descendant"), shared);
+        Assert.Throws<InvalidDataException>(() => PackageImporter.LoadOfflineUpdateRecovery(
+            saved, fixture.Context, descriptorSha));
+    }
+
+    [Fact]
+    public void LoadMissingBundle_ReportsInvalidWithoutCreatingRoots()
+    {
+        using var root = new TestRoot();
+        var context = new OfflineUpdateRecoveryContext(
+            Guid.NewGuid().ToString("D"), "TB322FC", new string('a', 64), new string('b', 64));
+        string missing = Path.Combine(root.WorkRoot, "absent-bundle");
+
+        Assert.Throws<InvalidDataException>(() =>
+            PackageImporter.LoadOfflineUpdateRecovery(missing, context, new string('d', 64)));
+
+        Assert.False(Directory.Exists(missing));
+        Assert.Equal(root.WorkNeighborContents, File.ReadAllBytes(root.WorkNeighborPath));
     }
 
     /// <summary>

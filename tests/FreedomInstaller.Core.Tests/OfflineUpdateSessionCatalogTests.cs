@@ -1,3 +1,4 @@
+using System.Text;
 using FreedomInstaller.App;
 using FreedomInstaller.Core;
 using Xunit;
@@ -70,6 +71,33 @@ public sealed class OfflineUpdateSessionCatalogTests : IDisposable
         // Reporting a damaged record never rewrites or removes it, and the
         // intact record stays loadable by the strict Core reader.
         Assert.Equal(DamagedJson, File.ReadAllText(damagedPath));
+        Assert.Equal(intact, PackageImporter.LoadOfflineUpdateSession(_root, SidA));
+        Assert.True(File.Exists(intactPath));
+    }
+
+    [Fact]
+    public void UndecodableJsonString_IsReportedAsDamaged_AndKeepsTheValidNeighbor()
+    {
+        var intact = Session();
+        string intactPath = PackageImporter.SaveOfflineUpdateSession(_root, intact);
+        string damagedPath = PackageImporter.SaveOfflineUpdateSession(_root, Session(SidB));
+
+        // A JSON string carrying a lone surrogate parses as JSON but cannot always be decoded by
+        // GetString(). That failure must become a per-record InvalidDataException instead of
+        // escaping as InvalidOperationException and aborting the whole scan.
+        File.WriteAllBytes(damagedPath, Encoding.UTF8.GetBytes(
+            "{\"schemaVersion\":1,\"sessionId\":\"" + SidB + "\"," +
+            "\"deviceModel\":\"\\ud800\"," +
+            "\"recoveryPartUuid\":\"" + Uuid + "\"," +
+            "\"packageDescriptorSha256\":\"" + Sha + "\"}"));
+        byte[] damagedBytes = File.ReadAllBytes(damagedPath);
+
+        var scan = OfflineUpdateSessionCatalog.Load(_root, Model, Uuid, Sha);
+
+        Assert.Equal(new[] { intact }, scan.Sessions);
+        var damaged = Assert.Single(scan.Damaged);
+        Assert.Equal(Path.GetFileName(damagedPath), damaged.RecordName);
+        Assert.Equal(damagedBytes, File.ReadAllBytes(damagedPath));
         Assert.Equal(intact, PackageImporter.LoadOfflineUpdateSession(_root, SidA));
         Assert.True(File.Exists(intactPath));
     }

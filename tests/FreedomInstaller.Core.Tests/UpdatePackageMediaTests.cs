@@ -208,13 +208,93 @@ public sealed class UpdatePackageMediaTests : IDisposable
     }
 
     [Fact]
-    public void PrivateSnapshotPolicyIsSignedAndNonWindowsOnly()
+    public void PrivateSnapshotPolicyIsSignedAndCoversNonWindowsOrNetworkSources()
     {
+        const string network = @"\\server\share\updates\update.zip";
+        var local = Path.Combine(root, "update.zip");
+
         Assert.False(PackageImporter.RequiresPrivateArchiveSnapshot(signedImport: false));
+        Assert.False(PackageImporter.RequiresPrivateArchiveSnapshot(false, [network]));
+        Assert.False(PackageImporter.RequiresPrivateArchiveSnapshot(false, [local]));
+
+        // A local signed source keeps the Windows share-mode window; every other platform already
+        // copies, and any network part always copies.
         Assert.Equal(
             !OperatingSystem.IsWindows(),
-            PackageImporter.RequiresPrivateArchiveSnapshot(signedImport: true));
+            PackageImporter.RequiresPrivateArchiveSnapshot(true, [local]));
+        Assert.True(PackageImporter.RequiresPrivateArchiveSnapshot(true, [network]));
+        Assert.True(PackageImporter.RequiresPrivateArchiveSnapshot(
+            true, [local, @"\\?\UNC\server\share\updates\update.zip.002"]));
     }
+
+    [Theory]
+    [InlineData(@"\\server\share\updates\update.zip", true)]
+    [InlineData(@"//server/share/updates/update.zip", true)]
+    [InlineData(@"\\?\UNC\server\share\updates\update.zip", true)]
+    [InlineData(@"\\?\C:\updates\update.zip", false)]
+    [InlineData(@"C:\updates\update.zip", false)]
+    public void NetworkSourceClassificationCoversUncAndItsExtendedForm(string path, bool expected) =>
+        Assert.Equal(expected, PackageImporter.IsNetworkSourcePath(path));
+
+    [Fact]
+    public void UnknownDriveLettersAreTreatedAsNetworkSources()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var present = DriveInfo.GetDrives()
+            .Select(drive => drive.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var absent = Enumerable.Range('A', 26)
+            .Select(letter => $"{(char)letter}:\\")
+            .FirstOrDefault(candidate => !present.Contains(candidate));
+
+        // All 26 letters mounted leaves nothing to probe; the deterministic classifier test below
+        // covers the drive branch in that case instead of throwing.
+        if (absent is null)
+        {
+            return;
+        }
+
+        Assert.True(PackageImporter.IsNetworkSourcePath(Path.Combine(absent, "updates", "update.zip")));
+
+        // The extended form of the same absent drive must reach the same classification instead of
+        // being assumed local because of the prefix.
+        Assert.True(PackageImporter.IsNetworkSourcePath(
+            @"\\?\" + Path.Combine(absent, "updates", "update.zip")));
+    }
+
+    [Fact]
+    public void ExtendedDriveLetterIsClassifiedLikeTheOrdinaryLetter()
+    {
+        var probed = new List<string>();
+        bool ClassifyDrive(string driveRoot)
+        {
+            probed.Add(driveRoot);
+            return string.Equals(driveRoot, @"Z:\", StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.True(PackageImporter.IsNetworkSourcePath(@"Z:\updates\update.zip", ClassifyDrive));
+        Assert.True(PackageImporter.IsNetworkSourcePath(@"\\?\Z:\updates\update.zip", ClassifyDrive));
+        Assert.Equal(new[] { @"Z:\", @"Z:\" }, probed);
+
+        Assert.False(PackageImporter.IsNetworkSourcePath(@"C:\updates\update.zip", ClassifyDrive));
+        Assert.False(PackageImporter.IsNetworkSourcePath(@"\\?\C:\updates\update.zip", ClassifyDrive));
+        Assert.Equal(new[] { @"Z:\", @"Z:\", @"C:\", @"C:\" }, probed);
+
+        // The same classification for both forms on this platform, whichever it is.
+        Assert.Equal(
+            PackageImporter.IsNetworkSourcePath(@"C:\updates\update.zip"),
+            PackageImporter.IsNetworkSourcePath(@"\\?\C:\updates\update.zip"));
+    }
+
+    [Theory]
+    [InlineData(@"\\?\Volume{00000000-0000-0000-0000-000000000000}\updates\update.zip")]
+    [InlineData(@"\\?\GLOBALROOT\Device\HarddiskVolume3\updates\update.zip")]
+    public void OpaqueExtendedPathsAreCopiedConservatively(string path) =>
+        Assert.True(PackageImporter.IsNetworkSourcePath(path));
 
     [Theory]
     [InlineData(false)]

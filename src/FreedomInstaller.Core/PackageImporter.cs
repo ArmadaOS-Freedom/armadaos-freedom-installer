@@ -120,10 +120,12 @@ public sealed class ImportedPackage : IDisposable
 /// </para>
 /// <para>
 /// A signed package is verified against the embedded trust anchor before any of it is used. On a
-/// platform whose file sharing is advisory (everything but Windows) that verification and the later
-/// extraction read one private, bounded copy of the logical archive below the work root, so the bytes
-/// that were checked are exactly the bytes that are installed. Windows keeps a
-/// <see cref="FileShare.Read"/> handle on every part for the whole window and needs no copy.
+/// platform whose file sharing is advisory (everything but Windows), and on Windows whenever any part
+/// of a signed archive is read from a network source (a UNC path, including the extended
+/// <c>\\?\UNC\</c> form, or a mapped/unknown drive), that verification and the later extraction read
+/// one private, bounded copy of the logical archive below the work root, so the bytes that were
+/// checked are exactly the bytes that are installed. A signed archive on a local Windows drive keeps
+/// a <see cref="FileShare.Read"/> handle on every part for the whole window and needs no copy.
 /// </para>
 /// <para>
 /// Every operational or format problem, including a malformed bundle, a missing or unsupported model
@@ -289,9 +291,10 @@ public static partial class PackageImporter
                 return ImportArchive(source, sourcePath, expectedModel, target, root, token);
             }
 
-            // A signed import on a platform whose file sharing is only advisory verifies and extracts
-            // from one private copy of the logical archive, so the bytes that were checked are exactly
-            // the bytes that are used. Windows keeps FileShare.Read handles on every part for the whole
+            // A signed import on a platform whose file sharing is only advisory, or from a Windows
+            // network source, verifies and extracts from one private copy of the logical archive, so
+            // the bytes that were checked are exactly the bytes that are used. A signed import from a
+            // local Windows drive keeps FileShare.Read handles on every part for the whole
             // verification and extraction window and therefore needs no extra copy.
             using var snapshot = SignedImportSnapshot(source, updateDescriptor, root, token);
             using var stream = (Stream?)snapshot?.Stream ?? source.OpenStream();
@@ -467,14 +470,117 @@ public static partial class PackageImporter
     /// caller's files.
     /// <para>
     /// The shipped Windows x64 app keeps a <see cref="FileShare.Read"/> handle on every part from the
-    /// first verification read until extraction is finished, so another writer cannot replace the bytes
-    /// underneath it. On Unix that sharing mode is advisory only, so a signed import copies the complete
-    /// logical archive into a private file below the work root and verifies and extracts that copy.
-    /// Unsigned bundle imports and legacy directory imports are never copied.
+    /// first verification read until extraction is finished, so another writer cannot replace the
+    /// bytes underneath it as long as the part is on a local drive. On Unix that sharing mode is
+    /// advisory only, and on Windows it is not enforced by a network redirector, so a signed import
+    /// copies the complete logical archive into a private file below the work root and verifies and
+    /// extracts that copy. Unsigned bundle imports and legacy directory imports are never copied.
     /// </para>
     /// </summary>
     internal static bool RequiresPrivateArchiveSnapshot(bool signedImport) =>
         signedImport && !OperatingSystem.IsWindows();
+
+    /// <summary>
+    /// True when a signed import with these parts must read the private snapshot. Every part is
+    /// inspected, so a split archive whose volumes live on a network source is copied as a whole.
+    /// A local signed archive on Windows keeps the share-mode window and is not copied.
+    /// </summary>
+    internal static bool RequiresPrivateArchiveSnapshot(bool signedImport, IReadOnlyList<string> parts) =>
+        signedImport
+        && (!OperatingSystem.IsWindows() || (parts.Count > 0 && parts.Any(IsNetworkSourcePath)));
+
+    /// <summary>
+    /// True when the path names a source whose byte stability is not guaranteed by a local Windows
+    /// file-sharing handle: a UNC share (including the extended <c>\\?\UNC\</c> form) or a mapped
+    /// network / unknown drive. An extended drive-letter path (<c>\\?\Z:\...</c>) is classified
+    /// exactly like the ordinary letter, and an extended path that names no drive letter is copied
+    /// conservatively. Purely a classification of the path; it never opens or contacts the source.
+    /// </summary>
+    internal static bool IsNetworkSourcePath(string path) => IsNetworkSourcePath(path, classifyDrive: null);
+
+    /// <summary>
+    /// Same classification with an injectable drive probe, so the drive branch — including the
+    /// extended drive-letter form — can be asserted deterministically on every platform. The probe
+    /// receives the drive root as <c>X:\</c>; when null the platform <see cref="DriveInfo"/> probe is
+    /// used. Only tests pass a probe.
+    /// </summary>
+    internal static bool IsNetworkSourcePath(string path, Func<string, bool>? classifyDrive)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var normalized = path.Replace('/', '\\');
+
+        if (normalized.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (normalized.StartsWith(@"\\?\", StringComparison.Ordinal))
+        {
+            var extended = normalized[4..];
+
+            if (!IsDriveLetterPath(extended))
+            {
+                // A volume GUID, device namespace or any other extended target cannot be classified,
+                // so it is copied rather than trusted to a local share-mode guarantee that cannot be
+                // established for it.
+                return true;
+            }
+
+            // The extended form names the same drive as the ordinary letter, so an extended mapped
+            // drive is still a mapped drive and must be copied, while an extended fixed drive must
+            // not be.
+            return IsUnstableDriveRoot(extended, classifyDrive);
+        }
+
+        if (normalized.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return IsUnstableDriveRoot(normalized, classifyDrive);
+    }
+
+    /// <summary>True for a drive-letter rooted path such as <c>C:\</c> or <c>Z:\updates</c>.</summary>
+    private static bool IsDriveLetterPath(string path) =>
+        path.Length >= 2
+        && char.IsAsciiLetter(path[0])
+        && path[1] == ':'
+        && (path.Length == 2 || path[2] == '\\');
+
+    private static bool IsUnstableDriveRoot(string path, Func<string, bool>? classifyDrive)
+    {
+        if (classifyDrive is not null)
+        {
+            return IsDriveLetterPath(path) && classifyDrive(path[..2] + "\\");
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        var pathRoot = Path.GetPathRoot(path);
+        if (string.IsNullOrEmpty(pathRoot))
+        {
+            return false;
+        }
+
+        try
+        {
+            return new DriveInfo(pathRoot).DriveType
+                is DriveType.Network or DriveType.Unknown or DriveType.NoRootDirectory;
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            // A drive that cannot be queried is treated like an unknown drive: copy rather than
+            // rely on a share-mode guarantee that may not exist.
+            return true;
+        }
+    }
 
     /// <summary>
     /// Produces the private snapshot a signed import reads from, or null when the caller's files may be
@@ -487,7 +593,7 @@ public static partial class PackageImporter
         string root,
         CancellationToken token)
     {
-        if (descriptor is null || !RequiresPrivateArchiveSnapshot(signedImport: true))
+        if (descriptor is null || !RequiresPrivateArchiveSnapshot(signedImport: true, source.Parts))
         {
             return null;
         }

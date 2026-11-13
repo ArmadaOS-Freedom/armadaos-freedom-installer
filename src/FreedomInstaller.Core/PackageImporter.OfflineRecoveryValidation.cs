@@ -13,12 +13,7 @@ public static partial class PackageImporter
         if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathFullyQualified(directory))
             throw new InvalidDataException("恢复备份目录必须为完整路径。");
         token.ThrowIfCancellationRequested();
-        var full = Path.GetFullPath(directory);
-        var info = new DirectoryInfo(full);
-        if (!info.Exists || (info.Attributes & FileAttributes.ReparsePoint) != 0)
-            throw new InvalidDataException("恢复备份目录不存在或为 reparse point。");
-        EnsureNoReparseAncestors(full);
-        EnsureSafeDirectoryTree(full, full);
+        var full = CanonicalRecoveryDirectory(directory);
         var planPath = Path.GetFullPath(Path.Combine(full, RecoveryPlanFileName));
         var manifestPath = Path.GetFullPath(Path.Combine(full, RecoveryManifestFileName));
         var ackPath = Path.GetFullPath(Path.Combine(full, RecoveryAckFileName));
@@ -38,17 +33,13 @@ public static partial class PackageImporter
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(saved.Acknowledgement);
         token.ThrowIfCancellationRequested();
-        var directory = Path.GetFullPath(saved.DirectoryPath);
+        var directory = CanonicalRecoveryDirectory(saved.DirectoryPath);
+        EnsureDirectorySubtreeNotReparse(directory);
         var tx = ValidateTransactionId(expected.TransactionId);
         var model = ValidateDeviceModel(expected.DeviceModel);
         var planSha = ValidateLowerHexSha256(expected.PlanSha256, "PlanSha256");
         var manifestSha = ValidateLowerHexSha256(expected.RecoveryManifestSha256, "RecoveryManifestSha256");
         var packageSha = ValidateLowerHexSha256(packageDescriptorSha256, "PackageDescriptorSha256");
-        var dirInfo = new DirectoryInfo(directory);
-        if (!dirInfo.Exists || (dirInfo.Attributes & FileAttributes.ReparsePoint) != 0)
-            throw new InvalidDataException("恢复备份目录不存在或为 reparse point。");
-        EnsureNoReparseAncestors(directory);
-        EnsureSafeDirectoryTree(directory, directory);
 
         var planPath = Path.GetFullPath(Path.Combine(directory, RecoveryPlanFileName));
         var manifestPath = Path.GetFullPath(Path.Combine(directory, RecoveryManifestFileName));
@@ -83,12 +74,29 @@ public static partial class PackageImporter
         return diskAck;
     }
 
+    /// <summary>
+    /// Resolves a bundle directory the same way the exporter resolves its work root: a linked
+    /// ancestor is followed to its target, while the bundle directory itself must be an existing
+    /// ordinary directory. Nothing is created here, so loading can never turn a missing root into a
+    /// new one.
+    /// </summary>
+    private static string CanonicalRecoveryDirectory(string directory)
+    {
+        try
+        {
+            return PrepareOfflineWorkRoot(directory);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            throw new InvalidDataException("恢复备份目录不存在或为 reparse point。", ex);
+        }
+    }
+
     private static byte[] ReadOfflineControlFile(string path, string root, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var full = Path.GetFullPath(path);
         if (!IsBeneath(full, root)) throw new InvalidDataException("恢复控制文件路径越界。");
-        EnsureNoReparseAncestors(Path.GetDirectoryName(full) ?? root);
         EnsureSafeDirectoryTree(Path.GetDirectoryName(full) ?? root, root);
         var info = new FileInfo(full);
         if (!info.Exists || info.LinkTarget is not null ||

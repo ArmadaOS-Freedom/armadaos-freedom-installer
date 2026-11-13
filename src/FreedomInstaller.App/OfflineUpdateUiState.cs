@@ -78,7 +78,25 @@ namespace FreedomInstaller.App
             if (!GetBool(completion.Value, "restartEligible"))
                 return false;
 
-            return RestartState(receipt) is null or "failed";
+            return IsRestartRetryable(completion.Value);
+        }
+
+        /// <summary>
+        /// Only an absent or explicitly null restart record proves that the
+        /// tablet never recorded a dispatch, and only the exact
+        /// <c>failed</c> string proves the request was rejected. Any other
+        /// raw value — another state, an empty string or a malformed type —
+        /// may already have reached the firmware and must never be retried.
+        /// </summary>
+        private static bool IsRestartRetryable(JsonElement completion)
+        {
+            if (!completion.TryGetProperty("restartState", out JsonElement restart))
+                return true;
+            if (restart.ValueKind == JsonValueKind.Null)
+                return true;
+
+            return restart.ValueKind == JsonValueKind.String &&
+                   string.Equals(restart.GetString(), "failed", StringComparison.Ordinal);
         }
 
         internal static bool IsCompletionConfirmed(JsonElement? receipt) =>

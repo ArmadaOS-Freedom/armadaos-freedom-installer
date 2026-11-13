@@ -372,6 +372,36 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
         Assert.Single(CleanupCommands(session));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not-a-version")]
+    public async Task Ensure_IneligibleDeviceWithUnparseableRuntimeVersionIsNotUsedReadOnly(string? version)
+    {
+        // An unreadable version string proves nothing about the installed
+        // runtime. Treating it as "not older" would reuse a runtime the
+        // read-only contract was never checked against.
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(
+                    upgradeEligible: false,
+                    upgradeReasons: new[] { "unsafe-boot-state" },
+                    entryPresent: true,
+                    version: version,
+                    capable: true),
+            }),
+        };
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(() =>
+            Coordinator().EnsureAsync(session));
+
+        Assert.Equal(OfflineUpdateBootstrapFailure.ProbeFailed, error.Reason);
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.Single(CleanupCommands(session));
+    }
+
     [Fact]
     public async Task Ensure_UnknownModelNeverDeploysTheUpdater()
     {
@@ -430,6 +460,34 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
 
         Assert.False(result.Deployed);
         Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+    }
+
+    [Fact]
+    public async Task Ensure_NewerRuntimeReportedWithoutAnEntryIsNeverDowngraded()
+    {
+        // A probe that names a newer runtime but does not see its entry is
+        // contradictory. Deploying the bundled runtime would downgrade it, so
+        // the coordinator must fail closed instead of trusting the entry flag.
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(
+                    entryPresent: false,
+                    version: "0.9.0",
+                    capable: true,
+                    updaterMissing: Array.Empty<string>()),
+            }),
+        };
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(() =>
+            Coordinator().EnsureAsync(session));
+
+        Assert.Equal(OfflineUpdateBootstrapFailure.UpdaterIncompatible, error.Reason);
+        Assert.Contains("0.9.0", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.DoesNotContain(session.Uploads, u => u.Path.EndsWith(".tar.gz", StringComparison.Ordinal));
+        Assert.Single(CleanupCommands(session));
     }
 
     [Fact]

@@ -341,6 +341,40 @@ public class OfflineUpdateUiStateTests
     }
 
     [Fact]
+    public void CanRestartToVerify_AbsentOrNullRestartStateIsRetryable()
+    {
+        // The tablet omits restartState until it records a dispatch; an
+        // explicit null is the same "never recorded" meaning.
+        Assert.True(OfflineUpdateUiState.CanRestartToVerify(
+            Parse("{\"state\":\"awaiting_reboot\",\"completion\":{\"state\":\"awaiting_reboot\",\"restartEligible\":true}}")));
+        Assert.True(OfflineUpdateUiState.CanRestartToVerify(
+            Parse("{\"state\":\"awaiting_reboot\",\"completion\":{\"state\":\"awaiting_reboot\"," +
+                  "\"restartEligible\":true,\"restartState\":null}}")));
+        Assert.True(OfflineUpdateUiState.CanRestartToVerify(
+            CompletionReceipt("awaiting_reboot", restartEligible: true, restartState: "failed")));
+    }
+
+    [Theory]
+    [InlineData("5")]
+    [InlineData("true")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("\"\"")]
+    [InlineData("\"pending\"")]
+    [InlineData("\"FAILED\"")]
+    public void CanRestartToVerify_MalformedOrUnknownRawRestartStateIsBlocked(string rawRestartState)
+    {
+        // Only the exact "failed" rejection may be retried. Another string,
+        // an empty string or any malformed type could already have reached
+        // the firmware, so the gate must not fall back to "absent".
+        var receipt = Parse(
+            "{\"state\":\"awaiting_reboot\",\"completion\":{\"state\":\"awaiting_reboot\"," +
+            "\"restartEligible\":true,\"restartState\":" + rawRestartState + "}}");
+
+        Assert.False(OfflineUpdateUiState.CanRestartToVerify(receipt));
+    }
+
+    [Fact]
     public void CanRestartToVerify_NonBooleanEligibility_False()
     {
         Assert.False(OfflineUpdateUiState.CanRestartToVerify(

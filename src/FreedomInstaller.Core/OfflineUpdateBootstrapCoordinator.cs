@@ -690,16 +690,23 @@ public sealed class OfflineUpdateBootstrapCoordinator
         if (!probe.Upgrade.Eligible && CanRunReadOnly(probe))
             return false;
 
-        if (!updater.EntryPresent)
-            return true;
-
+        // A reported newer version is checked before the entry flag: a probe
+        // that names a newer runtime but fails to see its entry must never be
+        // answered by deploying the older bundle, which would silently
+        // downgrade a runtime this installer cannot validate. Only a newer
+        // runtime that is actually installed, capable and complete may be
+        // reused as it is.
         if (IsNewer(updater.Version, _expectedBundleVersion))
         {
-            // A newer runtime is never replaced by the bundled one. That would
-            // be a rollback of a runtime this installer cannot validate. But
-            // reusing it is only safe when it is a complete, capable runtime;
-            // an incomplete newer updater must be rejected instead of silently
-            // staying broken.
+            if (!updater.EntryPresent)
+            {
+                throw new OfflineUpdateBootstrapException(
+                    OfflineUpdateBootstrapFailure.UpdaterIncompatible,
+                    "The tablet reports a newer offline updater (" + updater.Version +
+                    ") but no installed updater entry. This installer never downgrades a newer runtime; " +
+                    "update the tablet runtime manually or use the matching installer.");
+            }
+
             if (!updater.Capable)
             {
                 throw new OfflineUpdateBootstrapException(
@@ -721,10 +728,10 @@ public sealed class OfflineUpdateBootstrapCoordinator
             return false;
         }
 
-        // A same-version entry is not proof that the runtime contains the
-        // current fixes. The helper install verifies every bundled file hash
-        // and reuses only exact matches, so an equal or older version goes
-        // through that verification path.
+        // A missing entry is what deployment is for. An equal or older entry
+        // is not proof that the runtime contains the current fixes: the
+        // helper install verifies every bundled file hash and reuses only
+        // exact matches, so it goes through that verification path too.
         return true;
     }
 
@@ -732,15 +739,17 @@ public sealed class OfflineUpdateBootstrapCoordinator
         probe.Updater.EntryPresent &&
         probe.Updater.Capable &&
         probe.Updater.Missing.Count == 0 &&
-        !IsOlder(probe.Updater.Version, _expectedBundleVersion);
+        IsAtLeast(probe.Updater.Version, _expectedBundleVersion);
 
     private static bool IsUnknownModel(string model) =>
         string.Equals(model, "unknown", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsOlder(string? version, string baseline) =>
+    // A version that cannot be parsed proves nothing about the installed
+    // runtime, so it must never satisfy a minimum-version check.
+    private static bool IsAtLeast(string? version, string baseline) =>
         TryParseVersionParts(version, out var parsed) &&
         TryParseVersionParts(baseline, out var reference) &&
-        CompareVersionParts(parsed, reference) < 0;
+        CompareVersionParts(parsed, reference) >= 0;
 
     private static bool IsNewer(string? version, string baseline) =>
         TryParseVersionParts(version, out var parsed) &&

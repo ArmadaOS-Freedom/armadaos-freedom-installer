@@ -97,108 +97,137 @@ public static partial class PackageImporter
         token.ThrowIfCancellationRequested();
         var recoveryDirectory = CreateOfflineStageDirectory(canonicalWorkRoot);
 
-        var planPath = Path.GetFullPath(Path.Combine(recoveryDirectory, RecoveryPlanFileName));
-        var manifestPath = Path.GetFullPath(Path.Combine(recoveryDirectory, RecoveryManifestFileName));
-        var ackPath = Path.GetFullPath(Path.Combine(recoveryDirectory, RecoveryAckFileName));
-
-        if (!IsBeneath(planPath, recoveryDirectory) ||
-            !IsBeneath(manifestPath, recoveryDirectory) ||
-            !IsBeneath(ackPath, recoveryDirectory))
+        try
         {
-            throw new InvalidDataException("离线升级恢复元数据路径超出受控目录。");
-        }
+            var planPath = Path.GetFullPath(Path.Combine(recoveryDirectory, RecoveryPlanFileName));
+            var manifestPath = Path.GetFullPath(Path.Combine(recoveryDirectory, RecoveryManifestFileName));
+            var ackPath = Path.GetFullPath(Path.Combine(recoveryDirectory, RecoveryAckFileName));
 
-        WriteBoundedStageFile(planPath, planSnapshot, token);
-        WriteBoundedStageFile(manifestPath, manifestSnapshot, token);
-
-        var buffer = new byte[RecoveryCopyBufferBytes];
-        long completedBytes = 0;
-
-        foreach (var entry in files)
-        {
-            token.ThrowIfCancellationRequested();
-
-            var targetPath = ResolveSafePayloadTargetPath(recoveryDirectory, entry.Path);
-            var parentDir = Path.GetDirectoryName(targetPath);
-            if (string.IsNullOrEmpty(parentDir) ||
-                (!string.Equals(parentDir, recoveryDirectory, StringComparison.Ordinal) &&
-                 !IsBeneath(parentDir, recoveryDirectory)))
+            if (!IsBeneath(planPath, recoveryDirectory) ||
+                !IsBeneath(manifestPath, recoveryDirectory) ||
+                !IsBeneath(ackPath, recoveryDirectory))
             {
-                throw new InvalidDataException($"恢复备份目标目录越界：{entry.Path}。");
+                throw new InvalidDataException("离线升级恢复元数据路径超出受控目录。");
             }
 
-            Directory.CreateDirectory(parentDir);
-            EnsureSafeDirectoryTree(parentDir, recoveryDirectory);
-            EnsureNoReparseAncestors(canonicalWorkRoot);
+            WriteBoundedStageFile(planPath, planSnapshot, token);
+            WriteBoundedStageFile(manifestPath, manifestSnapshot, token);
 
-            await using (var sourceStream = await openSource(entry.Path, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException($"恢复源文件流为空：{entry.Path}。"))
+            var buffer = new byte[RecoveryCopyBufferBytes];
+            long completedBytes = 0;
+
+            foreach (var entry in files)
             {
-                using var fileStream = new FileStream(
-                    targetPath,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    RecoveryCopyBufferBytes,
-                    FileOptions.SequentialScan);
-                using var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                token.ThrowIfCancellationRequested();
 
-                long entryWritten = 0;
-                var readLimit = entry.Bytes + 1;
-
-                while (entryWritten < readLimit)
+                var targetPath = ResolveSafePayloadTargetPath(recoveryDirectory, entry.Path);
+                var parentDir = Path.GetDirectoryName(targetPath);
+                if (string.IsNullOrEmpty(parentDir) ||
+                    (!string.Equals(parentDir, recoveryDirectory, StringComparison.Ordinal) &&
+                     !IsBeneath(parentDir, recoveryDirectory)))
                 {
-                    token.ThrowIfCancellationRequested();
-                    var maxRead = (int)Math.Min(buffer.Length, readLimit - entryWritten);
-                    var read = await sourceStream.ReadAsync(buffer.AsMemory(0, maxRead), token).ConfigureAwait(false);
-                    if (read <= 0)
-                    {
-                        break;
-                    }
-
-                    if (entryWritten + read > entry.Bytes)
-                    {
-                        throw new InvalidDataException($"恢复源文件超出声明长度：{entry.Path}。");
-                    }
-
-                    fileStream.Write(buffer, 0, read);
-                    sha256.AppendData(buffer, 0, read);
-                    entryWritten += read;
-                    completedBytes = checked(completedBytes + read);
-                    progress?.Report(new OfflineUpdateRecoveryProgress(entry.Path, completedBytes, totalBytes));
+                    throw new InvalidDataException($"恢复备份目标目录越界：{entry.Path}。");
                 }
 
-                fileStream.Flush(flushToDisk: true);
+                Directory.CreateDirectory(parentDir);
+                EnsureSafeDirectoryTree(parentDir, recoveryDirectory);
+                EnsureNoReparseAncestors(canonicalWorkRoot);
 
-                var streamDigest = Convert.ToHexStringLower(sha256.GetHashAndReset());
-                if (entryWritten != entry.Bytes ||
-                    !string.Equals(streamDigest, entry.Sha256, StringComparison.Ordinal))
+                await using (var sourceStream = await openSource(entry.Path, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException($"恢复源文件流为空：{entry.Path}。"))
                 {
-                    throw new InvalidDataException($"恢复备份文件写入校验失败：{entry.Path}。");
+                    using var fileStream = new FileStream(
+                        targetPath,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        RecoveryCopyBufferBytes,
+                        FileOptions.SequentialScan);
+                    using var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+                    long entryWritten = 0;
+                    var readLimit = entry.Bytes + 1;
+
+                    while (entryWritten < readLimit)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var maxRead = (int)Math.Min(buffer.Length, readLimit - entryWritten);
+                        var read = await sourceStream.ReadAsync(buffer.AsMemory(0, maxRead), token).ConfigureAwait(false);
+                        if (read <= 0)
+                        {
+                            break;
+                        }
+
+                        if (entryWritten + read > entry.Bytes)
+                        {
+                            throw new InvalidDataException($"恢复源文件超出声明长度：{entry.Path}。");
+                        }
+
+                        fileStream.Write(buffer, 0, read);
+                        sha256.AppendData(buffer, 0, read);
+                        entryWritten += read;
+                        completedBytes = checked(completedBytes + read);
+                        progress?.Report(new OfflineUpdateRecoveryProgress(entry.Path, completedBytes, totalBytes));
+                    }
+
+                    fileStream.Flush(flushToDisk: true);
+
+                    var streamDigest = Convert.ToHexStringLower(sha256.GetHashAndReset());
+                    if (entryWritten != entry.Bytes ||
+                        !string.Equals(streamDigest, entry.Sha256, StringComparison.Ordinal))
+                    {
+                        throw new InvalidDataException($"恢复备份文件写入校验失败：{entry.Path}。");
+                    }
                 }
+
+                VerifyStoredFileOnDisk(targetPath, recoveryDirectory, entry.Bytes, entry.Sha256, buffer, token);
             }
 
-            VerifyStoredFileOnDisk(targetPath, recoveryDirectory, entry.Bytes, entry.Sha256, buffer, token);
+            VerifyStoredFileOnDisk(planPath, recoveryDirectory, planSnapshot.Length, expectedPlanSha, buffer, token);
+            VerifyStoredFileOnDisk(manifestPath, recoveryDirectory, manifestSnapshot.Length, expectedManifestSha, buffer, token);
+
+            var ackBytes = BuildRecoveryAcknowledgementBytes(
+                normalizedTx,
+                expectedPlanSha,
+                expectedManifestSha,
+                files);
+
+            WriteBoundedStageFile(ackPath, ackBytes, token);
+            var ackDigest = Convert.ToHexStringLower(SHA256.HashData(ackBytes));
+            VerifyStoredFileOnDisk(ackPath, recoveryDirectory, ackBytes.Length, ackDigest, buffer, token);
+
+            return new SavedOfflineUpdateRecovery(
+                recoveryDirectory,
+                manifestPath,
+                planPath,
+                (byte[])ackBytes.Clone());
         }
+        catch
+        {
+            // Only the attempt created above is discarded. A pre-existing bundle below the same work
+            // root is never touched, and the cleanup refuses to descend through links.
+            DiscardNewRecoveryAttempt(canonicalWorkRoot, recoveryDirectory);
+            throw;
+        }
+    }
 
-        VerifyStoredFileOnDisk(planPath, recoveryDirectory, planSnapshot.Length, expectedPlanSha, buffer, token);
-        VerifyStoredFileOnDisk(manifestPath, recoveryDirectory, manifestSnapshot.Length, expectedManifestSha, buffer, token);
-
-        var ackBytes = BuildRecoveryAcknowledgementBytes(
-            normalizedTx,
-            expectedPlanSha,
-            expectedManifestSha,
-            files);
-
-        WriteBoundedStageFile(ackPath, ackBytes, token);
-        var ackDigest = Convert.ToHexStringLower(SHA256.HashData(ackBytes));
-        VerifyStoredFileOnDisk(ackPath, recoveryDirectory, ackBytes.Length, ackDigest, buffer, token);
-
-        return new SavedOfflineUpdateRecovery(
-            recoveryDirectory,
-            manifestPath,
-            planPath,
-            (byte[])ackBytes.Clone());
+    /// <summary>
+    /// Removes the recovery attempt this call just created after a cancellation or failure. The
+    /// work root and the directory name are revalidated first, so only a direct, ordinary
+    /// <c>offline-update-*</c> child created here can be deleted; a failed cleanup never replaces the
+    /// original failure.
+    /// </summary>
+    private static void DiscardNewRecoveryAttempt(string canonicalWorkRoot, string recoveryDirectory)
+    {
+        try
+        {
+            CleanupOfflineUpdateStage(canonicalWorkRoot, recoveryDirectory);
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or ArgumentException)
+        {
+        }
     }
 
     private static void VerifyMetadataBlob(byte[] bytes, string expectedSha256, string label)

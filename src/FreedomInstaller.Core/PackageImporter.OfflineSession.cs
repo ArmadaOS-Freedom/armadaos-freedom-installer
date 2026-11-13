@@ -294,5 +294,12 @@ public static partial class PackageImporter
         {
             throw new InvalidDataException("离线升级会话记录 JSON 格式损坏。", ex);
         }
+        catch (InvalidOperationException ex)
+        {
+            // GetString() rejects a JSON string it cannot decode (for example a lone surrogate)
+            // with InvalidOperationException. Only this record is invalid, so report it through the
+            // same contract the callers already handle instead of aborting the whole scan.
+            throw new InvalidDataException("离线升级会话记录字符串无法解码。", ex);
+        }
     }
 }

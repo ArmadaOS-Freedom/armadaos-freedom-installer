@@ -273,6 +273,76 @@ public sealed class OfflineUpdateRpcClientTests
     }
 
     [Fact]
+    public async Task Timeout_is_bounded_when_a_write_ignores_the_token()
+    {
+        using var io = new IoStream(blockWrites: true);
+        await using var client = new OfflineUpdateRpcClient(io, io, TimeSpan.FromMilliseconds(50));
+
+        var request = client.GetInfoAsync();
+        var winner = await Task.WhenAny(request, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(request, winner);
+
+        await Assert.ThrowsAsync<TimeoutException>(() => request);
+        Assert.True(client.IsPoisoned);
+        await Assert.ThrowsAnyAsync<IOException>(() => client.GetInfoAsync());
+    }
+
+    [Fact]
+    public async Task Timeout_is_bounded_when_a_flush_ignores_the_token()
+    {
+        using var io = new IoStream(blockFlush: true);
+        await using var client = new OfflineUpdateRpcClient(io, io, TimeSpan.FromMilliseconds(50));
+
+        var request = client.GetInfoAsync();
+        var winner = await Task.WhenAny(request, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(request, winner);
+
+        await Assert.ThrowsAsync<TimeoutException>(() => request);
+        Assert.True(client.IsPoisoned);
+        await Assert.ThrowsAnyAsync<IOException>(() => client.GetInfoAsync());
+        Assert.Single(io.Frames);
+    }
+
+    [Fact]
+    public async Task Cancellation_is_bounded_when_a_write_ignores_the_token()
+    {
+        using var io = new IoStream(blockWrites: true);
+        await using var client = new OfflineUpdateRpcClient(io, io);
+        using var cancelled = new CancellationTokenSource();
+        var pending = client.GetInfoAsync(cancelled.Token);
+        await io.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        cancelled.Cancel();
+
+        var winner = await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(pending, winner);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.True(client.IsPoisoned);
+        await Assert.ThrowsAnyAsync<IOException>(() => client.GetInfoAsync());
+    }
+
+    [Fact]
+    public async Task Abandoned_write_finishes_with_its_buffer_and_is_never_replayed()
+    {
+        using var io = new IoStream(blockWrites: true);
+        await using var client = new OfflineUpdateRpcClient(io, io, TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.GetInfoAsync());
+        Assert.True(client.IsPoisoned);
+        Assert.Empty(io.Frames);
+
+        // Let the abandoned physical write finish after the request already
+        // failed. Its frame must stay intact and must not be sent twice.
+        io.ReleaseWrite();
+        await io.Written.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("info", Frame(io, 0).GetProperty("method").GetString());
+        Assert.Single(io.Frames);
+        await Assert.ThrowsAnyAsync<IOException>(() => client.GetInfoAsync());
+        Assert.Single(io.Frames);
+    }
+
+    [Fact]
     public async Task Inflight_cancellation_poisons_and_prevents_a_later_write()
     {
         using var io = new IoStream();
@@ -476,18 +546,29 @@ public sealed class OfflineUpdateRpcClientTests
         private readonly MemoryStream _written = new();
         private readonly Queue<byte[]> _chunks = new();
         private readonly bool _ignoreReadCancellation;
+        private readonly bool _blockWrites;
+        private readonly bool _blockFlush;
+        private readonly TaskCompletionSource<bool> _writeGate = Signal();
+        private readonly TaskCompletionSource<bool> _flushGate = Signal();
         private TaskCompletionSource<bool> _changed = Signal();
         private byte[]? _current;
         private int _currentOffset;
         private bool _eof;
         private bool _disposed;
 
-        public IoStream(bool ignoreReadCancellation = false)
+        public IoStream(bool ignoreReadCancellation = false, bool blockWrites = false, bool blockFlush = false)
         {
             _ignoreReadCancellation = ignoreReadCancellation;
+            _blockWrites = blockWrites;
+            _blockFlush = blockFlush;
         }
 
         public TaskCompletionSource<bool> Written { get; } = Signal();
+
+        /// <summary>Completes once a blocked write has been entered.</summary>
+        public TaskCompletionSource<bool> WriteStarted { get; } = Signal();
+
+        internal void ReleaseWrite() => _writeGate.TrySetResult(true);
 
         /// <summary>Completes once a read has actually returned bytes.</summary>
         public TaskCompletionSource<bool> ReadCompleted { get; } = Signal();
@@ -572,6 +653,15 @@ public sealed class OfflineUpdateRpcClientTests
 
         public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         {
+            if (_blockWrites)
+            {
+                // A real pipe keeps a write pending even after its token is
+                // cancelled, which is what the client's bounded wait must
+                // survive. Only the explicit release lets it finish.
+                WriteStarted.TrySetResult(true);
+                await _writeGate.Task.ConfigureAwait(false);
+            }
+
             lock (_sync)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
@@ -584,6 +674,9 @@ public sealed class OfflineUpdateRpcClientTests
         public override void Flush() { }
         public override Task FlushAsync(CancellationToken cancellationToken)
         {
+            if (_blockFlush)
+                return _flushGate.Task;
+
             cancellationToken.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -602,6 +695,10 @@ public sealed class OfflineUpdateRpcClientTests
                     DisposeCount++;
                 }
             }
+            // Wake an abandoned write/flush so it observes the closed stream
+            // instead of staying pending for the rest of the test run.
+            _writeGate.TrySetResult(true);
+            _flushGate.TrySetResult(true);
             Pulse();
             base.Dispose(disposing);
         }
