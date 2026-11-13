@@ -3,10 +3,12 @@ using System;
 using System.Buffers.Binary;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using FreedomInstaller.Core;
+using Renci.SshNet;
 using Xunit;
 
 namespace FreedomInstaller.Core.Tests;
@@ -285,6 +287,76 @@ public sealed class OfflineUpdateSshNetTransportTests
         Assert.True(lease.TryAcquire(first));
         Assert.False(lease.TryAcquire(second));
         Assert.Same(first, lease.Current);
+    }
+
+    [Fact]
+    public void ThePinnedSshNetMetadataStillExposesTheSessionSocket()
+    {
+        // The upload abort depends on BaseClient.Session and Session._socket.
+        // A package bump that renames either member must fail here instead of
+        // silently losing the abort capability.
+        Assert.True(OfflineUpdateSshNetSessionSocket.HasPinnedMembers);
+    }
+
+    [Fact]
+    public void AClientBeforeItsHandshakeHasNoCapturableSocket()
+    {
+        // Nothing is authenticated yet, so there is no socket to abort and the
+        // upload must fail closed rather than start unguarded.
+        using var client = new SshClient(new ConnectionInfo(
+            "device.example",
+            2222,
+            "armada",
+            new PasswordAuthenticationMethod("armada", "topsecret")));
+
+        Assert.Null(OfflineUpdateSshNetSessionSocket.TryGetSocket(client));
+    }
+
+    [Fact]
+    public void TheUploadGuardBoundsTheSendTimeoutAndRestoresItOnDisposal()
+    {
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        Assert.Equal(0, socket.SendTimeout);
+
+        var guard = OfflineUpdateSshNetUploadGuard.TryCreate(socket, TimeSpan.FromSeconds(3));
+
+        Assert.NotNull(guard);
+        Assert.False(guard!.IsAborted);
+        Assert.Equal(3000, socket.SendTimeout);
+
+        guard.Dispose();
+
+        Assert.Equal(0, socket.SendTimeout);
+        Assert.False(guard.IsAborted);
+    }
+
+    [Fact]
+    public void AbortingTheUploadGuardClosesTheCapturedSocketExactlyOnce()
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        var guard = OfflineUpdateSshNetUploadGuard.TryCreate(socket, TimeSpan.FromSeconds(3));
+
+        Assert.NotNull(guard);
+        guard!.Abort();
+        guard.Abort();
+
+        Assert.True(guard.IsAborted);
+
+        // Shutdown/Close is what actually breaks a blocked send; the guard does
+        // not touch SSH.NET's write path, so the local socket is unusable and
+        // a second abort is harmless.
+        Assert.Throws<ObjectDisposedException>(() => socket.Send(new byte[] { 1 }));
+        guard.Dispose();
+        socket.Dispose();
+    }
+
+    [Fact]
+    public void AClosedSocketCannotBeGuarded()
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        socket.Dispose();
+
+        Assert.Null(OfflineUpdateSshNetUploadGuard.TryCreate(socket, TimeSpan.FromSeconds(3)));
     }
 
     private static OfflineUpdateSshPasswordOptions UsbOptions() =>

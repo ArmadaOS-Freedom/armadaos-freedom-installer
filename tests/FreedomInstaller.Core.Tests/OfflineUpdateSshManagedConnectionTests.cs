@@ -915,6 +915,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     [Fact]
     public async Task Upload_MultiChunkContent_WritesEveryOriginalByte()
     {
+        FakeUploadGuard? guard = null;
         var transport = new FakeTransport(HostKey(35))
         {
             ChannelFactory = _ => new FakeChannel(
@@ -922,6 +923,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
                 gaiteOutputOnPassword: false,
                 exited: false,
                 exitOnInputClosed: true),
+            UploadGuardFactory = () => guard = new FakeUploadGuard(),
         };
         var session = new OfflineUpdateSshManagedSession(transport);
         var payload = Payload(96 * 1024, 37);
@@ -938,6 +940,194 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         Assert.Equal("cat > '/tmp/armada-stage/file.bin'", transport.StartedCommand);
         Assert.Equal(payload, transport.LastChannel!.InputBytes);
+
+        // A successful upload keeps the session: the guard is released without
+        // ever closing the socket, and it received a finite send timeout it
+        // restores on disposal.
+        Assert.NotNull(guard);
+        Assert.Equal(0, guard!.AbortCount);
+        Assert.True(guard.Disposed);
+        Assert.Equal(1, transport.UploadGuardCount);
+        Assert.True(transport.LastUploadSendTimeout > TimeSpan.Zero);
+        Assert.True(transport.LastUploadSendTimeout < TimeSpan.FromMinutes(5));
+        Assert.True(transport.LastChannel!.Disposed);
+    }
+
+    [Fact]
+    public async Task Upload_WithoutAnAbortableSocket_FailsClosedBeforeTheRemoteCommand()
+    {
+        // `cat > path` truncates on start, so an upload that could not be
+        // aborted must never reach the remote command.
+        var transport = new FakeTransport(HostKey(38)) { UploadGuardFactory = () => null };
+        var session = new OfflineUpdateSshManagedSession(transport);
+        var content = new MemoryStream(new byte[] { 1, 2, 3 });
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateSshManagedException>(() =>
+            session.UploadFileAsync("/tmp/armada-stage/file.bin", content, useSudo: false));
+
+        Assert.Equal(OfflineUpdateSshManagedFailure.Bootstrap, error.Reason);
+        Assert.Contains("socket", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, transport.UploadGuardCount);
+        Assert.Equal(0, transport.StartCount);
+        Assert.Null(transport.LastChannel);
+
+        // The source belongs to the caller and is never disposed here.
+        Assert.True(content.CanRead);
+    }
+
+    [Fact]
+    public async Task Upload_ExceedingTheAbsoluteDeadline_AbortsTheSocketAndReportsTimeout()
+    {
+        // The fake write stands in for SSH.NET's synchronous send: it ignores
+        // the token and only returns when the guard closes the socket. Without
+        // the abort the upload would never finish.
+        var input = new BlockingWriteStream();
+        var channel = new FakeChannel(
+            string.Empty,
+            gaiteOutputOnPassword: false,
+            exited: false,
+            standardInput: input);
+        FakeUploadGuard? guard = null;
+        var transport = new FakeTransport(HostKey(39))
+        {
+            ChannelFactory = _ => channel,
+            UploadGuardFactory = () => guard = new FakeUploadGuard(() =>
+            {
+                input.Release();
+                channel.Cancel();
+            }),
+        };
+        var session = new OfflineUpdateSshManagedSession(
+            transport,
+            uploadTimeout: TimeSpan.FromSeconds(1));
+        var content = new ScriptedStream(new[]
+        {
+            new ScriptedStream.Segment(new byte[] { 1, 2, 3 }, Task.CompletedTask),
+        });
+
+        var upload = session.UploadFileAsync("/tmp/armada-stage/file.bin", content, useSudo: false);
+        await input.WriteStarted.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateSshManagedException>(() => upload);
+
+        Assert.Equal(OfflineUpdateSshManagedFailure.Timeout, error.Reason);
+        Assert.Contains("did not finish", error.Message, StringComparison.Ordinal);
+        Assert.NotNull(guard);
+        Assert.Equal(1, guard!.AbortCount);
+        Assert.True(guard.Disposed);
+        Assert.True(channel.Disposed);
+    }
+
+    [Fact]
+    public async Task Upload_CancelledWhileThePeerStopsReading_AbortsTheSocketAndReportsCancellation()
+    {
+        var input = new BlockingWriteStream();
+        var channel = new FakeChannel(
+            string.Empty,
+            gaiteOutputOnPassword: false,
+            exited: false,
+            standardInput: input);
+        FakeUploadGuard? guard = null;
+        var transport = new FakeTransport(HostKey(40))
+        {
+            ChannelFactory = _ => channel,
+            UploadGuardFactory = () => guard = new FakeUploadGuard(() =>
+            {
+                input.Release();
+                channel.Cancel();
+            }),
+        };
+        var session = new OfflineUpdateSshManagedSession(transport);
+        var content = new ScriptedStream(new[]
+        {
+            new ScriptedStream.Segment(new byte[] { 1, 2, 3 }, Task.CompletedTask),
+        });
+        using var cancelled = new CancellationTokenSource();
+
+        var upload = session.UploadFileAsync(
+            "/tmp/armada-stage/file.bin", content, useSudo: false, cancelled.Token);
+        await input.WriteStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        cancelled.Cancel();
+
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => upload);
+
+        Assert.Equal(cancelled.Token, error.CancellationToken);
+        Assert.NotNull(guard);
+        Assert.Equal(1, guard!.AbortCount);
+        Assert.True(guard.Disposed);
+        Assert.True(channel.Disposed);
+    }
+
+    [Fact]
+    public async Task Upload_DeadlineDuringRemoteCompletion_AbortsTheSocketAndReportsTimeout()
+    {
+        // The copy and its EOF succeed, but the remote command never exits.
+        // The same absolute budget has to cover completion, not only the copy.
+        var input = new RecordingInput();
+        var channel = new FakeChannel(
+            string.Empty,
+            gaiteOutputOnPassword: false,
+            exited: false,
+            standardInput: input,
+            waitForExitIgnoresTimeout: true);
+        FakeUploadGuard? guard = null;
+        var transport = new FakeTransport(HostKey(41))
+        {
+            ChannelFactory = _ => channel,
+            UploadGuardFactory = () => guard = new FakeUploadGuard(() => channel.Cancel()),
+        };
+        var session = new OfflineUpdateSshManagedSession(
+            transport,
+            uploadTimeout: TimeSpan.FromSeconds(1));
+        var content = new ScriptedStream(new[]
+        {
+            new ScriptedStream.Segment(new byte[] { 1, 2, 3 }, Task.CompletedTask),
+        });
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateSshManagedException>(() =>
+            session.UploadFileAsync("/tmp/armada-stage/file.bin", content, useSudo: false));
+
+        Assert.Equal(OfflineUpdateSshManagedFailure.Timeout, error.Reason);
+        Assert.NotNull(guard);
+        Assert.Equal(1, guard!.AbortCount);
+        Assert.True(guard.Disposed);
+        Assert.Equal(new byte[] { 1, 2, 3 }, input.ToArray());
+    }
+
+    [Fact]
+    public async Task Upload_LocalReadFailureAfterStart_AbortsTheSocketAndKeepsTheOriginalFailure()
+    {
+        // The copy fails locally after `cat` already started, so the remote
+        // transfer is incomplete. The captured socket has to be shut down
+        // before cleanup, and the local failure is what the caller sees.
+        var channel = new FakeChannel(
+            string.Empty,
+            gaiteOutputOnPassword: false,
+            exited: false);
+        FakeUploadGuard? guard = null;
+        var transport = new FakeTransport(HostKey(42))
+        {
+            ChannelFactory = _ => channel,
+            UploadGuardFactory = () => guard = new FakeUploadGuard(() => channel.Cancel()),
+        };
+        var session = new OfflineUpdateSshManagedSession(transport);
+        var content = new ScriptedStream(new[]
+        {
+            new ScriptedStream.Segment(new byte[] { 1, 2, 3 }, Task.CompletedTask),
+            new ScriptedStream.Segment(
+                Array.Empty<byte>(),
+                Task.FromException(new IOException("The local upload payload could not be read."))),
+        });
+
+        var error = await Assert.ThrowsAsync<IOException>(() =>
+            session.UploadFileAsync("/tmp/armada-stage/file.bin", content, useSudo: false));
+
+        Assert.Equal("The local upload payload could not be read.", error.Message);
+        Assert.Equal(1, transport.StartCount);
+        Assert.NotNull(guard);
+        Assert.Equal(1, guard!.AbortCount);
+        Assert.True(guard.Disposed);
+        Assert.True(channel.Disposed);
     }
 
     private static byte[] Payload(int length, byte seed)
@@ -984,6 +1174,17 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         internal Func<string, FakeChannel> ChannelFactory { get; init; } =
             _ => new FakeChannel(ReadyOutput(), false, exited: false);
+
+        /// <summary>
+        /// Returns null to stand in for a transport that cannot resolve the
+        /// authenticated socket; the default hands out a controllable guard.
+        /// </summary>
+        internal Func<IOfflineUpdateSshUploadGuard?> UploadGuardFactory { get; init; } =
+            () => new FakeUploadGuard();
+
+        internal int UploadGuardCount { get; private set; }
+
+        internal TimeSpan? LastUploadSendTimeout { get; private set; }
 
         internal Queue<Func<string, FakeChannel>> ChannelQueue { get; } = new();
 
@@ -1036,20 +1237,56 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             return channel;
         }
 
+        public IOfflineUpdateSshUploadGuard? TryCreateUploadGuard(TimeSpan sendTimeout)
+        {
+            UploadGuardCount++;
+            LastUploadSendTimeout = sendTimeout;
+            return UploadGuardFactory();
+        }
+
         public void Dispose()
         {
             DisposeCount++;
         }
     }
 
+    /// <summary>
+    /// Controllable upload guard. The optional abort action stands in for the
+    /// real socket shutdown breaking a blocked send.
+    /// </summary>
+    private sealed class FakeUploadGuard : IOfflineUpdateSshUploadGuard
+    {
+        private readonly Action? _onAbort;
+        private int _abortCount;
+        private int _disposed;
+
+        internal FakeUploadGuard(Action? onAbort = null) => _onAbort = onAbort;
+
+        internal int AbortCount => Volatile.Read(ref _abortCount);
+
+        internal bool Disposed => Volatile.Read(ref _disposed) != 0;
+
+        public bool IsAborted => AbortCount > 0;
+
+        public void Abort()
+        {
+            if (Interlocked.Increment(ref _abortCount) == 1)
+                _onAbort?.Invoke();
+        }
+
+        public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
+    }
+
     private sealed class FakeChannel : IOfflineUpdateSshChannel
     {
         private readonly RecordingInput _input;
+        private readonly Stream _standardInput;
         private readonly ScriptedStream _output;
         private readonly ScriptedStream _error;
         private readonly TaskCompletionSource<bool> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly int _exitStatus;
         private readonly string _errorTail;
+        private readonly bool _waitForExitIgnoresTimeout;
 
         internal FakeChannel(
             string output,
@@ -1064,11 +1301,15 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             TaskCompletionSource<bool>? errorReadStarted = null,
             TaskCompletionSource<bool>? stdoutEnded = null,
             IReadOnlyList<ScriptedStream.Segment>? outputSegments = null,
-            bool exitOnInputClosed = false)
+            bool exitOnInputClosed = false,
+            Stream? standardInput = null,
+            bool waitForExitIgnoresTimeout = false)
         {
             _exitStatus = exitStatus;
             _errorTail = errorTail;
             _input = new RecordingInput(inputClosed);
+            _standardInput = standardInput ?? _input;
+            _waitForExitIgnoresTimeout = waitForExitIgnoresTimeout;
             var effectiveGate = outputGate ??
                 (gaiteOutputOnPassword ? _input.FirstLineWritten : Task.CompletedTask);
             _output = new ScriptedStream(
@@ -1114,7 +1355,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             }
         }
 
-        public Stream StandardInput => _input;
+        public Stream StandardInput => _standardInput;
 
         public Stream StandardOutput => _output;
 
@@ -1130,7 +1371,9 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         internal string InputText => Encoding.UTF8.GetString(InputBytes);
 
-        public bool WaitForExit(TimeSpan timeout) => _exit.Task.Wait(timeout) && _exit.Task.Result;
+        public bool WaitForExit(TimeSpan timeout) =>
+            _exit.Task.Wait(_waitForExitIgnoresTimeout ? Timeout.InfiniteTimeSpan : timeout) &&
+            _exit.Task.Result;
 
         public void Cancel() => _exit.TrySetResult(false);
 
@@ -1245,6 +1488,60 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         public override void SetLength(long value) => throw new NotSupportedException();
 
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A standard input whose write never returns on its own, standing in for
+    /// SSH.NET's synchronous socket send when the peer stops reading. The
+    /// cancellation token is deliberately ignored: only the upload guard can
+    /// end the write, exactly like a real socket send under the write lock.
+    /// </summary>
+    private sealed class BlockingWriteStream : Stream
+    {
+        private readonly TaskCompletionSource<bool> _writeStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task WriteStarted => _writeStarted.Task;
+
+        internal void Release() => _released.TrySetResult(true);
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            _writeStarted.TrySetResult(true);
+            await _released.Task.ConfigureAwait(false);
+            throw new IOException("The transport connection has been closed.");
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 
     /// <summary>

@@ -297,7 +297,12 @@ public sealed class OfflineUpdateTransfer
         Schema(restart);
         Require(restart, "transactionId", transactionId);
         var state = RequiredString(restart, "state", "restart");
-        if (state is not ("dispatched" or "uncertain"))
+        // "dispatching" records a restart that an earlier request already put
+        // inside the reboot window: the device is still working on that one
+        // request, so it is a pending dispatch and is neither rejected nor
+        // re-sent. A state outside these three may already have reached the
+        // firmware and is still refused.
+        if (state is not ("dispatching" or "dispatched" or "uncertain"))
             throw new InvalidDataException("restart response has an unexpected restart state.");
         return result;
     }

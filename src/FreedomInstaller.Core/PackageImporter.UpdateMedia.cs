@@ -933,13 +933,17 @@ public static partial class PackageImporter
         int maxBytes,
         CancellationToken token)
     {
-        if (stream.Length <= 0 || stream.Length > maxBytes)
+        // The length is read once and that snapshot is used for both the range
+        // check and the initial capacity, so the buffer can never be sized from
+        // a length that was not validated.
+        var length = stream.Length;
+        if (length <= 0 || length > maxBytes)
         {
             throw new InvalidDataException($"文件大小超出允许范围：{path}。");
         }
 
         var limit = maxBytes + 1;
-        using var ms = new MemoryStream((int)stream.Length);
+        using var ms = new MemoryStream((int)length);
         var buffer = new byte[Math.Min(16384, maxBytes + 1)];
         var total = 0;
 

@@ -195,6 +195,66 @@ public sealed partial class OfflineUpdatePackageTests
         Assert.Equal(0, server.ExecuteCalls);
     }
 
+    [Theory]
+    [InlineData("dispatching")]
+    [InlineData("dispatched")]
+    [InlineData("uncertain")]
+    public async Task Transfer_RestartToVerify_AcceptsTheDeviceRestartRecordAndSendsOneRequest(string restartState)
+    {
+        var c = new Case(Path.Combine(root, "restart-" + Guid.NewGuid().ToString("N")));
+        var work = Directory.CreateDirectory(Path.Combine(root, "restart-work-" + Guid.NewGuid().ToString("N"))).FullName;
+        using var imported = await Import(c.ArchivePath, Model, "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer(Model, c.DescriptorBytes, c.Entries["images/linux-root.img.gz"], [1, 2], [3, 4])
+        {
+            RestartState = restartState,
+        };
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+        var session = await transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask);
+        server.State = "awaiting_reboot";
+
+        server.Methods.Clear();
+        var result = await transfer.RestartToVerifyAsync(session);
+
+        // The response is the device's own record of this one request: the
+        // pending ("dispatching") and neutral ("dispatched"/"uncertain") shapes
+        // are all accepted, and nothing is sent a second time.
+        Assert.Equal("awaiting_reboot", result.GetProperty("state").GetString());
+        Assert.Equal(TransactionIdConst, result.GetProperty("transactionId").GetString());
+        Assert.Equal(restartState, result.GetProperty("restart").GetProperty("state").GetString());
+        Assert.Equal(TransactionIdConst, result.GetProperty("restart").GetProperty("transactionId").GetString());
+        Assert.Equal(["info", "restart_to_verify"], server.Methods);
+        Assert.Equal(1, server.RestartCalls);
+        Assert.Equal(0, server.ExecuteCalls);
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("")]
+    [InlineData("Dispatched")]
+    public async Task Transfer_RestartToVerify_StillRejectsAnUnknownRestartStateAfterOneRequest(string restartState)
+    {
+        var c = new Case(Path.Combine(root, "restart-bad-" + Guid.NewGuid().ToString("N")));
+        var work = Directory.CreateDirectory(Path.Combine(root, "restart-bad-work-" + Guid.NewGuid().ToString("N"))).FullName;
+        using var imported = await Import(c.ArchivePath, Model, "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer(Model, c.DescriptorBytes, c.Entries["images/linux-root.img.gz"], [1, 2], [3, 4])
+        {
+            RestartState = restartState,
+        };
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+        var session = await transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask);
+        server.State = "awaiting_reboot";
+
+        server.Methods.Clear();
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => transfer.RestartToVerifyAsync(session));
+
+        Assert.Contains("restart", failure.Message);
+        Assert.Equal(["info", "restart_to_verify"], server.Methods);
+        Assert.Equal(1, server.RestartCalls);
+        Assert.Equal(0, server.ExecuteCalls);
+    }
+
     [Fact]
     public async Task Transfer_PersistenceCallbackFails_AbortsBeforeUploadPrepareOrExecute()
     {
@@ -574,6 +634,13 @@ public sealed partial class OfflineUpdatePackageTests
         public bool ExecuteTerminalFailure { get; set; }
 
         /// <summary>
+        /// The <c>restart.state</c> the device reports. "dispatching" is the
+        /// durable record of a restart an earlier request already started, so
+        /// the transfer must accept it as pending instead of refusing it.
+        /// </summary>
+        public string RestartState { get; set; } = "dispatched";
+
+        /// <summary>
         /// Whether <c>info</c> advertises <see cref="OfflineUpdateUiState.PreflightSessionCapability"/>.
         /// It describes the runtime only; a preflight that names a session is
         /// always answered with that session, whatever this flag says.
@@ -586,6 +653,7 @@ public sealed partial class OfflineUpdatePackageTests
         public int BeginCalls { get; private set; }
         public int PrepareCalls { get; private set; }
         public int ExecuteCalls { get; private set; }
+        public int RestartCalls { get; private set; }
         public int PreflightCalls { get; private set; }
         public string? PreflightSessionId { get; private set; }
         public byte[] ReceivedDescriptor { get; private set; } = [];
@@ -640,6 +708,7 @@ public sealed partial class OfflineUpdatePackageTests
                 "prepare" => HandlePrepare(@params),
                 "export" => HandleExport(@params),
                 "execute" => HandleExecute(@params),
+                "restart_to_verify" => HandleRestart(@params),
                 _ => throw new InvalidOperationException("Unknown RPC method: " + method)
             };
 
@@ -803,6 +872,26 @@ public sealed partial class OfflineUpdatePackageTests
             ExecuteCalls++;
             State = ExecuteTerminalFailure ? "failed" : (StateQueue.Count > 0 ? StateQueue.Dequeue() : "awaiting_reboot");
             return BuildReceipt();
+        }
+
+        private JsonObject HandleRestart(JsonElement p)
+        {
+            Assert.Equal(SessionIdConst, p.GetProperty("sessionId").GetString());
+            RestartCalls++;
+            return new JsonObject
+            {
+                ["schemaVersion"] = 1,
+                ["sessionId"] = SessionIdConst,
+                ["state"] = "awaiting_reboot",
+                ["transactionId"] = TransactionIdConst,
+                ["deployment"] = new string('a', 64) + ".1",
+                ["restart"] = new JsonObject
+                {
+                    ["schemaVersion"] = 1,
+                    ["state"] = RestartState,
+                    ["transactionId"] = TransactionIdConst
+                }
+            };
         }
 
         private JsonObject BuildReceipt()

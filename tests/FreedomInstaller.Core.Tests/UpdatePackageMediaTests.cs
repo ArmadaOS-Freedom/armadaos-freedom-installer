@@ -449,6 +449,27 @@ public sealed class UpdatePackageMediaTests : IDisposable
         Assert.Equal(payload, PackageImporter.ReadBoundedRegularFile(path, payload.Length + 1, default));
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(16 * 1024)]
+    [InlineData(16 * 1024 + 1)]
+    [InlineData(64 * 1024)]
+    public void SignedSidecarReadReturnsAnOrdinaryBoundedFileByteForByte(int size)
+    {
+        var path = Path.Combine(root, $"bounded-{size}.update.json");
+        var payload = new byte[size];
+        RandomNumberGenerator.Fill(payload);
+        File.WriteAllBytes(path, payload);
+
+        // The length is snapshotted once and is both the read bound and the
+        // initial buffer size, so an ordinary file at and across the internal
+        // buffer boundary comes back complete and byte for byte.
+        var read = PackageImporter.ReadBoundedRegularFile(path, size, default);
+
+        Assert.Equal(size, read.Length);
+        Assert.Equal(payload, read);
+    }
+
     [Fact]
     public void SignedSidecarReadKeepsExistingCapsCancellationAndMissingFileBehaviour()
     {

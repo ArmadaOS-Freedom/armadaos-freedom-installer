@@ -19,6 +19,13 @@ internal sealed class OfflineUpdateSshManagedSession : IOfflineUpdateManagedSess
     private const long MaxUploadBytes = 256L * 1024 * 1024;
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan UploadTimeout = TimeSpan.FromMinutes(30);
+
+    // SSH.NET performs stdin writes with a synchronous socket send under the
+    // session write lock. A finite send timeout bounds one such call even
+    // before the absolute upload watchdog closes the socket; the pinned
+    // transport nevertheless restores the previous value when the upload ends
+    // normally, so the long-lived RPC traffic keeps SSH.NET's default.
+    private static readonly TimeSpan UploadSendTimeout = TimeSpan.FromSeconds(30);
     private static readonly string[] PrivilegedRoots =
     {
         "/usr", "/etc", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
@@ -26,12 +33,25 @@ internal sealed class OfflineUpdateSshManagedSession : IOfflineUpdateManagedSess
     };
 
     private readonly IOfflineUpdateSshTransport _transport;
+    private readonly TimeSpan _uploadTimeout;
     private string? _sudoPassword;
 
-    internal OfflineUpdateSshManagedSession(IOfflineUpdateSshTransport transport, string? sudoPassword = null)
+    internal OfflineUpdateSshManagedSession(
+        IOfflineUpdateSshTransport transport,
+        string? sudoPassword = null,
+        TimeSpan? uploadTimeout = null)
     {
         _transport = transport;
         _sudoPassword = sudoPassword;
+        _uploadTimeout = uploadTimeout ?? UploadTimeout;
+        if (_uploadTimeout <= TimeSpan.Zero ||
+            _uploadTimeout == Timeout.InfiniteTimeSpan ||
+            _uploadTimeout > TimeSpan.FromMilliseconds(uint.MaxValue - 1))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(uploadTimeout),
+                "The upload timeout must be a positive finite duration supported by CancellationTokenSource.");
+        }
     }
 
     /// <summary>Drops the elevation secret after the preparation callback has finished.</summary>
@@ -123,83 +143,188 @@ internal sealed class OfflineUpdateSshManagedSession : IOfflineUpdateManagedSess
         // already requested. The remote command truncates its target on start,
         // so re-check here, before the only mutating step.
         token.ThrowIfCancellationRequested();
-        var command = "cat > '" + target + "'";
-        var channel = _transport.Start(command);
-        var stdout = new OfflineUpdateBoundedText(4096);
-        var stderr = new OfflineUpdateBoundedText(4096);
-        using var ioCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-        var stdoutTask = DrainAsync(channel.StandardOutput, stdout, ioCts.Token);
-        var stderrTask = DrainAsync(channel.StandardError, stderr, ioCts.Token);
-        var exitTask = Task.Run(() => channel.WaitForExit(UploadTimeout), CancellationToken.None);
 
-        try
+        // `cat > path` truncates as soon as the remote command starts, and the
+        // bytes travel through SSH.NET's synchronous socket send under the
+        // session write lock. Neither the caller token nor a channel cancel can
+        // break a send whose peer stopped reading, so capture the exact
+        // authenticated socket first. When it cannot be captured the upload
+        // must fail closed: an unbreakable transfer must not start at all.
+        var guard = _transport.TryCreateUploadGuard(UploadSendTimeout);
+        if (guard is null)
         {
-            await CopyBoundedAsync(content, channel.StandardInput, firstChunk, firstRead, MaxUploadBytes, token).ConfigureAwait(false);
-            await channel.StandardInput.FlushAsync(token).ConfigureAwait(false);
-            try
-            {
-                channel.StandardInput.Dispose();
-            }
-            catch
-            {
-            }
-
-            bool exited;
-            try
-            {
-                exited = await exitTask.WaitAsync(UploadTimeout, token).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                throw new OfflineUpdateSshManagedException(
-                    OfflineUpdateSshManagedFailure.Timeout,
-                    "The file upload did not finish in time.");
-            }
-
-            if (!exited)
-            {
-                throw new OfflineUpdateSshManagedException(
-                    OfflineUpdateSshManagedFailure.Timeout,
-                    "The file upload did not finish in time.");
-            }
-
-            await DrainTaskAsync(stdoutTask).ConfigureAwait(false);
-            await DrainTaskAsync(stderrTask).ConfigureAwait(false);
-
-            if (channel.ExitStatus != 0)
-            {
-                var tail = stderr.Snapshot();
-                throw new OfflineUpdateSshManagedException(
-                    OfflineUpdateSshManagedFailure.UpdaterUnavailable,
-                    "The file upload failed with exit code " +
-                    channel.ExitStatus.ToString(System.Globalization.CultureInfo.InvariantCulture) +
-                    "." + (tail.Length == 0 ? string.Empty : " " + tail));
-            }
+            throw new OfflineUpdateSshManagedException(
+                OfflineUpdateSshManagedFailure.Bootstrap,
+                "The file upload was not started because the authenticated SSH socket could not be captured for a bounded abort. Reconnect and retry.");
         }
-        finally
+
+        using (guard)
+        using (var deadline = new CancellationTokenSource(_uploadTimeout))
+        using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token))
         {
-            await ioCts.CancelAsync().ConfigureAwait(false);
-            try
+            // One absolute budget covers the copy, the stdin EOF and the remote
+            // completion. Both the caller token and that deadline break the
+            // transfer by shutting the captured socket down directly, never by
+            // asking SSH.NET to cancel a command through the lock that is
+            // already stuck.
+            //
+            // 0 = still running, 1 = remote completion, 2 = abort. Completion
+            // and abort claim the same slot with a compare-and-swap, so exactly
+            // one of them wins: either the socket is shut down, or a completed
+            // upload leaves the healthy session alone.
+            var finished = 0;
+            void AbortUnlessFinished()
             {
-                channel.Cancel();
-            }
-            catch
-            {
+                if (Interlocked.CompareExchange(ref finished, 2, 0) == 0)
+                    guard.Abort();
             }
 
-            await DrainTaskAsync(exitTask).ConfigureAwait(false);
-            await DrainTaskAsync(stdoutTask).ConfigureAwait(false);
-            await DrainTaskAsync(stderrTask).ConfigureAwait(false);
-            if (exitTask.IsCompleted && stdoutTask.IsCompleted && stderrTask.IsCompleted)
+            using var callerRegistration = token.Register(AbortUnlessFinished);
+            using var deadlineRegistration = deadline.Token.Register(AbortUnlessFinished);
+
+            // A cancellation may have landed between the re-check above and the
+            // registrations; the socket is already aborted and no remote
+            // command exists yet.
+            if (token.IsCancellationRequested || deadline.IsCancellationRequested)
+                ThrowUploadAbort(token, deadline.Token, inner: null);
+
+            var command = "cat > '" + target + "'";
+            IOfflineUpdateSshChannel channel;
+            try
+            {
+                channel = _transport.Start(command);
+            }
+            catch (Exception ex)
+            {
+                ThrowUploadAbort(token, deadline.Token, ex);
+                throw;
+            }
+
+            var stdout = new OfflineUpdateBoundedText(4096);
+            var stderr = new OfflineUpdateBoundedText(4096);
+            using var ioCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            var stdoutTask = DrainAsync(channel.StandardOutput, stdout, ioCts.Token);
+            var stderrTask = DrainAsync(channel.StandardError, stderr, ioCts.Token);
+            var exitTask = Task.Run(() => channel.WaitForExit(_uploadTimeout), CancellationToken.None);
+
+            try
             {
                 try
                 {
-                    channel.Dispose();
+                    await CopyBoundedAsync(content, channel.StandardInput, firstChunk, firstRead, MaxUploadBytes, linked.Token).ConfigureAwait(false);
+                    await channel.StandardInput.FlushAsync(linked.Token).ConfigureAwait(false);
+                    try
+                    {
+                        channel.StandardInput.Dispose();
+                    }
+                    catch
+                    {
+                    }
+
+                    var exited = await exitTask.WaitAsync(linked.Token).ConfigureAwait(false);
+                    if (!exited)
+                    {
+                        ThrowUploadAbort(token, deadline.Token, inner: null);
+                        throw new OfflineUpdateSshManagedException(
+                            OfflineUpdateSshManagedFailure.Timeout,
+                            "The file upload did not finish in time.");
+                    }
+
+                    await DrainTaskAsync(stdoutTask).ConfigureAwait(false);
+                    await DrainTaskAsync(stderrTask).ConfigureAwait(false);
+
+                    // The remote process exited and both pipes are drained.
+                    // Claiming completion is the other half of the abort race:
+                    // if the caller token or the deadline already owns the
+                    // abort, the socket is gone and the transfer must report
+                    // that cause even though the remote returned success.
+                    if (Interlocked.CompareExchange(ref finished, 1, 0) != 0)
+                    {
+                        ThrowUploadAbort(token, deadline.Token, inner: null);
+                        throw new OfflineUpdateSshManagedException(
+                            OfflineUpdateSshManagedFailure.Timeout,
+                            "The file upload did not finish in time.");
+                    }
+
+                    if (channel.ExitStatus != 0)
+                    {
+                        var tail = stderr.Snapshot();
+                        throw new OfflineUpdateSshManagedException(
+                            OfflineUpdateSshManagedFailure.UpdaterUnavailable,
+                            "The file upload failed with exit code " +
+                            channel.ExitStatus.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                            "." + (tail.Length == 0 ? string.Empty : " " + tail));
+                    }
                 }
-                catch
+                catch (Exception ex) when (ex is not OfflineUpdateSshManagedException &&
+                                           (token.IsCancellationRequested || deadline.IsCancellationRequested))
                 {
+                    // The socket shutdown surfaces as whatever the blocked I/O
+                    // throws; report the cause the caller actually requested.
+                    ThrowUploadAbort(token, deadline.Token, ex);
+                    throw;
                 }
             }
+            finally
+            {
+                // Anything short of a claimed remote completion is an
+                // incomplete transfer: a local read or size failure, a native
+                // send timeout, a cancellation or the deadline. Break the
+                // captured socket here, before cleanup, while the abort can
+                // still win the race; a local failure keeps its original
+                // exception. A claimed completion is left untouched, so a
+                // normal or nonzero remote exit never disconnects the session.
+                //
+                // SSH.NET is never asked to cancel from upload cleanup:
+                // channel.Cancel would take the session write lock that the
+                // incomplete transfer may still hold. A command that is still
+                // running is torn down by the socket abort above.
+                AbortUnlessFinished();
+                await ioCts.CancelAsync().ConfigureAwait(false);
+
+                await DrainTaskAsync(exitTask).ConfigureAwait(false);
+                await DrainTaskAsync(stdoutTask).ConfigureAwait(false);
+                await DrainTaskAsync(stderrTask).ConfigureAwait(false);
+                if (exitTask.IsCompleted && stdoutTask.IsCompleted && stderrTask.IsCompleted)
+                {
+                    try
+                    {
+                        channel.Dispose();
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reports the abort that actually ended an upload: the caller's
+    /// cancellation first, then the absolute upload deadline. Cancellation and
+    /// timeout stay distinguishable even though both close the same socket, and
+    /// an unrelated failure that happened to overlap a cancellation is never
+    /// relabelled. Returns only when neither was requested.
+    /// </summary>
+    private static void ThrowUploadAbort(
+        CancellationToken callerToken,
+        CancellationToken deadlineToken,
+        Exception? inner)
+    {
+        if (callerToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(
+                "The file upload was cancelled.",
+                inner,
+                callerToken);
+        }
+
+        if (deadlineToken.IsCancellationRequested)
+        {
+            throw new OfflineUpdateSshManagedException(
+                OfflineUpdateSshManagedFailure.Timeout,
+                "The file upload did not finish in time.",
+                inner);
         }
     }
 

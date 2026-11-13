@@ -50,6 +50,25 @@ internal interface IOfflineUpdateSshChannel : IDisposable
     void Cancel();
 }
 
+/// <summary>
+/// Upload-only abort handle for the exact socket that carries the
+/// authenticated session. It closes that socket directly, without SSH.NET's
+/// write path and without its session lock, so a send the peer stopped reading
+/// can still be broken.
+/// </summary>
+internal interface IOfflineUpdateSshUploadGuard : IDisposable
+{
+    /// <summary>True once the captured socket has been shut down.</summary>
+    bool IsAborted { get; }
+
+    /// <summary>
+    /// Shuts the captured socket down and closes it. Idempotent and safe to
+    /// call from any thread, including a cancellation callback that runs while
+    /// a synchronous send holds the session write lock.
+    /// </summary>
+    void Abort();
+}
+
 internal interface IOfflineUpdateSshTransport : IDisposable
 {
     /// <summary>
@@ -61,6 +80,14 @@ internal interface IOfflineUpdateSshTransport : IDisposable
     Task<OfflineUpdateSshProbeResult> RunAsync(string command, TimeSpan timeout, int maxOutputBytes, CancellationToken token);
 
     IOfflineUpdateSshChannel Start(string command);
+
+    /// <summary>
+    /// Captures an upload abort handle for the exact authenticated socket and
+    /// applies a finite send timeout for the upload's duration. Returns null
+    /// when that socket cannot be resolved; an upload must then fail closed
+    /// instead of starting a transfer it could not abort.
+    /// </summary>
+    IOfflineUpdateSshUploadGuard? TryCreateUploadGuard(TimeSpan sendTimeout);
 }
 
 internal interface IOfflineUpdateSshTransportFactory

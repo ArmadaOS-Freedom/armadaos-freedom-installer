@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using Renci.SshNet;
@@ -280,6 +282,17 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
 
         return new SshNetChannel(sshCommand, input, output, error, execution);
     }
+
+    /// <summary>
+    /// Resolves the socket of the client that is actually authenticated and
+    /// in use. The pinned SSH.NET keeps it behind internal members, so the
+    /// adapter below either finds the exact socket or reports that it cannot;
+    /// there is no fallback to a transfer that no watchdog can break.
+    /// </summary>
+    public IOfflineUpdateSshUploadGuard? TryCreateUploadGuard(TimeSpan sendTimeout) =>
+        _clientLease.Current is SshClient client
+            ? OfflineUpdateSshNetUploadGuard.TryCreate(client, sendTimeout)
+            : null;
 
     public void Dispose()
     {
@@ -782,7 +795,14 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
 
         public void Dispose()
         {
-            Cancel();
+            // A command whose execution already completed needs no remote
+            // cancel, and asking for one would take the session write lock for
+            // a signal nobody can act on. That matters after an upload guard
+            // shut the socket down: cleanup must not queue a send behind the
+            // lock that the aborted transfer may still have been holding.
+            if (!_completion.IsCompleted)
+                Cancel();
+
             try
             {
                 _completion.Wait(CommandDrainTimeout);
@@ -854,6 +874,193 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
 
         public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
             ValueTask.FromException(new IOException(ClosedMessage));
+    }
+}
+
+/// <summary>
+/// Version-pinned adapter for the one SSH.NET detail this project needs and the
+/// library does not expose: the socket of an authenticated session. The pinned
+/// package keeps <c>BaseClient.Session</c> internal and the socket in a private
+/// <c>Session._socket</c> field. Resolution is all-or-nothing; a missing or
+/// renamed member yields null, and the upload then fails closed instead of
+/// falling back to a transfer no watchdog can break. This is deliberately
+/// limited to the exact pinned version and is verified by a metadata test.
+/// </summary>
+internal static class OfflineUpdateSshNetSessionSocket
+{
+    private const string SessionMemberName = "Session";
+    private const string SocketFieldName = "_socket";
+    private const BindingFlags InstanceMembers =
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+    private static readonly PropertyInfo? SessionProperty =
+        typeof(BaseClient).GetProperty(SessionMemberName, InstanceMembers);
+
+    /// <summary>
+    /// True when the pinned SSH.NET metadata exposes both members the upload
+    /// guard depends on. A package bump that changes either shape has to fail
+    /// this contract instead of silently degrading uploads.
+    /// </summary>
+    internal static bool HasPinnedMembers =>
+        SessionProperty is not null &&
+        (FindSocketField(SessionProperty.PropertyType) is not null ||
+         FindSocketField(typeof(BaseClient).Assembly.GetType("Renci.SshNet.Session")) is not null);
+
+    internal static Socket? TryGetSocket(BaseClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+
+        if (SessionProperty is null)
+            return null;
+
+        object? session;
+        try
+        {
+            session = SessionProperty.GetValue(client);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (session is null)
+            return null;
+
+        // The property type and the live instance are usually the same type;
+        // walking the instance keeps a subclass or an interface-typed property
+        // from hiding the private field.
+        var field = FindSocketField(session.GetType()) ?? FindSocketField(SessionProperty.PropertyType);
+        if (field is null)
+            return null;
+
+        try
+        {
+            return field.GetValue(session) as Socket;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static FieldInfo? FindSocketField(Type? type)
+    {
+        while (type is not null)
+        {
+            var field = type.GetField(SocketFieldName, InstanceMembers);
+            if (field is not null)
+                return field;
+
+            type = type.BaseType;
+        }
+
+        return null;
+    }
+}
+
+/// <summary>
+/// Upload-only abort handle over the exact socket of an authenticated SSH
+/// session. Shutting that socket down is the only way to break a send SSH.NET
+/// performs synchronously while holding its session write lock:
+/// <c>SshCommand.Cancel</c> and <c>Disconnect</c> travel through that same lock
+/// and are never used here. Creation applies a finite send timeout, and
+/// disposal restores the previous value when the transfer ended without an
+/// abort.
+/// </summary>
+internal sealed class OfflineUpdateSshNetUploadGuard : IOfflineUpdateSshUploadGuard
+{
+    private readonly Socket _socket;
+    private readonly int _previousSendTimeout;
+    private int _aborted;
+    private int _disposed;
+
+    private OfflineUpdateSshNetUploadGuard(Socket socket, int previousSendTimeout)
+    {
+        _socket = socket;
+        _previousSendTimeout = previousSendTimeout;
+    }
+
+    internal static OfflineUpdateSshNetUploadGuard? TryCreate(SshClient client, TimeSpan sendTimeout)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        var socket = OfflineUpdateSshNetSessionSocket.TryGetSocket(client);
+        return socket is null ? null : TryCreate(socket, sendTimeout);
+    }
+
+    internal static OfflineUpdateSshNetUploadGuard? TryCreate(Socket socket, TimeSpan sendTimeout)
+    {
+        ArgumentNullException.ThrowIfNull(socket);
+        if (sendTimeout <= TimeSpan.Zero || sendTimeout.TotalMilliseconds > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(sendTimeout),
+                "The upload send timeout must be a positive duration representable in milliseconds.");
+        }
+
+        var milliseconds = (int)Math.Ceiling(sendTimeout.TotalMilliseconds);
+        try
+        {
+            // A socket that was already closed -- a connection torn down while
+            // the guard was being created -- has nothing left to bound.
+            if (socket.SafeHandle.IsClosed || socket.SafeHandle.IsInvalid)
+                return null;
+
+            // Socket.SendTimeout applies the option to the established socket,
+            // so a synchronous send observes it without a second native call.
+            var previous = socket.SendTimeout;
+            socket.SendTimeout = milliseconds;
+            return new OfflineUpdateSshNetUploadGuard(socket, previous);
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException or
+                                   NotSupportedException or ArgumentOutOfRangeException)
+        {
+            // A socket that no longer accepts options cannot bound the upload;
+            // the caller has to fail closed rather than start the transfer.
+            return null;
+        }
+    }
+
+    public bool IsAborted => Volatile.Read(ref _aborted) != 0;
+
+    public void Abort()
+    {
+        if (Interlocked.Exchange(ref _aborted, 1) != 0)
+            return;
+
+        // Shutdown first: closing alone does not reliably wake a send that is
+        // already blocked inside the OS. Both calls are best effort because a
+        // concurrent teardown may have closed the socket.
+        try
+        {
+            _socket.Shutdown(SocketShutdown.Both);
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            _socket.Close();
+        }
+        catch
+        {
+        }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0 || IsAborted)
+            return;
+
+        // The upload finished normally, so the session keeps living: hand the
+        // socket back with the timeout SSH.NET normally uses.
+        try
+        {
+            _socket.SendTimeout = _previousSendTimeout;
+        }
+        catch
+        {
+        }
     }
 }
 
