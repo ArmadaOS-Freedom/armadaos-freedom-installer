@@ -846,6 +846,103 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         Assert.Equal(0, transport.StartCount);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Upload_EmptyContent_RejectsWithoutStartingAChannel(bool nonSeekable)
+    {
+        // `cat > path` truncates the staging target the moment it starts, so an
+        // exhausted or empty stream must be refused before the remote command.
+        var transport = new FakeTransport(HostKey(33));
+        var session = new OfflineUpdateSshManagedSession(transport);
+        Stream content = nonSeekable
+            ? new ScriptedStream(Array.Empty<ScriptedStream.Segment>())
+            : new MemoryStream(Array.Empty<byte>());
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateSshManagedException>(() =>
+            session.UploadFileAsync("/tmp/armada-stage/file.bin", content, useSudo: false));
+
+        Assert.Equal(OfflineUpdateSshManagedFailure.Bootstrap, error.Reason);
+        Assert.Equal(0, transport.StartCount);
+    }
+
+    [Fact]
+    public async Task Upload_CancelledDuringFirstRead_SendsNoCommand()
+    {
+        var transport = new FakeTransport(HostKey(34));
+        var session = new OfflineUpdateSshManagedSession(transport);
+        using var cancelled = new CancellationTokenSource();
+
+        var upload = session.UploadFileAsync(
+            "/tmp/armada-stage/file.bin", new BlockingReadStream(), useSudo: false, cancelled.Token);
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => upload);
+        Assert.Equal(0, transport.StartCount);
+    }
+
+    [Fact]
+    public async Task Upload_CancelledTokenWithDataReturningStream_SendsNoCommand()
+    {
+        // MemoryStream ignores the token and yields its bytes even though
+        // cancellation is already requested. The read itself performs no
+        // remote work, but `cat > path` truncates on start, so the upload must
+        // re-check the token after the read instead of trusting the stream.
+        var transport = new FakeTransport(HostKey(36));
+        var session = new OfflineUpdateSshManagedSession(transport);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            session.UploadFileAsync(
+                "/tmp/armada-stage/file.bin",
+                new MemoryStream(new byte[] { 1, 2, 3 }),
+                useSudo: false,
+                cancelled.Token));
+
+        Assert.Equal(0, transport.StartCount);
+        Assert.Null(transport.LastChannel);
+    }
+
+    [Fact]
+    public async Task Upload_MultiChunkContent_WritesEveryOriginalByte()
+    {
+        var transport = new FakeTransport(HostKey(35))
+        {
+            ChannelFactory = _ => new FakeChannel(
+                string.Empty,
+                gaiteOutputOnPassword: false,
+                exited: false,
+                exitOnInputClosed: true),
+        };
+        var session = new OfflineUpdateSshManagedSession(transport);
+        var payload = Payload(96 * 1024, 37);
+        var firstSplit = 1024;
+        var secondSplit = firstSplit + 70_000;
+        var content = new ScriptedStream(new[]
+        {
+            new ScriptedStream.Segment(payload[..firstSplit], Task.CompletedTask),
+            new ScriptedStream.Segment(payload[firstSplit..secondSplit], Task.CompletedTask),
+            new ScriptedStream.Segment(payload[secondSplit..], Task.CompletedTask),
+        });
+
+        await session.UploadFileAsync("/tmp/armada-stage/file.bin", content, useSudo: false);
+
+        Assert.Equal("cat > '/tmp/armada-stage/file.bin'", transport.StartedCommand);
+        Assert.Equal(payload, transport.LastChannel!.InputBytes);
+    }
+
+    private static byte[] Payload(int length, byte seed)
+    {
+        var data = new byte[length];
+        for (var index = 0; index < data.Length; index++)
+        {
+            data[index] = (byte)((seed * 131 + index * 17 + 1) & 0xff);
+        }
+
+        return data;
+    }
+
     private sealed class FakeFactory : IOfflineUpdateSshTransportFactory
     {
         private readonly FakeTransport _transport;
@@ -958,7 +1055,8 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             bool inputClosed = false,
             TaskCompletionSource<bool>? errorReadStarted = null,
             TaskCompletionSource<bool>? stdoutEnded = null,
-            IReadOnlyList<ScriptedStream.Segment>? outputSegments = null)
+            IReadOnlyList<ScriptedStream.Segment>? outputSegments = null,
+            bool exitOnInputClosed = false)
         {
             _exitStatus = exitStatus;
             _errorTail = errorTail;
@@ -993,6 +1091,16 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
                 _ = Task.Run(async () =>
                 {
                     await _input.FirstLineWritten;
+                    _exit.TrySetResult(true);
+                });
+            }
+
+            if (exitOnInputClosed)
+            {
+                // A real `cat` exits when its standard input reaches EOF.
+                _ = Task.Run(async () =>
+                {
+                    await _input.InputClosed;
                     _exit.TrySetResult(true);
                 });
             }
@@ -1035,10 +1143,13 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         private readonly MemoryStream _inner = new();
         private readonly bool _closed;
         private readonly TaskCompletionSource<bool> _firstLine = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _inputClosed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal RecordingInput(bool closed = false) => _closed = closed;
 
         internal Task FirstLineWritten => _firstLine.Task;
+
+        internal Task InputClosed => _inputClosed.Task;
 
         public override bool CanRead => false;
 
@@ -1080,11 +1191,52 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         {
         }
 
+        protected override void Dispose(bool disposing)
+        {
+            _inputClosed.TrySetResult(true);
+            base.Dispose(disposing);
+        }
+
         public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
         public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
+    private sealed class BlockingReadStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class ScriptedStream : Stream

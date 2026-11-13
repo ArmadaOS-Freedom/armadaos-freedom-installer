@@ -225,7 +225,8 @@ public static partial class PackageImporter
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
-            or ArgumentException)
+            or ArgumentException
+            or InvalidDataException)
         {
         }
     }

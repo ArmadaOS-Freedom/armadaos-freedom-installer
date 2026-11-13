@@ -104,6 +104,25 @@ internal sealed class OfflineUpdateSshManagedSession : IOfflineUpdateManagedSess
                 nameof(remotePath));
         }
 
+        // The remote command truncates its target as soon as it starts, and the
+        // staging uploads are nonempty bootstrap inputs. Read one bounded chunk
+        // (honoring cancellation) before starting the remote command so an empty
+        // or already-exhausted stream, seekable or not, can never truncate the
+        // staging path or send `cat`.
+        var firstChunk = new byte[64 * 1024];
+        var firstRead = await content.ReadAsync(firstChunk.AsMemory(), token).ConfigureAwait(false);
+        if (firstRead <= 0)
+        {
+            throw new OfflineUpdateSshManagedException(
+                OfflineUpdateSshManagedFailure.Bootstrap,
+                "The upload content is empty; staging uploads must contain data.");
+        }
+
+        // The read above cannot be trusted to honor the token: a stream may
+        // ignore cancellation and hand back a chunk while cancellation is
+        // already requested. The remote command truncates its target on start,
+        // so re-check here, before the only mutating step.
+        token.ThrowIfCancellationRequested();
         var command = "cat > '" + target + "'";
         var channel = _transport.Start(command);
         var stdout = new OfflineUpdateBoundedText(4096);
@@ -115,7 +134,7 @@ internal sealed class OfflineUpdateSshManagedSession : IOfflineUpdateManagedSess
 
         try
         {
-            await CopyBoundedAsync(content, channel.StandardInput, MaxUploadBytes, token).ConfigureAwait(false);
+            await CopyBoundedAsync(content, channel.StandardInput, firstChunk, firstRead, MaxUploadBytes, token).ConfigureAwait(false);
             await channel.StandardInput.FlushAsync(token).ConfigureAwait(false);
             try
             {
@@ -278,13 +297,23 @@ internal sealed class OfflineUpdateSshManagedSession : IOfflineUpdateManagedSess
         return needsQuoting ? "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'" : value;
     }
 
-    private static async Task CopyBoundedAsync(Stream source, Stream destination, long limit, CancellationToken token)
+    private static async Task CopyBoundedAsync(
+        Stream source,
+        Stream destination,
+        byte[] firstChunk,
+        int firstChunkLength,
+        long limit,
+        CancellationToken token)
     {
-        var buffer = new byte[64 * 1024];
-        long total = 0;
+        await destination.WriteAsync(firstChunk.AsMemory(0, firstChunkLength), token).ConfigureAwait(false);
+
+        // The first chunk is written, so its buffer can carry the rest of the
+        // copy instead of allocating a second 64 KiB block.
+        var buffer = firstChunk.AsMemory();
+        long total = firstChunkLength;
         while (true)
         {
-            var read = await source.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false);
+            var read = await source.ReadAsync(buffer, token).ConfigureAwait(false);
             if (read == 0)
                 return;
 
@@ -294,7 +323,7 @@ internal sealed class OfflineUpdateSshManagedSession : IOfflineUpdateManagedSess
                     OfflineUpdateSshManagedFailure.UpdaterUnavailable,
                     $"Upload exceeds the {limit} byte limit.");
 
-            await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+            await destination.WriteAsync(buffer[..read], token).ConfigureAwait(false);
         }
     }
 

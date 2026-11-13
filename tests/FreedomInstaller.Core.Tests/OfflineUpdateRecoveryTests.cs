@@ -690,6 +690,49 @@ public sealed class OfflineUpdateRecoveryTests
         Assert.Equal(payloadBefore, File.ReadAllBytes(existingPayload));
     }
 
+    [Fact]
+    public async Task FailedAttempt_WhenCleanupValidationFails_KeepsTheOriginalErrorAndTheExistingBundle()
+    {
+        using var root = new TestRoot();
+        var fixture = CreateFixture();
+        string existing = await SaveBundleAsync(root.WorkRoot, fixture);
+        string existingAck = Path.Combine(existing, AckFileName);
+        string existingPayload = Path.Combine(existing, FirstPath.Replace('/', Path.DirectorySeparatorChar));
+        byte[] ackBefore = File.ReadAllBytes(existingAck);
+        byte[] payloadBefore = File.ReadAllBytes(existingPayload);
+
+        var failing = CreateFixture(files: new[] { new RecoveryPayload(FirstPath, Bytes(8193, 19)) });
+        var cause = new SourceOpenException("source open failed");
+        string? attempt = null;
+
+        Task<Stream> OpenSource(string path, CancellationToken token)
+        {
+            attempt = FindStages(root).Single(stage => !string.Equals(stage, existing, StringComparison.Ordinal));
+
+            // Replace the private attempt directory with a file: the cleanup
+            // guard revalidates the path, refuses it with InvalidDataException
+            // and must not replace the real failure.
+            Directory.Delete(attempt, recursive: true);
+            File.WriteAllText(attempt, "not a directory");
+            throw cause;
+        }
+
+        var actual = await Assert.ThrowsAsync<SourceOpenException>(() =>
+            PackageImporter.SaveOfflineUpdateRecoveryAsync(
+                root.WorkRoot,
+                failing.Context,
+                failing.PlanBytes,
+                failing.ManifestBytes,
+                OpenSource));
+
+        Assert.Same(cause, actual);
+        Assert.NotNull(attempt);
+        Assert.True(File.Exists(attempt));
+        Assert.Equal(new[] { existing }, FindStages(root));
+        Assert.Equal(ackBefore, File.ReadAllBytes(existingAck));
+        Assert.Equal(payloadBefore, File.ReadAllBytes(existingPayload));
+    }
+
     [LinuxFact]
     public async Task LoadCanonicalizesLinkedAncestorsLikeSaveAndRejectsLinkNodes()
     {
