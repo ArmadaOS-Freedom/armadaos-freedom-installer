@@ -105,6 +105,36 @@ namespace FreedomInstaller.App
         }
 
         /// <summary>
+        /// Selects the selector entry after a readable rescan. A record that
+        /// was selected before survives only when the refreshed store still
+        /// holds the exact same value record: session id, device model,
+        /// recovery part and package descriptor all matching. A vanished or
+        /// changed record leaves the selector empty even when exactly one
+        /// other record is present, because selecting it would silently
+        /// retarget the operator's session. Without a prior selection the
+        /// ordinary rule applies: one record is selected, several are not.
+        /// </summary>
+        internal static OfflineUpdateSession? SelectAfterRefresh(
+            OfflineUpdateSession? previous,
+            IReadOnlyList<OfflineUpdateSession> sessions)
+        {
+            if (previous != null)
+            {
+                foreach (OfflineUpdateSession candidate in sessions)
+                {
+                    // Record equality covers every binding field, and the
+                    // refreshed instance is what the selector must hold.
+                    if (candidate == previous)
+                        return candidate;
+                }
+
+                return null;
+            }
+
+            return sessions.Count == 1 ? sessions[0] : null;
+        }
+
+        /// <summary>
         /// True only when the session store was never created: its entry does
         /// not exist while the records root that holds it still does. The entry
         /// is asked for through attributes, because

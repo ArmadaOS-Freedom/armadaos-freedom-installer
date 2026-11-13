@@ -320,6 +320,29 @@ public sealed class OfflineUpdateConnectionUiStateTests
             code, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Refresh_OffersTheCatalogRetryBeforeDecidingThereIsNoSession()
+    {
+        string code = ReadEmbedded("FreedomInstaller.Tests.MainWindow.OfflineUpgrade.cs");
+
+        // Refresh stays offered while the records location cannot be read:
+        // it is the only way back without reconnecting the tablet.
+        Assert.Contains(
+            "bool catalogRetryable = connected && _offlineSavedSessionsUnavailableReason != null;",
+            code,
+            StringComparison.Ordinal);
+        Assert.Contains("catalogRetryable);", code, StringComparison.Ordinal);
+
+        // The read-only retry runs before the handler concludes there is no
+        // session, so a recovered record reaches the selector instead of that
+        // refusal. The selection it keeps is covered by the catalog tests.
+        int handler = code.IndexOf("private async void OnRefreshOfflineStatusAsync", StringComparison.Ordinal);
+        Assert.True(handler >= 0);
+        int retryCall = code.IndexOf("RetrySavedOfflineSessionsOnRefresh();", handler, StringComparison.Ordinal);
+        int noSession = code.IndexOf("if (_offlineSelectedSession == null)", handler, StringComparison.Ordinal);
+        Assert.True(retryCall > handler && noSession > retryCall);
+    }
+
     private static void AssertLabeledBy(string xaml, string labelName, string controlName)
     {
         string line = Assert.Single(xaml.Split('\n')

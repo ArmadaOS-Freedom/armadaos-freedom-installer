@@ -216,10 +216,15 @@ namespace FreedomInstaller.App
             // A saved session's status is read with only a selection. When a
             // validation failed after importing the package there is no
             // session yet, and the same button retries only that read-only
-            // preflight from the package already imported.
+            // preflight from the package already imported. An unreadable
+            // records location keeps Refresh offered as well: it is the one
+            // action that re-reads that location, so a store that came back
+            // is recovered without reconnecting the tablet or re-importing.
+            bool catalogRetryable = connected && _offlineSavedSessionsUnavailableReason != null;
             OfflineUpgradePanel.RefreshButton.IsEnabled = !busy &&
                 (OfflineUpdateUiState.CanRefreshStatus(connected, _offlineSelectedSession != null) ||
-                 OfflineUpdateUiState.CanRetryPreflightWithoutSession(connected, imported, _offlineSessions.Count > 0));
+                 OfflineUpdateUiState.CanRetryPreflightWithoutSession(connected, imported, _offlineSessions.Count > 0) ||
+                 catalogRetryable);
 
             OfflineUpgradePanel.ConfirmCheck.IsEnabled = !busy && OfflineUpdateUiState.CanMutateSession(connected, imported, _offlineSelectedSession != null) && preparedReady;
             OfflineUpgradePanel.ExecuteButton.IsEnabled = !busy && OfflineUpdateUiState.CanMutateSession(connected, imported, _offlineSelectedSession != null) && preparedReady && OfflineUpgradePanel.ConfirmCheck.IsChecked == true;
@@ -817,9 +822,24 @@ namespace FreedomInstaller.App
             });
         }
 
-        /// <summary>Install the matched sessions, dropping the older package's receipt, live flag, completion and recovery.</summary>
-        private void ApplyFilteredOfflineSessions(IReadOnlyList<OfflineUpdateSession> sessions)
+        /// <summary>
+        /// Install the matched sessions, dropping the older package's receipt,
+        /// live flag, completion and recovery. The explicit
+        /// <paramref name="previousSelection"/> is used only by the readable
+        /// retry: that record is kept only when the refreshed store still
+        /// holds the exact same value record, and a vanished or changed one
+        /// leaves the selector empty instead of promoting another record.
+        /// Without it — the validation/import path — the ordinary
+        /// single/multiple rule applies unchanged.
+        /// </summary>
+        private void ApplyFilteredOfflineSessions(
+            IReadOnlyList<OfflineUpdateSession> sessions,
+            OfflineUpdateSession? previousSelection = null)
         {
+            bool hadSelection = previousSelection != null;
+            OfflineUpdateSession? selection =
+                OfflineUpdateSessionCatalog.SelectAfterRefresh(previousSelection, sessions);
+
             ClearOfflineSelectionState();
             _offlineSessions = sessions;
 
@@ -827,11 +847,11 @@ namespace FreedomInstaller.App
             try
             {
                 OfflineUpgradePanel.SessionCombo.ItemsSource = _offlineSessions;
-                if (_offlineSessions.Count == 1)
+                OfflineUpgradePanel.SessionCombo.SelectedItem = selection;
+                _offlineSelectedSession = selection;
+                if (selection != null)
                 {
-                    OfflineUpgradePanel.SessionCombo.SelectedItem = _offlineSessions[0];
-                    _offlineSelectedSession = _offlineSessions[0];
-                    _offlineLastReceipt = TryLoadPersistedOfflineReceipt(_offlineSelectedSession);
+                    _offlineLastReceipt = TryLoadPersistedOfflineReceipt(selection);
                     if (_offlineLastReceipt.HasValue)
                     {
                         UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
@@ -839,20 +859,32 @@ namespace FreedomInstaller.App
                     }
                     else
                     {
-                        SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateSingleSessionMatched", _offlineSelectedSession.SessionId);
+                        SetText(OfflineUpgradePanel.StateText,
+                            hadSelection
+                                ? "Dynamic.OfflineUpdate.StateSessionSelected"
+                                : "Dynamic.OfflineUpdate.StateSingleSessionMatched",
+                            selection.SessionId);
                     }
                 }
-                else if (_offlineSessions.Count > 1)
+                else if (_offlineSessions.Count > 0)
                 {
-                    OfflineUpgradePanel.SessionCombo.SelectedIndex = -1;
-                    _offlineSelectedSession = null;
+                    // Records exist, but none is the record that was selected
+                    // before, or nothing was selected and there are several.
+                    // The choice stays the operator's.
                     SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateMultipleSessionsFound", _offlineSessions.Count);
                 }
                 else
                 {
-                    OfflineUpgradePanel.SessionCombo.SelectedIndex = -1;
-                    _offlineSelectedSession = null;
-                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateReadyToPrepareNew");
+                    // Nothing to select. "Prepare a new session" is only true
+                    // with a validated package; a store that just became
+                    // readable but holds no record and has no imported package
+                    // keeps the connect-and-validate instruction instead of
+                    // claiming a readiness the prepare gate would refuse.
+                    bool hasPackage = _offlinePackage != null && !string.IsNullOrEmpty(_offlineDescriptorSha256);
+                    SetText(OfflineUpgradePanel.StateText,
+                        hasPackage
+                            ? "Dynamic.OfflineUpdate.StateReadyToPrepareNew"
+                            : "Dynamic.OfflineUpdate.StateConnected");
                 }
             }
             finally
@@ -1225,13 +1257,38 @@ namespace FreedomInstaller.App
                 if (_offlineSsh == null || _offlineTransfer == null || string.IsNullOrEmpty(_offlineConnectedModel))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
 
+                // Connect and validation are the only other readers of the
+                // saved records, so a location that was unreadable then would
+                // stay unavailable until one of them ran again. Refresh retries
+                // that local, read-only scan first: nothing is created or
+                // written, the imported package is kept, and the selector is
+                // rebuilt from exactly the records the store still holds under
+                // the catalog selection policy.
+                bool catalogRetried = _offlineSavedSessionsUnavailableReason != null;
+                bool catalogRecovered = catalogRetried && RetrySavedOfflineSessionsOnRefresh();
+                bool catalogUnavailable = _offlineSavedSessionsUnavailableReason != null;
+                // A retry that stayed unreadable must not hide that reason when
+                // a record is still selected: report it once. The read-only
+                // status below is about the selected record, needs no package
+                // for that, and renders on top of this message.
+                if (catalogUnavailable && _offlineSelectedSession != null)
+                    ReportSavedOfflineSessionIssues();
+
                 bool hasPackage = _offlinePackage != null && !string.IsNullOrEmpty(_offlineDescriptorSha256);
                 if (_offlineSelectedSession == null)
                 {
                     // A saved session must be chosen before its status is read;
                     // its binding is what the read-only query is for.
                     if (_offlineSessions.Count > 0)
+                    {
+                        // The retry above just listed the records: the selector
+                        // offers them and the choice stays the operator's. No
+                        // record is chosen here on their behalf.
+                        if (catalogRecovered)
+                            return;
+
                         throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                    }
 
                     // No session exists yet, so the only read-only work left is
                     // the preflight that failed after the package was imported.
@@ -1239,11 +1296,31 @@ namespace FreedomInstaller.App
                     // is imported, uploaded, prepared or created, and preparing
                     // stays blocked until this exact exchange passes.
                     if (!hasPackage)
+                    {
+                        // An unreadable store is not an empty device: it is
+                        // named as such here instead of the misleading "package
+                        // not validated", and Refresh stays offered to retry it.
+                        // A retry that became readable already installed its
+                        // own state (selection or connect instruction, plus any
+                        // damaged-record warning), so it reports nothing again.
+                        if (catalogRetried)
+                        {
+                            if (catalogUnavailable)
+                                ReportSavedOfflineSessionIssues();
+                            return;
+                        }
+
                         throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
+                    }
 
                     ClearOfflineActionEligibility();
                     if (await RunOfflinePreflightAsync(null, ct))
                         SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StatePreflightPassed");
+                    // The pass does not make an unreadable store readable, and
+                    // preparing stays blocked on it, so the reason stays on
+                    // screen instead of the preflight wording.
+                    if (catalogUnavailable)
+                        ReportSavedOfflineSessionIssues();
                     return;
                 }
 
@@ -1298,6 +1375,36 @@ namespace FreedomInstaller.App
                 if (hasPackage && preflightable)
                     await RunOfflinePreflightAsync(session, ct);
             });
+        }
+
+        /// <summary>
+        /// Re-read the saved records location from the explicit Refresh action.
+        /// Connect and validation are the only other scans, so a location that
+        /// could not be read when the tablet connected — a saved drive that was
+        /// not mounted yet, for example — would otherwise stay unavailable
+        /// until one of them ran again. The same read-only scan is retried:
+        /// nothing is created, prepared or written and the imported package is
+        /// untouched. A readable store installs its records under the catalog
+        /// selection policy, so an already selected record is kept only when
+        /// the refreshed store still holds the exact same value record, and a
+        /// vanished or changed one leaves the selector empty rather than
+        /// promoting another record. A scan that is still unreadable leaves the
+        /// current selection, and with it the read-only status of that record,
+        /// reachable; the caller reports the reason exactly once.
+        /// </summary>
+        /// <returns>True when the store became readable.</returns>
+        private bool RetrySavedOfflineSessionsOnRefresh()
+        {
+            if (OfflineUpgradePanel == null || _offlineSavedSessionsUnavailableReason == null)
+                return false;
+
+            var sessions = LoadSavedOfflineSessions();
+            if (_offlineSavedSessionsUnavailableReason != null)
+                return false;
+
+            ApplyFilteredOfflineSessions(sessions, _offlineSelectedSession);
+            ReportDamagedOfflineSessionRecords();
+            return true;
         }
 
         /// <summary>

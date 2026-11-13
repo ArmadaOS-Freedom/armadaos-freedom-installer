@@ -19,6 +19,7 @@ public sealed class OfflineUpdateSessionCatalogTests : IDisposable
     private const string SidB = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b";
     private const string SidC = "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c";
     private const string Uuid = "123e4567-e89b-12d3-a456-426614174000";
+    private const string OtherUuid = "123e4567-e89b-12d3-a456-426614174001";
     private const string Sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string OtherSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private const string DamagedJson = "{truncated";
@@ -48,8 +49,9 @@ public sealed class OfflineUpdateSessionCatalogTests : IDisposable
         }
     }
 
-    private static OfflineUpdateSession Session(string sid = SidA, string model = Model, string sha = Sha) =>
-        new(sid, model, Uuid, sha);
+    private static OfflineUpdateSession Session(
+        string sid = SidA, string model = Model, string uuid = Uuid, string sha = Sha) =>
+        new(sid, model, uuid, sha);
 
     private string Store() => Path.Combine(_root, StoreName);
 
@@ -141,6 +143,64 @@ public sealed class OfflineUpdateSessionCatalogTests : IDisposable
 
         Assert.Equal(new[] { a, b }, scan.Sessions);
         Assert.Empty(scan.Damaged);
+    }
+
+    [Fact]
+    public void RefreshSelection_KeepsTheExactRecordThatWasSelectedAmongSeveral()
+    {
+        var selected = Session();
+        var refreshedCopy = new OfflineUpdateSession(SidA, Model, Uuid, Sha);
+
+        var result = OfflineUpdateSessionCatalog.SelectAfterRefresh(
+            selected, new[] { Session(SidB), refreshedCopy });
+
+        // The refreshed instance is installed, and a re-read record that
+        // matches every field is still the operator's selection.
+        Assert.Same(refreshedCopy, result);
+    }
+
+    [Fact]
+    public void RefreshSelection_LeavesUnselectedWhenTheSelectedRecordVanished_EvenWithOneReplacement()
+    {
+        // A sole different record is never promoted to the previous selection,
+        // and losing the record entirely also leaves nothing selected.
+        Assert.Null(OfflineUpdateSessionCatalog.SelectAfterRefresh(
+            Session(), new[] { Session(SidB) }));
+        Assert.Null(OfflineUpdateSessionCatalog.SelectAfterRefresh(
+            Session(), Array.Empty<OfflineUpdateSession>()));
+    }
+
+    [Theory]
+    [InlineData("model")]
+    [InlineData("uuid")]
+    [InlineData("sha")]
+    public void RefreshSelection_LeavesUnselectedWhenAnyBindingFieldChanged(string field)
+    {
+        var previous = Session();
+        var changed = field switch
+        {
+            "model" => Session(model: OtherModel),
+            "uuid" => Session(uuid: OtherUuid),
+            _ => Session(sha: OtherSha),
+        };
+
+        // Every binding field is part of the record identity: a changed value
+        // is a different session, not a reason to retarget the selection.
+        Assert.Null(OfflineUpdateSessionCatalog.SelectAfterRefresh(previous, new[] { changed }));
+        Assert.Null(OfflineUpdateSessionCatalog.SelectAfterRefresh(
+            previous, new[] { changed, Session(SidB) }));
+    }
+
+    [Fact]
+    public void RefreshSelection_WithoutAPreviousSelectionKeepsTheOrdinaryRule()
+    {
+        var only = Session();
+
+        Assert.Same(only, OfflineUpdateSessionCatalog.SelectAfterRefresh(null, new[] { only }));
+        Assert.Null(OfflineUpdateSessionCatalog.SelectAfterRefresh(
+            null, new[] { only, Session(SidB) }));
+        Assert.Null(OfflineUpdateSessionCatalog.SelectAfterRefresh(
+            null, Array.Empty<OfflineUpdateSession>()));
     }
 
     [Fact]

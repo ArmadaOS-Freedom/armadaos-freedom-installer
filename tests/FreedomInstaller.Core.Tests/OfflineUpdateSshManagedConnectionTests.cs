@@ -105,6 +105,27 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
                 options, TimeSpan.FromSeconds(5), CancellationToken.None, Factory(transport)));
     }
 
+    /// <summary>
+    /// Both teardown events must actually be present, and in that order.
+    /// Ordering alone is not enough: a missing event yields -1 from IndexOf,
+    /// so an absent socket-release would satisfy "released before cancelled"
+    /// whenever the channel cancel was recorded.
+    /// </summary>
+    private static void AssertSocketReleasedBeforeChannelCancel(List<string> events)
+    {
+        var released = events.IndexOf("socket-release");
+        var cancelled = events.IndexOf("channel-cancel");
+        Assert.True(
+            released >= 0,
+            "The teardown never released the socket: " + string.Join(",", events));
+        Assert.True(
+            cancelled >= 0,
+            "The teardown never cancelled the channel: " + string.Join(",", events));
+        Assert.True(
+            released < cancelled,
+            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+    }
+
     private static string PromptMarker(string command)
     {
         var index = command.IndexOf(SudoPromptPrefix, StringComparison.Ordinal);
@@ -1234,11 +1255,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         Assert.Equal(1, transport.DisposeCount);
         Assert.True(channel.Disposed);
 
-        var released = events.IndexOf("socket-release");
-        Assert.True(released >= 0, "The teardown never released the socket: " + string.Join(",", events));
-        Assert.True(
-            released < events.IndexOf("channel-cancel"),
-            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+        AssertSocketReleasedBeforeChannelCancel(events);
     }
 
     [Fact]
@@ -1289,9 +1306,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         Assert.Equal(1, transport.SocketAbortCount);
         Assert.Equal(1, transport.DisposeCount);
         Assert.True(channel.Disposed);
-        Assert.True(
-            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
-            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+        AssertSocketReleasedBeforeChannelCancel(events);
     }
 
     [Fact]
@@ -1330,9 +1345,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         Assert.Equal(1, transport.SocketAbortCount);
         Assert.Equal(1, transport.DisposeCount);
         Assert.True(channel.Disposed);
-        Assert.True(
-            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
-            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+        AssertSocketReleasedBeforeChannelCancel(events);
     }
 
     [Fact]
@@ -1384,9 +1397,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
 
         Assert.Equal(1, transport.SocketAbortCount);
-        Assert.True(
-            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
-            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+        AssertSocketReleasedBeforeChannelCancel(events);
     }
 
     [Fact]
@@ -1423,9 +1434,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         Assert.Equal("The sudo command did not finish in time.", error.Message);
         Assert.DoesNotContain("topsecret", error.Message, StringComparison.Ordinal);
         Assert.Equal(1, transport.SocketAbortCount);
-        Assert.True(
-            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
-            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+        AssertSocketReleasedBeforeChannelCancel(events);
     }
 
     [Fact]
@@ -1458,9 +1467,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             () => run.WaitAsync(TimeSpan.FromSeconds(10)));
 
         Assert.Equal(1, transport.SocketAbortCount);
-        Assert.True(
-            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
-            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+        AssertSocketReleasedBeforeChannelCancel(events);
     }
 
     [Fact]
@@ -1502,9 +1509,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         Assert.Equal("The tablet did not start the offline updater in time.", error.Message);
         Assert.DoesNotContain("topsecret", error.Message, StringComparison.Ordinal);
         Assert.Equal(1, transport.SocketAbortCount);
-        Assert.True(
-            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
-            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+        AssertSocketReleasedBeforeChannelCancel(events);
     }
 
     [Fact]
