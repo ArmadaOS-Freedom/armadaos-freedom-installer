@@ -240,6 +240,71 @@ namespace FreedomInstaller.App
         internal static bool CanExecute(JsonElement? receipt, bool hasSavedRecovery, bool preflightPassed) =>
             preflightPassed && hasSavedRecovery && State(receipt) == "prepared" && !HasBlockingFlags(receipt);
 
+        /// <summary>
+        /// The tablet already finished preparing this session, so the only
+        /// remaining local step is exporting the recovery bundle. Both the
+        /// final <c>prepared</c> state and a receipt still reporting the
+        /// export phase qualify; nothing here is allowed to prepare again.
+        /// </summary>
+        internal static bool NeedsRecoveryExport(JsonElement? receipt) =>
+            !HasBlockingFlags(receipt) && State(receipt) is ("prepared" or "awaiting_recovery_export");
+
+        /// <summary>
+        /// The Plan action may export recovery only while no verified local
+        /// bundle is held. Once a bundle exists, executing is what consumes
+        /// its acknowledgement; a second export would replace nothing.
+        /// </summary>
+        internal static bool CanExportRecovery(JsonElement? receipt, bool hasSavedRecovery) =>
+            !hasSavedRecovery && NeedsRecoveryExport(receipt);
+
+        /// <summary>
+        /// The recovery metadata a prepared receipt carries. It follows the
+        /// Core precedence exactly: the <c>result</c> block first, then
+        /// <c>transaction</c>; a present block must describe an
+        /// <c>awaiting_recovery_export</c> transaction, and every present block
+        /// must agree. A partial, foreign or contradictory receipt yields no
+        /// context, so callers never build a recovery bundle from weak
+        /// evidence.
+        /// </summary>
+        internal static bool TryGetRecoveryMetadata(JsonElement? receipt,
+            out string? transactionId, out string? planSha256, out string? recoveryManifestSha256)
+        {
+            transactionId = null;
+            planSha256 = null;
+            recoveryManifestSha256 = null;
+            if (!receipt.HasValue || receipt.Value.ValueKind != JsonValueKind.Object)
+                return false;
+
+            bool found = false;
+            foreach (string name in new[] { "result", "transaction" })
+            {
+                if (!receipt.Value.TryGetProperty(name, out JsonElement block))
+                    continue;
+                if (block.ValueKind != JsonValueKind.Object ||
+                    !string.Equals(GetString(block, "state"), "awaiting_recovery_export", StringComparison.Ordinal))
+                    return false;
+
+                string? tx = GetString(block, "transactionId");
+                string? plan = GetString(block, "planSha256");
+                string? manifest = GetString(block, "recoveryManifestSha256");
+                if (string.IsNullOrWhiteSpace(tx) || string.IsNullOrWhiteSpace(plan) || string.IsNullOrWhiteSpace(manifest))
+                    return false;
+
+                if (found &&
+                    (!string.Equals(tx, transactionId, StringComparison.Ordinal) ||
+                     !string.Equals(plan, planSha256, StringComparison.Ordinal) ||
+                     !string.Equals(manifest, recoveryManifestSha256, StringComparison.Ordinal)))
+                    return false;
+
+                transactionId = tx;
+                planSha256 = plan;
+                recoveryManifestSha256 = manifest;
+                found = true;
+            }
+
+            return found;
+        }
+
         private static bool GetBool(JsonElement receipt, string property) =>
             receipt.TryGetProperty(property, out JsonElement value) &&
             (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False) &&

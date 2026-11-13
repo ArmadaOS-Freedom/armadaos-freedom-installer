@@ -8,10 +8,7 @@
 
 ```sh
 docker build -f tools/installer-builder.Dockerfile -t armada-installer-builder tools
-docker run --rm -v "${PWD}:/src" -v "${PWD}/artifacts:/work" armada-installer-builder \
-  python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /work/publish \
-  --offline-bootstrap-script /work/offline/armada-offline-bootstrap \
-  --offline-updater-bundle /work/offline/armada-offline-updater.tar.gz
+docker run --rm -v "${PWD}:/src" -v "${PWD}/artifacts:/work" armada-installer-builder python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /work/publish --offline-bootstrap-script /work/offline/armada-offline-bootstrap --offline-updater-bundle /work/offline/armada-offline-updater.tar.gz
 ```
 
 产物为 `artifacts/publish/FreedomInstaller.App.exe`，Windows x64 自包含单 EXE。最终用户不需要另装 .NET SDK；Linux 系统镜像仍由系统仓库单独生成。

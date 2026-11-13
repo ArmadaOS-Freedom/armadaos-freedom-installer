@@ -601,4 +601,119 @@ public class OfflineUpdateUiStateTests
         Assert.True(OfflineUpdateUiState.CanExecute(
             prepared, hasSavedRecovery: true, preflightPassed: true));
     }
+
+    // ---------- Recovery export routing (the Plan action) ----------
+
+    [Theory]
+    [InlineData("prepared")]
+    [InlineData("awaiting_recovery_export")]
+    public void CanExportRecovery_AlreadyPreparedSessionNeedsOnlyTheLocalBundle(string state)
+    {
+        // The tablet finished preparing, so the Plan action must reach the
+        // recovery export without another PrepareAsync.
+        Assert.True(OfflineUpdateUiState.NeedsRecoveryExport(Receipt(state)));
+        Assert.True(OfflineUpdateUiState.CanExportRecovery(Receipt(state), hasSavedRecovery: false));
+
+        // A verified acknowledgement is already held: exporting again is not
+        // the remaining step, executing is.
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(Receipt(state), hasSavedRecovery: true));
+    }
+
+    [Theory]
+    [InlineData("uploading")]
+    [InlineData("uploaded")]
+    [InlineData("prepare_queued")]
+    [InlineData("preparing")]
+    [InlineData("execute_queued")]
+    [InlineData("executing")]
+    [InlineData("awaiting_reboot")]
+    [InlineData("up_to_date")]
+    [InlineData("failed")]
+    [InlineData("unknown_custom_state")]
+    public void CanExportRecovery_NeverForOtherStates(string state)
+    {
+        Assert.False(OfflineUpdateUiState.NeedsRecoveryExport(Receipt(state)));
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(Receipt(state), hasSavedRecovery: false));
+    }
+
+    [Fact]
+    public void CanExportRecovery_BlockedOrMissingReceipt_IsDenied()
+    {
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(null, hasSavedRecovery: false));
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(Parse("{}"), hasSavedRecovery: false));
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(Parse("{\"state\":5}"), hasSavedRecovery: false));
+        Assert.False(OfflineUpdateUiState.NeedsRecoveryExport(Receipt("prepared", jobInterrupted: true)));
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(
+            Receipt("prepared", attentionRequired: true), hasSavedRecovery: false));
+    }
+
+    [Fact]
+    public void CanExportRecovery_TopPreparedWithNestedExport_StillExports()
+    {
+        // The export phase lives in the nested result while the top-level
+        // state is already prepared; both must route to the export.
+        var receipt = Parse("{\"state\":\"prepared\",\"result\":{\"state\":\"awaiting_recovery_export\"}}");
+        Assert.True(OfflineUpdateUiState.CanExportRecovery(receipt, hasSavedRecovery: false));
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(receipt, hasSavedRecovery: true));
+    }
+
+    // ---------- Recovery metadata precedence (must match Core) ----------
+
+    private const string TxId = "123e4567-e89b-12d3-a456-426614174000";
+    private static readonly string PlanSha = new('a', 64);
+    private static readonly string ManifestSha = new('b', 64);
+    private static readonly string OtherManifestSha = new('c', 64);
+
+    private static string ExportBlock(string tx = TxId, string? plan = null, string? manifest = null) =>
+        "{\"state\":\"awaiting_recovery_export\"," +
+        $"\"transactionId\":\"{tx}\"," +
+        $"\"planSha256\":\"{plan ?? PlanSha}\"," +
+        $"\"recoveryManifestSha256\":\"{manifest ?? ManifestSha}\"}}";
+
+    [Fact]
+    public void RecoveryMetadata_ResultAndTransactionAreBothRequiredAndMustAgree()
+    {
+        var both = Parse(
+            $"{{\"state\":\"prepared\",\"result\":{ExportBlock()},\"transaction\":{ExportBlock()}}}");
+        Assert.True(OfflineUpdateUiState.TryGetRecoveryMetadata(both,
+            out string? tx, out string? plan, out string? manifest));
+        Assert.Equal(TxId, tx);
+        Assert.Equal(PlanSha, plan);
+        Assert.Equal(ManifestSha, manifest);
+
+        // Same precedence as the Core validator: two blocks that disagree are
+        // contradictory evidence, never "last one wins".
+        var conflict = Parse(
+            $"{{\"state\":\"prepared\",\"result\":{ExportBlock()}," +
+            $"\"transaction\":{ExportBlock(manifest: OtherManifestSha)}}}");
+        Assert.False(OfflineUpdateUiState.TryGetRecoveryMetadata(conflict, out _, out _, out _));
+    }
+
+    [Fact]
+    public void RecoveryMetadata_TransactionOnlyIsAccepted_TopLevelFieldsAreNot()
+    {
+        var transactionOnly = Parse($"{{\"state\":\"prepared\",\"transaction\":{ExportBlock()}}}");
+        Assert.True(OfflineUpdateUiState.TryGetRecoveryMetadata(transactionOnly, out _, out _, out _));
+
+        // The Core never reads these fields from the receipt root, so a
+        // receipt carrying them there must not name local recovery bytes.
+        var topLevelOnly = Parse(
+            $"{{\"state\":\"prepared\",\"transactionId\":\"{TxId}\"," +
+            $"\"planSha256\":\"{PlanSha}\",\"recoveryManifestSha256\":\"{ManifestSha}\"}}");
+        Assert.False(OfflineUpdateUiState.TryGetRecoveryMetadata(topLevelOnly, out _, out _, out _));
+    }
+
+    [Theory]
+    // A present block that is not an export transaction is not this metadata.
+    [InlineData("{\"state\":\"prepared\",\"result\":{\"state\":\"prepared\",\"transactionId\":\"123e4567-e89b-12d3-a456-426614174000\",\"planSha256\":\"PLAN\",\"recoveryManifestSha256\":\"MANIFEST\"}}")]
+    [InlineData("{\"state\":\"prepared\",\"result\":\"awaiting_recovery_export\"}")]
+    // A partial triple is refused rather than completed from somewhere else.
+    [InlineData("{\"state\":\"prepared\",\"result\":{\"state\":\"awaiting_recovery_export\",\"transactionId\":\"123e4567-e89b-12d3-a456-426614174000\"}}")]
+    [InlineData("{\"state\":\"prepared\",\"result\":{\"state\":\"awaiting_recovery_export\",\"transactionId\":\"123e4567-e89b-12d3-a456-426614174000\",\"planSha256\":\"PLAN\"}}")]
+    [InlineData("{}")]
+    public void RecoveryMetadata_ForeignOrPartialReceiptIsRefused(string json)
+    {
+        var receipt = Parse(json.Replace("PLAN", PlanSha).Replace("MANIFEST", ManifestSha));
+        Assert.False(OfflineUpdateUiState.TryGetRecoveryMetadata(receipt, out _, out _, out _));
+    }
 }

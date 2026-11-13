@@ -55,8 +55,8 @@
                         <TextBlock Style="{DynamicResource H2Text}" Text="{DynamicResource Static.OfflineUpdate.SectionConnection}"/>
                         <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.ConnectionHelper}" TextWrapping="Wrap" Margin="0,4,0,10"/>
 
-                        <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Transport}" Margin="0,0,0,4"/>
-                        <ComboBox x:Name="TransportCombo" Style="{DynamicResource ThemeComboBox}" SelectedIndex="0" Margin="0,0,0,10">
+                        <TextBlock x:Name="TransportLabel" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Transport}" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="TransportCombo" Style="{DynamicResource ThemeComboBox}" SelectedIndex="0" AutomationProperties.LabeledBy="{Binding ElementName=TransportLabel}" Margin="0,0,0,10">
                             <ComboBoxItem x:Name="TransportUsbItem" Content="{DynamicResource Static.OfflineUpdate.TransportUsb}"/>
                             <ComboBoxItem x:Name="TransportWifiItem" Content="{DynamicResource Static.OfflineUpdate.TransportWifi}"/>
                         </ComboBox>
@@ -69,15 +69,15 @@
                                     <ColumnDefinition Width="110"/><ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="110"/><ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.WifiAddress}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                <TextBox x:Name="HostBox" Grid.Column="1" Style="{DynamicResource InputTextBox}" Margin="0,0,14,0"/>
-                                <TextBlock Grid.Column="2" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Port}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                <TextBox x:Name="PortBox" Grid.Column="3" Style="{DynamicResource InputTextBox}" Text="22"/>
+                                <TextBlock x:Name="WifiAddressLabel" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.WifiAddress}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBox x:Name="HostBox" Grid.Column="1" Style="{DynamicResource InputTextBox}" AutomationProperties.LabeledBy="{Binding ElementName=WifiAddressLabel}" Margin="0,0,14,0"/>
+                                <TextBlock x:Name="PortLabel" Grid.Column="2" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Port}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBox x:Name="PortBox" Grid.Column="3" Style="{DynamicResource InputTextBox}" Text="22" AutomationProperties.LabeledBy="{Binding ElementName=PortLabel}"/>
                             </Grid>
                         </StackPanel>
 
-                        <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Credential}" Margin="0,0,0,4"/>
-                        <ComboBox x:Name="CredentialCombo" Style="{DynamicResource ThemeComboBox}" SelectedIndex="0" Margin="0,0,0,10">
+                        <TextBlock x:Name="CredentialLabel" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Credential}" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="CredentialCombo" Style="{DynamicResource ThemeComboBox}" SelectedIndex="0" AutomationProperties.LabeledBy="{Binding ElementName=CredentialLabel}" Margin="0,0,0,10">
                             <ComboBoxItem x:Name="CredentialDefaultItem" Content="{DynamicResource Static.OfflineUpdate.CredentialDefault}"/>
                             <ComboBoxItem x:Name="CredentialCustomItem" Content="{DynamicResource Static.OfflineUpdate.CredentialCustom}"/>
                             <ComboBoxItem x:Name="CredentialKeyItem" Content="{DynamicResource Static.OfflineUpdate.CredentialKey}"/>
@@ -86,30 +86,30 @@
                         <TextBlock x:Name="DefaultAccountText" Style="{DynamicResource FieldValueText}" Text="{DynamicResource Static.OfflineUpdate.DefaultAccountSummary}" TextWrapping="Wrap" Margin="0,0,0,10"/>
 
                         <StackPanel x:Name="ManualUserNamePanel" Visibility="Collapsed">
-                            <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.User}" Margin="0,0,0,4"/>
-                            <TextBox x:Name="UserBox" Style="{DynamicResource InputTextBox}"/>
+                            <TextBlock x:Name="UserLabel" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.User}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="UserBox" Style="{DynamicResource InputTextBox}" AutomationProperties.LabeledBy="{Binding ElementName=UserLabel}"/>
                         </StackPanel>
 
                         <StackPanel x:Name="CustomPasswordPanel" Visibility="Collapsed">
-                            <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Password}" Margin="0,10,0,4"/>
-                            <PasswordBox x:Name="PasswordBox" Style="{DynamicResource OfflinePasswordBox}" MaxLength="512"/>
+                            <TextBlock x:Name="PasswordLabel" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.Password}" Margin="0,10,0,4"/>
+                            <PasswordBox x:Name="PasswordBox" Style="{DynamicResource OfflinePasswordBox}" MaxLength="512" AutomationProperties.LabeledBy="{Binding ElementName=PasswordLabel}"/>
                             <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.PasswordPrivacy}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                         </StackPanel>
 
                         <StackPanel x:Name="KeyFieldsPanel" Visibility="Collapsed">
                             <TextBlock x:Name="UsbKeyEnrollmentHint" Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.UsbKeyEnrollmentHint}" TextWrapping="Wrap" Margin="0,10,0,10"/>
                             <TextBlock x:Name="WifiKeyEnrollmentHint" Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.WifiKeyEnrollmentHint}" TextWrapping="Wrap" Margin="0,10,0,10" Visibility="Collapsed"/>
-                            <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.KeyPath}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="KeyPathLabel" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.KeyPath}" Margin="0,0,0,4"/>
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <TextBox x:Name="KeyPathBox" Style="{DynamicResource InputTextBox}" Margin="0,0,8,0"/>
+                                <TextBox x:Name="KeyPathBox" Style="{DynamicResource InputTextBox}" AutomationProperties.LabeledBy="{Binding ElementName=KeyPathLabel}" Margin="0,0,8,0"/>
                                 <Button x:Name="BrowseKeyButton" Grid.Column="1" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.BrowseKey}"/>
                             </Grid>
                             <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.KeyPrivacy}" TextWrapping="Wrap" Margin="0,4,0,8"/>
-                            <TextBlock Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.KnownHosts}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="KnownHostsLabel" Style="{DynamicResource FieldLabelText}" Text="{DynamicResource Static.OfflineUpdate.KnownHosts}" Margin="0,0,0,4"/>
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <TextBox x:Name="KnownHostsBox" Style="{DynamicResource InputTextBox}" Margin="0,0,8,0"/>
+                                <TextBox x:Name="KnownHostsBox" Style="{DynamicResource InputTextBox}" AutomationProperties.LabeledBy="{Binding ElementName=KnownHostsLabel}" Margin="0,0,8,0"/>
                                 <Button x:Name="BrowseHostsButton" Grid.Column="1" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.BrowseHosts}"/>
                             </Grid>
                         </StackPanel>

@@ -232,9 +232,11 @@ public sealed class OfflineUpdateRpcClientTests
         var queued = client.GetStatusAsync(Session, cancelled.Token);
         cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+        Assert.False(client.IsPoisoned);
 
         ReplyOk(io, 1);
         await active;
+        Assert.False(client.IsPoisoned);
         ReplyOk(io, 2);
         await client.PrepareAsync(Session);
 
@@ -249,6 +251,23 @@ public sealed class OfflineUpdateRpcClientTests
         await using var client = new OfflineUpdateRpcClient(io, io, TimeSpan.FromMilliseconds(50));
 
         await Assert.ThrowsAsync<TimeoutException>(() => client.GetInfoAsync());
+        Assert.True(client.IsPoisoned);
+        await Assert.ThrowsAnyAsync<IOException>(() => client.GetInfoAsync());
+        Assert.Single(io.Frames);
+    }
+
+    [Fact]
+    public async Task Timeout_is_bounded_when_the_stream_ignores_the_token()
+    {
+        using var io = new IoStream(ignoreReadCancellation: true);
+        await using var client = new OfflineUpdateRpcClient(io, io, TimeSpan.FromMilliseconds(50));
+
+        var request = client.GetInfoAsync();
+        var winner = await Task.WhenAny(request, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(request, winner);
+
+        await Assert.ThrowsAsync<TimeoutException>(() => request);
+        Assert.True(client.IsPoisoned);
         await Assert.ThrowsAnyAsync<IOException>(() => client.GetInfoAsync());
         Assert.Single(io.Frames);
     }
@@ -264,8 +283,57 @@ public sealed class OfflineUpdateRpcClientTests
         cancelled.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.True(client.IsPoisoned);
         await Assert.ThrowsAnyAsync<IOException>(() => client.GetInfoAsync());
         Assert.Single(io.Frames);
+    }
+
+    [Fact]
+    public async Task Cancellation_is_bounded_when_the_stream_ignores_the_token_and_late_data_is_isolated()
+    {
+        using var io = new IoStream(ignoreReadCancellation: true);
+        await using var client = new OfflineUpdateRpcClient(io, io);
+        using var cancelled = new CancellationTokenSource();
+        var pending = client.GetInfoAsync(cancelled.Token);
+        await io.Written.Task;
+
+        cancelled.Cancel();
+
+        var winner = await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(pending, winner);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.True(client.IsPoisoned);
+        await Assert.ThrowsAnyAsync<IOException>(() => client.GetInfoAsync());
+
+        // Let the abandoned physical read complete after the request already
+        // failed. It must not be picked up by a later call or escape as an
+        // unobserved fault.
+        io.Reply(Ok(1));
+        await io.ReadCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(client.IsPoisoned);
+        await Assert.ThrowsAnyAsync<IOException>(() => client.GetInfoAsync());
+        Assert.Single(io.Frames);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dispose_is_bounded_when_a_read_ignores_the_token(bool leaveOpen)
+    {
+        using var io = new IoStream(ignoreReadCancellation: true);
+        var client = new OfflineUpdateRpcClient(io, io, leaveOpen: leaveOpen);
+        var pending = client.GetInfoAsync();
+        await io.Written.Task;
+
+        var dispose = client.DisposeAsync().AsTask();
+        var winner = await Task.WhenAny(dispose, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(dispose, winner);
+        await dispose;
+
+        await Assert.ThrowsAnyAsync<ObjectDisposedException>(() => pending);
+        Assert.True(client.IsPoisoned);
+        Assert.Equal(leaveOpen ? 0 : 1, io.DisposeCount);
     }
 
     [Theory]
@@ -298,6 +366,7 @@ public sealed class OfflineUpdateRpcClientTests
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetInfoAsync(cancelled.Token));
+        Assert.False(client.IsPoisoned);
 
         Assert.ThrowsAny<ArgumentException>(() => { _ = client.BeginAsync(null!, new byte[] { 1 }); });
         Assert.ThrowsAny<ArgumentException>(() => { _ = client.BeginAsync(Array.Empty<byte>(), new byte[] { 1 }); });
@@ -406,13 +475,23 @@ public sealed class OfflineUpdateRpcClientTests
         private readonly object _sync = new();
         private readonly MemoryStream _written = new();
         private readonly Queue<byte[]> _chunks = new();
+        private readonly bool _ignoreReadCancellation;
         private TaskCompletionSource<bool> _changed = Signal();
         private byte[]? _current;
         private int _currentOffset;
         private bool _eof;
         private bool _disposed;
 
+        public IoStream(bool ignoreReadCancellation = false)
+        {
+            _ignoreReadCancellation = ignoreReadCancellation;
+        }
+
         public TaskCompletionSource<bool> Written { get; } = Signal();
+
+        /// <summary>Completes once a read has actually returned bytes.</summary>
+        public TaskCompletionSource<bool> ReadCompleted { get; } = Signal();
+
         public int DisposeCount { get; private set; }
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -480,13 +559,14 @@ public sealed class OfflineUpdateRpcClientTests
                         _currentOffset += count;
                         if (_currentOffset == _current.Length)
                             _current = null;
+                        ReadCompleted.TrySetResult(true);
                         return count;
                     }
                     if (_eof)
                         return 0;
                     wait = _changed.Task;
                 }
-                await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await (_ignoreReadCancellation ? wait : wait.WaitAsync(cancellationToken)).ConfigureAwait(false);
             }
         }
 

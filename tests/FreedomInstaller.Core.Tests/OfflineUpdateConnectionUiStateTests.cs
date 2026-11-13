@@ -200,6 +200,46 @@ public sealed class OfflineUpdateConnectionUiStateTests
         Assert.DoesNotContain("OnConnectOfflineSshAsync", codeBehind, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void OfflineUpgradeView_BindsVisibleLabelsToTheConnectionControls()
+    {
+        string xaml = ReadEmbedded("FreedomInstaller.Tests.OfflineUpgradeView.xaml");
+
+        AssertLabeledBy(xaml, "TransportLabel", "TransportCombo");
+        AssertLabeledBy(xaml, "CredentialLabel", "CredentialCombo");
+        AssertLabeledBy(xaml, "WifiAddressLabel", "HostBox");
+        AssertLabeledBy(xaml, "PortLabel", "PortBox");
+        AssertLabeledBy(xaml, "UserLabel", "UserBox");
+        AssertLabeledBy(xaml, "PasswordLabel", "PasswordBox");
+        AssertLabeledBy(xaml, "KeyPathLabel", "KeyPathBox");
+        AssertLabeledBy(xaml, "KnownHostsLabel", "KnownHostsBox");
+    }
+
+    [Fact]
+    public void Connect_KeysTheRejectedDefaultAttemptByTheValidatedUsbInstance()
+    {
+        string codeBehind = ReadEmbedded("FreedomInstaller.Tests.MainWindow.OfflineUpgrade.cs");
+
+        // The discovery result, not the shared USB host, identifies the device.
+        Assert.Contains("usbDeviceInstanceId = endpoint.DeviceInstanceId;", codeBehind, StringComparison.Ordinal);
+        Assert.Contains(
+            "OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey(host, port, usbDeviceInstanceId)",
+            codeBehind,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("OfflineUpdateSshAuthPolicy.EndpointKey(host, port)", codeBehind, StringComparison.Ordinal);
+    }
+
+    private static void AssertLabeledBy(string xaml, string labelName, string controlName)
+    {
+        string line = Assert.Single(xaml.Split('\n')
+            .Where(candidate => candidate.Contains($"x:Name=\"{controlName}\"", StringComparison.Ordinal)));
+        Assert.Contains(
+            $"AutomationProperties.LabeledBy=\"{{Binding ElementName={labelName}}}\"",
+            line,
+            StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(xaml, $"x:Name=\"{labelName}\""));
+    }
+
     private static string ReadEmbedded(string name)
     {
         using Stream? stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(name);

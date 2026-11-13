@@ -72,7 +72,10 @@ _OFFLINE_ASSET_SOURCE = "system build_files/build-offline-updater-bundle.py"
 # The bundle contract is explicit.  A bundle manifest names the capabilities
 # the runtime it carries provides; the installer refuses any bundle that does
 # not declare the one it requires, so an older bundle that merely unpacks is
-# not accepted and cannot fail later during a resumed upgrade.
+# not accepted and cannot fail later during a resumed upgrade.  The manifest
+# also pins the entry script it installs to /usr/libexec/armada, and the
+# archive member named by that entry must be present exactly once, regular,
+# executable and matching the declared size and SHA-256.
 _OFFLINE_MANIFEST_NAME = "manifest.json"
 _OFFLINE_BUNDLE_NAME = "armada-offline-updater"
 _OFFLINE_ENTRY = "usr/libexec/armada/armada-offline-update"
@@ -85,6 +88,7 @@ _OFFLINE_MAX_CAPABILITIES = 16
 _OFFLINE_MAX_CAPABILITY_LENGTH = 64
 _OFFLINE_CAPABILITY = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z", re.ASCII)
 _OFFLINE_VERSION = re.compile(r"\d+(?:\.\d+)*\Z", re.ASCII)
+_OFFLINE_MODE = re.compile(r"[0-7]{3,4}\Z", re.ASCII)
 
 _TOOL_NAMES = ("client", "packer", "unpacker")
 
@@ -253,7 +257,12 @@ def _offline_manifest_document(bundle):
 
 
 def _validate_offline_manifest(bundle, document):
-    """Validate bundle identity, version and the required capability."""
+    """Validate bundle identity, version, entry declaration and the required
+    capability, and return the declared record for the entry member.
+
+    Every ``files`` record is checked for shape here so the archive pass that
+    follows only has to compare bytes against a well-formed declaration.
+    """
     prefix = f"offline bundle error: {bundle}: "
     if not isinstance(document, dict):
         raise SystemExit(prefix + "manifest must be a JSON object")
@@ -269,6 +278,47 @@ def _validate_offline_manifest(bundle, document):
     files = document.get("files")
     if not isinstance(files, list) or not files:
         raise SystemExit(prefix + "manifest files must be a non-empty list")
+    if len(files) > _OFFLINE_MAX_MEMBERS:
+        raise SystemExit(prefix + "manifest declares too many files")
+    declared = {}
+    for item in files:
+        if not isinstance(item, dict):
+            raise SystemExit(prefix + "manifest files entries must be JSON objects")
+        rel = item.get("path")
+        if not isinstance(rel, str) or not rel or rel.startswith("/"):
+            raise SystemExit(prefix + "manifest files entry path is not relative")
+        parts = rel.split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise SystemExit(
+                prefix + f"manifest files entry path is not normalized: {rel!r}"
+            )
+        if rel in declared:
+            raise SystemExit(prefix + f"manifest declares {rel!r} more than once")
+        want_bytes = item.get("bytes")
+        if (
+            not isinstance(want_bytes, int)
+            or isinstance(want_bytes, bool)
+            or not 0 <= want_bytes <= _OFFLINE_MAX_MEMBER_BYTES
+        ):
+            raise SystemExit(prefix + f"manifest files entry size is invalid for {rel!r}")
+        want_sha = item.get("sha256")
+        if not isinstance(want_sha, str) or len(want_sha) != 64:
+            raise SystemExit(prefix + f"manifest files entry sha256 is invalid for {rel!r}")
+        try:
+            int(want_sha, 16)
+        except ValueError:
+            raise SystemExit(prefix + f"manifest files entry sha256 is invalid for {rel!r}")
+        mode = item.get("mode")
+        if not isinstance(mode, str) or not _OFFLINE_MODE.fullmatch(mode):
+            raise SystemExit(prefix + f"manifest files entry mode is invalid for {rel!r}")
+        declared[rel] = item
+    entry_spec = declared.get(_OFFLINE_ENTRY)
+    if entry_spec is None:
+        raise SystemExit(
+            prefix + f"manifest files must declare the entry {_OFFLINE_ENTRY!r}"
+        )
+    if not (int(entry_spec["mode"], 8) & 0o111):
+        raise SystemExit(prefix + f"manifest entry mode for {_OFFLINE_ENTRY} is not executable")
     capabilities = document.get("capabilities")
     if not isinstance(capabilities, list):
         raise SystemExit(prefix + _offline_capability_message())
@@ -288,6 +338,58 @@ def _validate_offline_manifest(bundle, document):
         seen.add(capability)
     if _OFFLINE_REQUIRED_CAPABILITY not in seen:
         raise SystemExit(prefix + _offline_capability_message())
+    return entry_spec
+
+
+def _offline_entry_member(bundle, spec):
+    """Check the declared entry member in the bundle archive.
+
+    The archive is streamed again - no extraction, nothing written - and only
+    the bytes of the member named by the manifest entry are hashed, bounded by
+    ``_OFFLINE_MAX_MEMBER_BYTES``.  The member must appear exactly once, must be
+    a regular file (not a symlink, hard link or directory), must carry an
+    executable mode, and must match the declared size and SHA-256.
+    """
+    prefix = f"offline bundle error: {bundle}: "
+    entry = _OFFLINE_ENTRY
+    want_bytes = spec["bytes"]
+    want_sha = spec["sha256"].lower()
+    count = 0
+    got_bytes = 0
+    got_sha = None
+    try:
+        with tarfile.open(str(bundle), mode="r:gz") as archive:
+            for member in archive:
+                if member.name != entry:
+                    continue
+                count += 1
+                if count > 1:
+                    raise SystemExit(prefix + f"bundle has more than one {entry}")
+                if not member.isreg():
+                    raise SystemExit(prefix + f"{entry} is not a regular file")
+                if not (member.mode & 0o111):
+                    raise SystemExit(prefix + f"{entry} is not executable")
+                if member.size != want_bytes:
+                    raise SystemExit(
+                        prefix + f"{entry} size {member.size} != expected {want_bytes}"
+                    )
+                digest = hashlib.sha256()
+                stream = archive.extractfile(member)
+                while True:
+                    chunk = stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    got_bytes += len(chunk)
+                    if got_bytes > _OFFLINE_MAX_MEMBER_BYTES:
+                        raise SystemExit(prefix + f"{entry} exceeds its size limit")
+                    digest.update(chunk)
+                got_sha = digest.hexdigest()
+    except (OSError, tarfile.TarError) as error:
+        raise SystemExit(prefix + f"bundle is not a readable tar.gz: {error}")
+    if not count:
+        raise SystemExit(prefix + f"bundle has no {entry}")
+    if got_sha != want_sha:
+        raise SystemExit(prefix + f"{entry} sha256 {got_sha} != expected {want_sha}")
 
 
 def _validate_offline_inputs(script, bundle):
@@ -296,10 +398,11 @@ def _validate_offline_inputs(script, bundle):
     Both paths must be supplied together, and each must be an existing,
     readable regular file.  The bundle's manifest is then read in place from
     the tar.gz - bounded, without extraction or execution - and must declare
-    the capability this installer requires.  This runs before the expensive
-    build phases so a typo or a stale bundle never costs a full tool
-    compilation.  Returns a mapping of props name to the resolved absolute
-    path, or an empty mapping when both are omitted.
+    the capability this installer requires, after which the entry script
+    member is streamed and checked against the manifest's size and SHA-256.
+    This runs before the expensive build phases so a typo or a stale bundle
+    never costs a full tool compilation.  Returns a mapping of props name to
+    the resolved absolute path, or an empty mapping when both are omitted.
     """
     if script is None and bundle is None:
         return {}
@@ -328,7 +431,10 @@ def _validate_offline_inputs(script, bundle):
             raise SystemExit(f"offline assets error: {prop} is not readable: {path}")
         resolved[prop] = str(path.resolve())
     bundle_path = resolved["BundledOfflineUpdaterBundle"]
-    _validate_offline_manifest(bundle_path, _offline_manifest_document(bundle_path))
+    document = _offline_manifest_document(bundle_path)
+    _offline_entry_member(
+        bundle_path, _validate_offline_manifest(bundle_path, document)
+    )
     return resolved
 
 

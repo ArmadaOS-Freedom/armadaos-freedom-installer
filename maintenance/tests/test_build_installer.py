@@ -37,6 +37,12 @@ G4_MELF = b"g4-melf\n"
 G5_MBN = b"g5-mbn\n"
 TB710FU_MELF = b"tb710fu-melf\n"
 
+# The bundle contract: the manifest entry names this archive member, which is
+# a small regular executable file carried inside the tar.gz.
+OFFLINE_ENTRY = "usr/libexec/armada/armada-offline-update"
+OFFLINE_ENTRY_BYTES = b"#!/usr/bin/python3 -I\n# armada offline updater\n"
+OFFLINE_ENTRY_MODE = 0o755
+
 
 def _sha(b):
     return hashlib.sha256(b).hexdigest()
@@ -65,12 +71,12 @@ def _offline_manifest(**overrides):
         "bundle": "armada-offline-updater",
         "version": "0.8.0",
         "format": "tar.gz",
-        "entry": "usr/libexec/armada/armada-offline-update",
+        "entry": OFFLINE_ENTRY,
         "files": [
             {
-                "path": "usr/libexec/armada/armada-offline-update",
-                "bytes": 1,
-                "sha256": "0" * 64,
+                "path": OFFLINE_ENTRY,
+                "bytes": len(OFFLINE_ENTRY_BYTES),
+                "sha256": _sha(OFFLINE_ENTRY_BYTES),
                 "mode": "0755",
             }
         ],
@@ -91,11 +97,17 @@ def _tar_gz_bytes(members):
     return buffer.getvalue()
 
 
-def _offline_bundle_bytes(capabilities=("preflight-session-v1",), **overrides):
+def _offline_bundle_bytes(capabilities=("preflight-session-v1",),
+                          entry_bytes=OFFLINE_ENTRY_BYTES,
+                          entry_mode=OFFLINE_ENTRY_MODE,
+                          **overrides):
     document = _offline_manifest(**overrides)
     if capabilities is not None:
         document["capabilities"] = list(capabilities)
-    return _tar_gz_bytes([("manifest.json", json.dumps(document).encode("utf-8"))])
+    members = [("manifest.json", json.dumps(document).encode("utf-8"))]
+    if entry_bytes is not None:
+        members.append((OFFLINE_ENTRY, entry_bytes, entry_mode))
+    return _tar_gz_bytes(members)
 
 
 def _build_fixture_repo(root):
@@ -632,6 +644,167 @@ class PrepareTests(unittest.TestCase):
             archive.addfile(info)
         message = self._prepare_with_bundle(buffer.getvalue())
         self.assertIn("not a regular file", message)
+
+    def test_offline_bundle_entry_member_is_accepted(self):
+        # Allow semantics: the real small updater member, declared with its
+        # exact size and digest, passes both validation passes.
+        offline = self.work_parent / "offline & inputs"
+        bundle = _write(
+            offline / "accepted.tar.gz",
+            _offline_bundle_bytes(),
+        )
+        document = build_installer._offline_manifest_document(str(bundle))
+        spec = build_installer._validate_offline_manifest(str(bundle), document)
+        self.assertEqual(spec["path"], OFFLINE_ENTRY)
+        self.assertEqual(spec["bytes"], len(OFFLINE_ENTRY_BYTES))
+        build_installer._offline_entry_member(str(bundle), spec)
+        with tarfile.open(str(bundle), mode="r:gz") as archive:
+            names = sorted(member.name for member in archive)
+        self.assertEqual(names, ["manifest.json", OFFLINE_ENTRY])
+
+    def test_offline_bundle_with_missing_entry_member_fails_before_build(self):
+        message = self._prepare_with_bundle(_offline_bundle_bytes(entry_bytes=None))
+        self.assertIn(f"bundle has no {OFFLINE_ENTRY}", message)
+
+    def test_offline_bundle_with_duplicate_entry_member_fails_before_build(self):
+        document = _offline_manifest()
+        document["capabilities"] = ["preflight-session-v1"]
+        message = self._prepare_with_bundle(
+            _tar_gz_bytes(
+                [
+                    ("manifest.json", json.dumps(document).encode("utf-8")),
+                    (OFFLINE_ENTRY, OFFLINE_ENTRY_BYTES, OFFLINE_ENTRY_MODE),
+                    (OFFLINE_ENTRY, OFFLINE_ENTRY_BYTES, OFFLINE_ENTRY_MODE),
+                ]
+            )
+        )
+        self.assertIn(f"more than one {OFFLINE_ENTRY}", message)
+
+    def test_offline_bundle_with_entry_digest_mismatch_fails_before_build(self):
+        files = [
+            {
+                "path": OFFLINE_ENTRY,
+                "bytes": len(OFFLINE_ENTRY_BYTES),
+                "sha256": _sha(b"tampered-updater"),
+                "mode": "0755",
+            }
+        ]
+        message = self._prepare_with_bundle(_offline_bundle_bytes(files=files))
+        self.assertIn("sha256", message)
+        self.assertIn(OFFLINE_ENTRY, message)
+
+    def test_offline_bundle_with_entry_size_mismatch_fails_before_build(self):
+        files = [
+            {
+                "path": OFFLINE_ENTRY,
+                "bytes": len(OFFLINE_ENTRY_BYTES) + 3,
+                "sha256": _sha(OFFLINE_ENTRY_BYTES),
+                "mode": "0755",
+            }
+        ]
+        message = self._prepare_with_bundle(_offline_bundle_bytes(files=files))
+        self.assertIn("size", message)
+        self.assertIn(str(len(OFFLINE_ENTRY_BYTES)), message)
+
+    def _bundle_with_entry_type(self, member_type, linkname=None):
+        document = _offline_manifest()
+        document["capabilities"] = ["preflight-session-v1"]
+        payload = json.dumps(document).encode("utf-8")
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            manifest = tarfile.TarInfo("manifest.json")
+            manifest.size = len(payload)
+            manifest.mode = 0o644
+            archive.addfile(manifest, io.BytesIO(payload))
+            entry = tarfile.TarInfo(OFFLINE_ENTRY)
+            entry.type = member_type
+            entry.mode = OFFLINE_ENTRY_MODE
+            if linkname is not None:
+                entry.linkname = linkname
+            archive.addfile(entry)
+        return buffer.getvalue()
+
+    def test_offline_bundle_with_non_regular_entry_fails_before_build(self):
+        for label, member_type, linkname in (
+            ("symlink", tarfile.SYMTYPE, "elsewhere-update"),
+            ("hard link", tarfile.LNKTYPE, "manifest.json"),
+            ("directory", tarfile.DIRTYPE, None),
+        ):
+            with self.subTest(case=label):
+                message = self._prepare_with_bundle(
+                    self._bundle_with_entry_type(member_type, linkname)
+                )
+                self.assertIn(f"{OFFLINE_ENTRY} is not a regular file", message)
+
+    def test_offline_bundle_with_non_executable_entry_fails_before_build(self):
+        message = self._prepare_with_bundle(
+            _offline_bundle_bytes(entry_mode=0o644)
+        )
+        self.assertIn(f"{OFFLINE_ENTRY} is not executable", message)
+
+    def test_offline_manifest_must_declare_the_entry_file(self):
+        cases = (
+            (
+                "entry not declared",
+                [
+                    {
+                        "path": "usr/libexec/armada/other",
+                        "bytes": 1,
+                        "sha256": "0" * 64,
+                        "mode": "0755",
+                    }
+                ],
+                "must declare the entry",
+            ),
+            (
+                "entry declared twice",
+                [
+                    {
+                        "path": OFFLINE_ENTRY,
+                        "bytes": len(OFFLINE_ENTRY_BYTES),
+                        "sha256": _sha(OFFLINE_ENTRY_BYTES),
+                        "mode": "0755",
+                    },
+                    {
+                        "path": OFFLINE_ENTRY,
+                        "bytes": len(OFFLINE_ENTRY_BYTES),
+                        "sha256": _sha(OFFLINE_ENTRY_BYTES),
+                        "mode": "0755",
+                    },
+                ],
+                "more than once",
+            ),
+            (
+                "entry mode not executable",
+                [
+                    {
+                        "path": OFFLINE_ENTRY,
+                        "bytes": len(OFFLINE_ENTRY_BYTES),
+                        "sha256": _sha(OFFLINE_ENTRY_BYTES),
+                        "mode": "0644",
+                    }
+                ],
+                "not executable",
+            ),
+            (
+                "entry path traversal",
+                [
+                    {
+                        "path": "usr/../../etc/passwd",
+                        "bytes": 1,
+                        "sha256": "0" * 64,
+                        "mode": "0755",
+                    }
+                ],
+                "not normalized",
+            ),
+        )
+        for label, files, fragment in cases:
+            with self.subTest(case=label):
+                message = self._prepare_with_bundle(
+                    _offline_bundle_bytes(files=files)
+                )
+                self.assertIn(fragment, message)
 
     def test_offline_bundle_that_is_not_a_tar_gz_fails_before_build(self):
         message = self._prepare_with_bundle(b"not a tar.gz\n")

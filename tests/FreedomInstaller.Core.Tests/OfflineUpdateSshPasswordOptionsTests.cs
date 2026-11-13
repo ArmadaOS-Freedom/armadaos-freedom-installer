@@ -158,6 +158,59 @@ public sealed class OfflineUpdateSshPasswordOptionsTests
     }
 
     [Fact]
+    public void DefaultCredentialRejectionKey_KeepsWifiOnHostAndPort()
+    {
+        // Wi-Fi keeps exactly the previous identity: no device instance is
+        // involved, and the port still distinguishes targets on one host.
+        Assert.Equal(
+            OfflineUpdateSshAuthPolicy.EndpointKey("192.168.42.129", 22),
+            OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey("192.168.42.129", 22));
+        Assert.Equal(
+            OfflineUpdateSshAuthPolicy.EndpointKey("device.example", 22),
+            OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey("device.example", 22, "   "));
+        Assert.NotEqual(
+            OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey("192.168.1.50", 22),
+            OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey("192.168.1.50", 2222));
+    }
+
+    [Fact]
+    public void DefaultCredentialRejectionKey_SeparatesUsbInstancesSharingOneEndpoint()
+    {
+        const string firstUsb = @"USB\VID_1D6B&PID_0104&MI_00\6&1A2B3C4D&0&0000";
+        const string secondUsb = @"USB\VID_1D6B&PID_0104&MI_00\6&1A2B3C4D&0&0001";
+        string usbHost = OfflineUpdateUsbDiscovery.DeviceHost;
+        const int usbPort = 22;
+
+        string firstKey = OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey(usbHost, usbPort, firstUsb);
+        string secondKey = OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey(usbHost, usbPort, secondUsb);
+
+        // The same device on the same endpoint reuses its key, so its one
+        // automatic attempt stays consumed after a rejection.
+        Assert.Equal(
+            firstKey,
+            OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey(usbHost, usbPort, firstUsb));
+        Assert.Equal(
+            firstKey,
+            OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey(usbHost, usbPort, firstUsb.ToLowerInvariant()));
+
+        // A different USB instance on the very same USB endpoint keeps its own
+        // attempt instead of inheriting the rejection.
+        Assert.NotEqual(firstKey, secondKey);
+
+        // The USB key never collides with the plain host/port key, so a Wi-Fi
+        // rejection cannot consume the USB attempt either.
+        Assert.NotEqual(OfflineUpdateSshAuthPolicy.EndpointKey(usbHost, usbPort), firstKey);
+
+        var rejected = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase) { firstKey };
+        Assert.False(OfflineUpdateSshAuthPolicy.ShouldAttemptDefaultCredential(
+            OfflineUpdateSshAuthMode.Password, credentialsSuppliedByUser: false,
+            defaultAlreadyAttempted: rejected.Contains(firstKey)));
+        Assert.True(OfflineUpdateSshAuthPolicy.ShouldAttemptDefaultCredential(
+            OfflineUpdateSshAuthMode.Password, credentialsSuppliedByUser: false,
+            defaultAlreadyAttempted: rejected.Contains(secondKey)));
+    }
+
+    [Fact]
     public void DefaultCredential_IsPublicConfigurationButToStringIsRedacted()
     {
         var credential = OfflineUpdateSshDefaultCredentials.Instance;

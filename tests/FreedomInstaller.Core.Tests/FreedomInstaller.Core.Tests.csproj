@@ -58,6 +58,9 @@
     <!-- Same reason: the connection panel decision helper is plain BCL code, so the six transport/auth
          combinations and the route/credential rules are exercised without a WPF window. -->
     <Compile Include="..\..\src\FreedomInstaller.App\OfflineUpdateConnectionUiState.cs" Link="OfflineUpdateConnectionUiState.cs" />
+    <!-- Same reason: the per-record session scan is plain BCL + Core calls, so the damaged-record
+         reporting can be exercised against real files without a WPF window. -->
+    <Compile Include="..\..\src\FreedomInstaller.App\OfflineUpdateSessionCatalog.cs" Link="OfflineUpdateSessionCatalog.cs" />
   </ItemGroup>
 
   <ItemGroup>

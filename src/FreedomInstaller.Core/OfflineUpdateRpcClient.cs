@@ -31,6 +31,7 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
 
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan DisposeDrainTimeout = TimeSpan.FromSeconds(2);
 
     private readonly Stream _requestOutput;
     private readonly Stream _responseInput;
@@ -38,7 +39,7 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
     private readonly bool _leaveOpen;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
-    private readonly byte[] _readBuffer = new byte[ReadBufferSize];
+    private byte[] _readBuffer = Array.Empty<byte>();
     private int _readOffset;
     private int _readCount;
     private int _nextRequestId;
@@ -71,6 +72,13 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
         _timeout = effectiveTimeout;
         _leaveOpen = leaveOpen;
     }
+
+    /// <summary>
+    /// True once the exchange can no longer be used and the connection must be
+    /// replaced. It stays false for a call that was cancelled before anything
+    /// was written, so a caller may safely retry that request.
+    /// </summary>
+    public bool IsPoisoned => Volatile.Read(ref _poisoned);
 
     public Task<JsonElement> GetInfoAsync(CancellationToken cancellationToken = default) =>
         SendAsync("info", new Dictionary<string, object?>(0), cancellationToken);
@@ -245,15 +253,22 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
             return;
 
         await _lifetimeCts.CancelAsync().ConfigureAwait(false);
-        await _gate.WaitAsync().ConfigureAwait(false);
+
+        // A request in flight races its physical read against the lifetime
+        // token, so this gate should free immediately. The bound guards the
+        // remaining case where a stream call was already blocked; teardown
+        // still closes the streams so a pending read cannot hold a UI thread
+        // forever waiting for this method.
+        var gateTaken = await _gate.WaitAsync(DisposeDrainTimeout).ConfigureAwait(false);
         try
         {
-            _poisoned = true;
+            Volatile.Write(ref _poisoned, true);
             await CloseOwnedStreamsAsync().ConfigureAwait(false);
         }
         finally
         {
-            _gate.Release();
+            if (gateTaken)
+                _gate.Release();
         }
     }
 
@@ -273,11 +288,11 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
         try
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-            if (_poisoned)
+            if (IsPoisoned)
                 throw new IOException(PoisonedMessage);
             if (_nextRequestId == int.MaxValue)
             {
-                _poisoned = true;
+                Volatile.Write(ref _poisoned, true);
                 throw new IOException("RPC request identifier space exhausted. " + PoisonedMessage);
             }
 
@@ -305,31 +320,31 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
             catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
             {
                 if (sendAttempted)
-                    _poisoned = true;
+                    Volatile.Write(ref _poisoned, true);
                 throw new ObjectDisposedException(nameof(OfflineUpdateRpcClient), PoisonedMessage);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 if (sendAttempted)
-                    _poisoned = true;
+                    Volatile.Write(ref _poisoned, true);
                 throw;
             }
             catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested)
             {
                 if (sendAttempted)
-                    _poisoned = true;
+                    Volatile.Write(ref _poisoned, true);
                 throw new TimeoutException($"Offline update RPC '{method}' timed out after {_timeout}. " + PoisonedMessage, ex);
             }
             catch (Exception ex) when (ex is not IOException)
             {
                 if (sendAttempted)
-                    _poisoned = true;
+                    Volatile.Write(ref _poisoned, true);
                 throw new IOException(PoisonedMessage, ex);
             }
             catch
             {
                 if (sendAttempted)
-                    _poisoned = true;
+                    Volatile.Write(ref _poisoned, true);
                 throw;
             }
         }
@@ -395,12 +410,42 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
                 _readCount = 0;
             }
 
-            var bytesRead = await _responseInput.ReadAsync(_readBuffer.AsMemory(0, _readBuffer.Length), cancellationToken).ConfigureAwait(false);
+            var buffer = new byte[ReadBufferSize];
+            var bytesRead = await ReadBoundedAsync(buffer, cancellationToken).ConfigureAwait(false);
             if (bytesRead == 0)
                 throw new EndOfStreamException("Unexpected end of stream while reading RPC response frame. " + PoisonedMessage);
 
+            _readBuffer = buffer;
             _readOffset = 0;
             _readCount = bytesRead;
+        }
+    }
+
+    /// <summary>
+    /// Races the physical read against cancellation instead of trusting the
+    /// stream to observe the token. A cancelled pipe may keep its read pending
+    /// indefinitely; the caller still gets a bounded cancellation, and the
+    /// abandoned read is left to fill a private buffer that no later request
+    /// can observe. A fault from that late read is observed here so it never
+    /// surfaces as an unobserved task exception.
+    /// </summary>
+    private async ValueTask<int> ReadBoundedAsync(byte[] buffer, CancellationToken cancellationToken)
+    {
+        var readTask = _responseInput.ReadAsync(buffer.AsMemory(), cancellationToken).AsTask();
+        try
+        {
+            return await readTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // WaitAsync abandons, rather than cancels, the physical read.
+            // Keep watching it so a late failure cannot become unobserved.
+            _ = readTask.ContinueWith(
+                static task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            throw;
         }
     }
 

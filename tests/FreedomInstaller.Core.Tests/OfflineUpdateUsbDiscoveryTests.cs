@@ -9,7 +9,12 @@ public sealed class OfflineUpdateUsbDiscoveryTests
 {
     private const string Id1 = "11111111-1111-1111-1111-111111111111";
     private const string Id2 = "22222222-2222-2222-2222-2222222222aa";
-    private static readonly string PowerShell = Path.Combine(Path.GetFullPath(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT") ?? throw new InvalidOperationException("TEST_ARTIFACT_ROOT required")), "fake-powershell.exe");
+    private static readonly string PowerShell = Path.Combine(
+        Path.GetFullPath(
+            Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT") is { Length: > 0 } root
+                ? root
+                : Path.Combine(Path.GetTempPath(), "freedom-installer-usb-discovery-tests")),
+        "fake-powershell.exe");
 
     private static object Row(string id, string pnp, string address = "172.16.42.2", string mask = "255.255.255.0") =>
         new { id, pnpDeviceId = pnp, address, mask };

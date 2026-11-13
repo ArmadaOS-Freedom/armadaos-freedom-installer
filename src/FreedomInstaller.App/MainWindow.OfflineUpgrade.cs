@@ -23,8 +23,9 @@ namespace FreedomInstaller.App
         private bool _offlineUpgradeCloseInProgress;
         private bool _suppressOfflineSessionSelectionChanged;
 
-        // Endpoints whose one automatic factory-credential attempt was actually
-        // rejected. Only a real authentication rejection is recorded, so a
+        // Targets whose one automatic factory-credential attempt was actually
+        // rejected: a Wi-Fi host/port, or a USB device instance on its
+        // endpoint. Only a real authentication rejection is recorded, so a
         // cancelled host-key prompt or a network failure can retry.
         private readonly HashSet<string> _offlineDefaultCredentialRejected =
             new(StringComparer.OrdinalIgnoreCase);
@@ -36,6 +37,11 @@ namespace FreedomInstaller.App
         private string? _offlineActualSlot;
         private string? _offlineRecoveryPartUuid;
         private IReadOnlyList<OfflineUpdateSession> _offlineSessions = Array.Empty<OfflineUpdateSession>();
+        // Records that exist for the connected device but cannot be read. They
+        // are reported and skipped; they never remove a valid session or an
+        // imported package, and they are never rewritten.
+        private IReadOnlyList<OfflineDamagedSessionRecord> _offlineDamagedSessionRecords =
+            Array.Empty<OfflineDamagedSessionRecord>();
         private OfflineUpdateSession? _offlineSelectedSession;
         private SavedOfflineUpdateRecovery? _offlineSavedRecovery;
         private JsonElement? _offlineLastReceipt;
@@ -163,7 +169,14 @@ namespace FreedomInstaller.App
             bool canPrepare = !busy && bootPolicySupported &&
                 OfflineUpdateUiState.CanPrepareSession(connected, imported, _offlinePreflightPassed,
                 _offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null);
-            OfflineUpgradePanel.PrepareButton.IsEnabled = canPrepare;
+            // A session the tablet already prepared reaches the recovery
+            // export through the same Plan action. It is enabled only with the
+            // same live evidence a prepare needs (package, selection,
+            // preflight) and only while no verified local bundle is held.
+            bool canExportRecovery = !busy && bootPolicySupported && imported &&
+                _offlinePreflightPassed && _offlineSelectedSession != null &&
+                OfflineUpdateUiState.CanExportRecovery(_offlineLastReceipt, _offlineSavedRecovery != null);
+            OfflineUpgradePanel.PrepareButton.IsEnabled = canPrepare || canExportRecovery;
             OfflineUpgradePanel.RefreshButton.IsEnabled = !busy &&
                 OfflineUpdateUiState.CanRefreshStatus(connected, _offlineSelectedSession != null);
 
@@ -228,6 +241,16 @@ namespace FreedomInstaller.App
                     _offlineReceiptLive = false;
                     SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateStoppedWaiting");
                     AppendOfflineLog("Dynamic.OfflineUpdate.LogStoppedWaiting");
+
+                    // A cancel that interrupted an already sent request leaves
+                    // this request/response stream in an unknown state; the
+                    // client reports that as poisoned. Only the transport is
+                    // released then: the imported package, the durable session
+                    // records and the reconnect details stay so the operator can
+                    // reconnect and continue. A cancel during a polling delay
+                    // wrote nothing and keeps the connection.
+                    if (_offlineSsh != null && _offlineSsh.Rpc.IsPoisoned)
+                        await ReleasePoisonedOfflineConnectionAsync();
                 }
                 catch (OfflineUpdateTransferException tex)
                 {
@@ -418,6 +441,9 @@ namespace FreedomInstaller.App
 
                 int port = OfflineUpdateConnectionUiState.UsbSshPort;
                 string host = string.Empty;
+                // Only a validated USB discovery result sets this; the Wi-Fi
+                // route keeps its typed host/port identity.
+                string? usbDeviceInstanceId = null;
                 if (OfflineUpdateConnectionUiState.UsesWifiAddress(transport))
                 {
                     if (!OfflineUpdateConnectionUiState.TryParsePort(OfflineUpgradePanel.PortBox.Text, out port))
@@ -474,17 +500,18 @@ namespace FreedomInstaller.App
                     var endpoint = await FindOfflineUsbEndpointAsync(ct);
                     host = endpoint.Host;
                     bindAddress = endpoint.LocalAddress;
+                    usbDeviceInstanceId = endpoint.DeviceInstanceId;
                 }
 
-                string endpointKey = OfflineUpdateSshAuthPolicy.EndpointKey(host, port);
+                string rejectionKey = OfflineUpdateSshAuthPolicy.DefaultCredentialRejectionKey(host, port, usbDeviceInstanceId);
                 bool defaultAccount = credential == OfflineUpdateCredentialMode.DefaultAccount;
                 bool usingDefault = defaultAccount &&
                     OfflineUpdateSshAuthPolicy.ShouldAttemptDefaultCredential(
                         OfflineUpdateSshAuthMode.Password,
                         credentialsSuppliedByUser: false,
-                        defaultAlreadyAttempted: _offlineDefaultCredentialRejected.Contains(endpointKey));
+                        defaultAlreadyAttempted: _offlineDefaultCredentialRejected.Contains(rejectionKey));
 
-                // The automatic factory attempt is limited to once per endpoint;
+                // The automatic factory attempt is limited to once per target;
                 // afterwards the same selection asks for the password instead.
                 if (defaultAccount && !usingDefault)
                 {
@@ -515,8 +542,8 @@ namespace FreedomInstaller.App
                 catch (InvalidOperationException ex) when (usingDefault && IsOfflinePasswordRejection(ex))
                 {
                     // Only a real authentication rejection consumes the single
-                    // automatic attempt for this endpoint.
-                    _offlineDefaultCredentialRejected.Add(endpointKey);
+                    // automatic attempt for this exact target.
+                    _offlineDefaultCredentialRejected.Add(rejectionKey);
                     ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.DefaultCredentialRejected");
                 }
             });
@@ -597,8 +624,8 @@ namespace FreedomInstaller.App
 
         private void ClearOfflinePasswordEntry()
         {
-            // The rejected-endpoint set is intentionally kept: the automatic
-            // attempt is limited per endpoint, not reset by a disconnect.
+            // The rejected-target set is intentionally kept: the automatic
+            // attempt is limited per target, not reset by a disconnect.
             if (OfflineUpgradePanel != null)
                 OfflineUpgradePanel.PasswordBox.Clear();
         }
@@ -675,8 +702,6 @@ namespace FreedomInstaller.App
                 {
                     byte[] descBytes = await File.ReadAllBytesAsync(imported.DescriptorPath, ct);
                     string descSha = Convert.ToHexString(SHA256.HashData(descBytes)).ToLowerInvariant();
-                    string recordsRoot = GetPersistentRecordsRoot();
-                    var sessions = PackageImporter.FindOfflineUpdateSessions(recordsRoot, _offlineConnectedModel, _offlineRecoveryPartUuid, descSha, ct);
 
                     _offlinePackage = imported;
                     _offlineDescriptorSha256 = descSha;
@@ -684,7 +709,12 @@ namespace FreedomInstaller.App
                     SetText(OfflineUpgradePanel.PackageText, "Dynamic.OfflineUpdate.PackageValidated", imported.Descriptor.Version, imported.Descriptor.ReleaseId);
                     AppendOfflineLog("Dynamic.OfflineUpdate.LogPackageValidated", imported.Descriptor.Version, imported.Descriptor.ReleaseId);
 
-                    ApplyFilteredOfflineSessions(sessions);
+                    // Sessions are matched one record at a time. An unrelated
+                    // damaged record is reported and skipped, and the validated
+                    // package stays imported so it can still be inspected and
+                    // used with the intact sessions.
+                    ApplyFilteredOfflineSessions(LoadSavedOfflineSessions());
+                    ReportDamagedOfflineSessionRecords();
 
                     // Read-only preflight. It never creates a session, prepares
                     // a candidate or writes a slot. Only the exact success
@@ -826,7 +856,13 @@ namespace FreedomInstaller.App
                     throw new InvalidOperationException(string.IsNullOrEmpty(_offlinePreflightError)
                         ? T("Dynamic.OfflineUpdate.ErrorPreflightRequired")
                         : _offlinePreflightError!);
-                if (!OfflineUpdateUiState.CanPrepare(_offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null))
+                // A session the tablet already prepared reaches the export step
+                // instead of failing the prepare gate; it is never prepared a
+                // second time.
+                bool exportRecoveryOnly =
+                    OfflineUpdateUiState.CanExportRecovery(_offlineLastReceipt, _offlineSavedRecovery != null);
+                if (!exportRecoveryOnly &&
+                    !OfflineUpdateUiState.CanPrepare(_offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorStateNotActionable", _uiText.Format(LocalizePhase(GetReceiptState(_offlineLastReceipt)))));
                 ClearOfflineActionEligibility();
                 string recordsRoot = GetPersistentRecordsRoot();
@@ -850,48 +886,104 @@ namespace FreedomInstaller.App
                 }
 
                 var progress = CreateOfflineProgress(gen);
-                var receipt = await _offlineTransfer!.PrepareAsync(_offlinePackage!, session, progress, ct);
-                _offlineReceiptLive = true;
-                _offlineLastReceipt = receipt.Clone();
-                await TryPersistReceiptAsync(session, _offlineLastReceipt.Value);
-                UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
-
-                string state = GetReceiptState(_offlineLastReceipt) ?? string.Empty;
-                if (state == "up_to_date")
-                {
-                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateUpToDate");
-                    AppendOfflineLog("Dynamic.OfflineUpdate.LogUpToDate");
-                    return;
-                }
-
-                EnsureNoBlockingReceiptFlags(_offlineLastReceipt.Value);
-                var context = ExtractRecoveryContext(_offlineLastReceipt.Value, _offlineConnectedModel!);
                 string sessionRoot = Path.Combine(recordsRoot, session.SessionId);
                 Directory.CreateDirectory(sessionRoot);
 
-                var existing = await Task.Run(() => TryLoadExistingRecoveryOrThrow(sessionRoot, context, _offlineDescriptorSha256!, ct), ct);
-                if (existing != null)
+                if (exportRecoveryOnly)
                 {
-                    _offlineSavedRecovery = existing;
-                    SetText(OfflineUpgradePanel.RecoveryPathText, "Dynamic.OfflineUpdate.Value", existing.DirectoryPath);
-                    AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoveryReused", existing.DirectoryPath);
+                    // The tablet already prepared this session. Preparing again
+                    // would repeat device-side validation for no gain, so the
+                    // Plan action resumes at the only remaining local step: the
+                    // verified recovery bundle whose acknowledgement execution
+                    // later hands back to the tablet.
+                    AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoveryExportResumed", session.SessionId);
+                    JsonElement preparedReceipt = _offlineLastReceipt ?? throw new InvalidOperationException(
+                        T("Dynamic.OfflineUpdate.ErrorStateNotActionable",
+                            _uiText.Format(LocalizePhase(GetReceiptState(_offlineLastReceipt)))));
+                    await EnsureOfflineRecoveryAsync(session, preparedReceipt, sessionRoot, gen, ct);
                 }
                 else
                 {
-                    var saved = await _offlineTransfer.SaveRecoveryAsync(_offlinePackage!, session, sessionRoot, progress, ct);
-                    _offlineSavedRecovery = saved;
-                    SetText(OfflineUpgradePanel.RecoveryPathText, "Dynamic.OfflineUpdate.Value", saved.DirectoryPath);
-                    AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoverySaved", saved.DirectoryPath);
+                    var receipt = await _offlineTransfer!.PrepareAsync(_offlinePackage!, session, progress, ct);
+                    _offlineReceiptLive = true;
+                    _offlineLastReceipt = receipt.Clone();
+                    await TryPersistReceiptAsync(session, _offlineLastReceipt.Value);
+                    UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
+
+                    string state = GetReceiptState(_offlineLastReceipt) ?? string.Empty;
+                    if (state == "up_to_date")
+                    {
+                        SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateUpToDate");
+                        AppendOfflineLog("Dynamic.OfflineUpdate.LogUpToDate");
+                        return;
+                    }
+
+                    EnsureNoBlockingReceiptFlags(_offlineLastReceipt.Value);
+                    await EnsureOfflineRecoveryAsync(session, _offlineLastReceipt.Value, sessionRoot, gen, ct);
                 }
 
                 Interlocked.Increment(ref _offlineOperationGeneration);
-                var status = await _offlineTransfer.QueryStatusAsync(_offlinePackage!, session, ct);
+                var status = await _offlineTransfer!.QueryStatusAsync(_offlinePackage!, session, ct);
                 _offlineReceiptLive = true;
                 _offlineLastReceipt = status.Clone();
                 await TryPersistReceiptAsync(session, _offlineLastReceipt.Value);
                 UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
                 await ApplyQueriedReceiptState(_offlineLastReceipt.Value, sessionRoot, ct, allowLoadRecovery: true);
             });
+        }
+
+        /// <summary>
+        /// Produce the verified local recovery bundle for a session the tablet
+        /// already prepared, and hold the exact bytes execution returns as its
+        /// acknowledgement. It exports only: no prepare, no execute, no slot
+        /// write. An existing bundle is reused only when it validates against
+        /// this transaction and the imported package; an unusable leftover is
+        /// reported and left where it is while a fresh bundle is written beside
+        /// it.
+        /// </summary>
+        private async Task<SavedOfflineUpdateRecovery> EnsureOfflineRecoveryAsync(
+            OfflineUpdateSession session, JsonElement receipt, string sessionRoot,
+            long generation, CancellationToken ct)
+        {
+            if (_offlineSsh == null || _offlineTransfer == null || string.IsNullOrEmpty(_offlineConnectedModel))
+                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+            if (_offlinePackage == null || string.IsNullOrEmpty(_offlineDescriptorSha256))
+                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
+
+            OfflineUpdateRecoveryContext? context = TryExtractRecoveryContext(receipt, _offlineConnectedModel!);
+            SavedOfflineUpdateRecovery? existing = null;
+            if (context != null)
+            {
+                try
+                {
+                    existing = await Task.Run(
+                        () => TryLoadExistingRecoveryOrThrow(sessionRoot, context, _offlineDescriptorSha256!, ct), ct);
+                }
+                catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+                {
+                    AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoveryIgnored", ex.Message);
+                }
+            }
+
+            if (existing == null)
+            {
+                existing = await _offlineTransfer.SaveRecoveryAsync(
+                    _offlinePackage!, session, sessionRoot, CreateOfflineProgress(generation), ct);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoverySaved", existing.DirectoryPath);
+            }
+            else
+            {
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoveryReused", existing.DirectoryPath);
+            }
+
+            // Execution may only start with the validated acknowledgement that
+            // belongs to this transaction; a bundle without it is not evidence.
+            if (existing.Acknowledgement is not { Length: > 0 })
+                throw new InvalidDataException(T("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
+
+            _offlineSavedRecovery = existing;
+            SetText(OfflineUpgradePanel.RecoveryPathText, "Dynamic.OfflineUpdate.Value", existing.DirectoryPath);
+            return existing;
         }
 
         private async void OnRefreshOfflineStatusAsync(object? sender, RoutedEventArgs e)
@@ -1101,12 +1193,22 @@ namespace FreedomInstaller.App
                 case "prepared":
                     if (allowLoadRecovery && _offlineSavedRecovery == null && Directory.Exists(sessionRoot))
                     {
-                        var ctx = ExtractRecoveryContext(receipt, _offlineConnectedModel!);
-                        var loaded = await Task.Run(() => TryLoadExistingRecoveryOrThrow(sessionRoot, ctx, _offlineDescriptorSha256!, ct), ct);
-                        if (loaded != null)
+                        // Only a receipt whose export metadata agrees with the
+                        // Core precedence may name the local recovery bundle.
+                        var ctx = TryExtractRecoveryContext(receipt, _offlineConnectedModel!);
+                        if (ctx != null)
                         {
-                            _offlineSavedRecovery = loaded;
-                            SetText(OfflineUpgradePanel.RecoveryPathText, "Dynamic.OfflineUpdate.Value", loaded.DirectoryPath);
+                            var loaded = await Task.Run(() => TryLoadExistingRecoveryOrThrow(sessionRoot, ctx, _offlineDescriptorSha256!, ct), ct);
+                            if (loaded != null)
+                            {
+                                _offlineSavedRecovery = loaded;
+                                SetText(OfflineUpgradePanel.RecoveryPathText, "Dynamic.OfflineUpdate.Value", loaded.DirectoryPath);
+                            }
+                        }
+                        else
+                        {
+                            AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoveryIgnored",
+                                T("Dynamic.OfflineUpdate.ErrorInvalidRecoveryContext"));
                         }
                     }
                     if (_offlineSavedRecovery != null)
@@ -1303,9 +1405,13 @@ namespace FreedomInstaller.App
             OfflineUpgradePanel.SessionCombo.ItemsSource = _offlineSessions;
             OfflineUpgradePanel.SessionCombo.SelectedIndex = _offlineSessions.Count == 1 ? 0 : -1;
             _suppressOfflineSessionSelectionChanged = false;
-
             if (_offlineSessions.Count == 0)
+            {
+                // No readable session is left, so the damaged record is the
+                // only thing worth showing.
+                ReportDamagedOfflineSessionRecords();
                 return;
+            }
 
             AppendOfflineLog("Dynamic.OfflineUpdate.LogSavedSessionsFound", _offlineSessions.Count);
             if (_offlineSessions.Count > 1)
@@ -1327,49 +1433,43 @@ namespace FreedomInstaller.App
             }
         }
 
+        /// <summary>
+        /// The saved sessions of this exact device, read one record at a time.
+        /// A damaged record is remembered with its name for
+        /// <see cref="ReportDamagedOfflineSessionRecords"/> instead of hiding
+        /// the intact sessions, and it is never rewritten.
+        /// </summary>
         private IReadOnlyList<OfflineUpdateSession> LoadSavedOfflineSessions()
         {
-            var found = new List<OfflineUpdateSession>();
             try
             {
-                string recordsRoot = GetPersistentRecordsRoot();
-                string sessionsDir = Path.Combine(recordsRoot, "offline-update-sessions");
-                if (!Directory.Exists(sessionsDir))
-                    return found;
-
-                foreach (string file in Directory.GetFiles(sessionsDir, "*.json", SearchOption.TopDirectoryOnly))
-                {
-                    string name = Path.GetFileName(file);
-                    if (!name.EndsWith(".json", StringComparison.Ordinal) || name.Length <= 5)
-                        continue;
-                    try
-                    {
-                        var info = new FileInfo(file);
-                        if (!info.Exists || info.LinkTarget != null || info.Length <= 0 || info.Length > 64 * 1024)
-                            continue;
-                        var record = PackageImporter.LoadOfflineUpdateSession(recordsRoot, name[..^5]);
-                        if (!string.Equals(record.DeviceModel, _offlineConnectedModel, StringComparison.Ordinal) ||
-                            !string.Equals(record.RecoveryPartUuid, _offlineRecoveryPartUuid, StringComparison.Ordinal))
-                            continue;
-                        // While a package is still imported only its own sessions
-                        // are valid targets for the package-bound operations.
-                        if (!string.IsNullOrEmpty(_offlineDescriptorSha256) &&
-                            !string.Equals(record.PackageDescriptorSha256, _offlineDescriptorSha256, StringComparison.Ordinal))
-                            continue;
-                        found.Add(record);
-                    }
-                    catch (Exception)
-                    {
-                        // A damaged record never hides the other saved sessions.
-                    }
-                }
-                found.Sort((a, b) => string.CompareOrdinal(a.SessionId, b.SessionId));
+                OfflineSessionRecordScan scan = OfflineUpdateSessionCatalog.Load(
+                    GetPersistentRecordsRoot(), _offlineConnectedModel, _offlineRecoveryPartUuid, _offlineDescriptorSha256);
+                _offlineDamagedSessionRecords = scan.Damaged;
+                return scan.Sessions;
             }
             catch (Exception)
             {
-                return found;
+                _offlineDamagedSessionRecords = Array.Empty<OfflineDamagedSessionRecord>();
+                return Array.Empty<OfflineUpdateSession>();
             }
-            return found;
+        }
+
+        /// <summary>
+        /// Name every damaged record, so a record that cannot be read is
+        /// visible instead of silently missing from the session list.
+        /// </summary>
+        private void ReportDamagedOfflineSessionRecords()
+        {
+            if (OfflineUpgradePanel == null || _offlineDamagedSessionRecords.Count == 0)
+                return;
+
+            foreach (var damaged in _offlineDamagedSessionRecords)
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogDamagedSessionRecord", damaged.RecordName, damaged.Reason);
+
+            var first = _offlineDamagedSessionRecords[0];
+            SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateDamagedSessionRecord",
+                _offlineDamagedSessionRecords.Count, first.RecordName, first.Reason);
         }
 
         private async void OnRestartToVerifyOfflineUpgradeAsync(object? sender, RoutedEventArgs e)
@@ -1444,6 +1544,29 @@ namespace FreedomInstaller.App
             });
         }
 
+        /// <summary>
+        /// The cancel hit a request that had already been sent, so the stream
+        /// can no longer be trusted. Release only the transport: the imported
+        /// package, the saved sessions and the connection fields the operator
+        /// needs to reconnect are kept.
+        /// </summary>
+        private async Task ReleasePoisonedOfflineConnectionAsync()
+        {
+            AppendOfflineLog("Dynamic.OfflineUpdate.LogPoisonedConnectionReleased");
+            try
+            {
+                await DropOfflineConnectionKeepPackageAsync();
+            }
+            catch (Exception ex)
+            {
+                // Releasing a poisoned transport must not turn the user's
+                // cancel into a failed operation.
+                _offlineSsh = null;
+                _offlineTransfer = null;
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
+            }
+        }
+
         private async Task DropOfflineConnectionKeepPackageAsync()
         {
             var ssh = _offlineSsh;
@@ -1482,21 +1605,17 @@ namespace FreedomInstaller.App
             return null;
         }
 
-        private OfflineUpdateRecoveryContext ExtractRecoveryContext(JsonElement receipt, string model)
-        {
-            JsonElement source = receipt;
-            if (receipt.ValueKind == JsonValueKind.Object && receipt.TryGetProperty("result", out JsonElement res) && res.ValueKind == JsonValueKind.Object)
-                source = res;
-
-            string? tx = GetJsonString(source, "transactionId") ?? GetJsonString(receipt, "transactionId");
-            string? plan = GetJsonString(source, "planSha256") ?? GetJsonString(receipt, "planSha256");
-            string? manifest = GetJsonString(source, "recoveryManifestSha256") ?? GetJsonString(receipt, "recoveryManifestSha256");
-
-            if (string.IsNullOrWhiteSpace(tx) || string.IsNullOrWhiteSpace(plan) || string.IsNullOrWhiteSpace(manifest))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorInvalidRecoveryContext"));
-
-            return new OfflineUpdateRecoveryContext(tx, model, plan, manifest);
-        }
+        /// <summary>
+        /// The recovery context follows the Core precedence exactly (result,
+        /// then transaction, both present blocks must agree). A receipt the
+        /// Core would reject yields no context, so it can never name different
+        /// local bytes here.
+        /// </summary>
+        private OfflineUpdateRecoveryContext? TryExtractRecoveryContext(JsonElement receipt, string model) =>
+            OfflineUpdateUiState.TryGetRecoveryMetadata(receipt,
+                out string? transactionId, out string? planSha256, out string? recoveryManifestSha256)
+                ? new OfflineUpdateRecoveryContext(transactionId!, model, planSha256!, recoveryManifestSha256!)
+                : null;
 
         private void EnsureReadyForSessionWork(bool requireSelectedSession)
         {

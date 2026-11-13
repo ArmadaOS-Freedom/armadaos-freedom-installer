@@ -67,6 +67,23 @@ public static class OfflineUpdateSshAuthPolicy
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
         return string.Concat(host.Trim().ToLowerInvariant(), ":", port.ToString(CultureInfo.InvariantCulture));
     }
+
+    /// <summary>
+    /// Key of the single automatic factory-credential attempt. Wi-Fi is
+    /// identified by the typed host and port alone. Every USB gadget presents
+    /// the same private host, so the validated discovery instance id is part
+    /// of the key: the same device on the same endpoint stays limited, while a
+    /// different USB instance starts with its own attempt.
+    /// </summary>
+    public static string DefaultCredentialRejectionKey(string host, int port, string? usbDeviceInstanceId = null)
+    {
+        string endpoint = EndpointKey(host, port);
+        if (string.IsNullOrWhiteSpace(usbDeviceInstanceId))
+            return endpoint;
+        // Windows reports PNP ids without case significance; normalizing keeps
+        // "the same device" one key regardless of how the id was reported.
+        return string.Concat(usbDeviceInstanceId.Trim().ToUpperInvariant(), "|", endpoint);
+    }
 }
 
 /// <summary>
