@@ -1107,35 +1107,75 @@ public class OfflineUpdateUiStateTests
     }
 
     [Fact]
-    public void CanStartReplacementSession_RequiresEveryLiveGate()
+    public void CanStartReplacementSession_RequiresEveryLiveGateButNotAnEarlierPass()
     {
         Assert.True(OfflineUpdateUiState.CanStartReplacementSession(
-            connected: true, imported: true, preflightPassed: true, catalogAvailable: true,
+            connected: true, imported: true, catalogAvailable: true,
             receiptLive: true, hasSelectedSession: true, selectionBound: true));
 
-        // Connection, package, preflight, readable records, a live receipt, a
-        // selection and its exact binding are each required.
+        // Connection, package, readable records, a live receipt, a selection
+        // and its exact binding are each required. The earlier preflight pass
+        // is not one of them: see the realistic resume below.
         Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
-            connected: false, imported: true, preflightPassed: true, catalogAvailable: true,
+            connected: false, imported: true, catalogAvailable: true,
             receiptLive: true, hasSelectedSession: true, selectionBound: true));
         Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
-            connected: true, imported: false, preflightPassed: true, catalogAvailable: true,
+            connected: true, imported: false, catalogAvailable: true,
             receiptLive: true, hasSelectedSession: true, selectionBound: true));
         Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
-            connected: true, imported: true, preflightPassed: false, catalogAvailable: true,
+            connected: true, imported: true, catalogAvailable: false,
             receiptLive: true, hasSelectedSession: true, selectionBound: true));
         Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
-            connected: true, imported: true, preflightPassed: true, catalogAvailable: false,
-            receiptLive: true, hasSelectedSession: true, selectionBound: true));
-        Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
-            connected: true, imported: true, preflightPassed: true, catalogAvailable: true,
+            connected: true, imported: true, catalogAvailable: true,
             receiptLive: false, hasSelectedSession: true, selectionBound: true));
         Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
-            connected: true, imported: true, preflightPassed: true, catalogAvailable: true,
+            connected: true, imported: true, catalogAvailable: true,
             receiptLive: true, hasSelectedSession: false, selectionBound: true));
         Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
-            connected: true, imported: true, preflightPassed: true, catalogAvailable: true,
+            connected: true, imported: true, catalogAvailable: true,
             receiptLive: true, hasSelectedSession: true, selectionBound: false));
+    }
+
+    [Fact]
+    public void ReplacementSession_RealisticResume_OffersAfterRefreshAndBeginsOnlyOnAFreshPass()
+    {
+        // Validate: the package is imported and re-validating clears the live
+        // flag, so the persisted failed receipt is shown but nothing may begin
+        // from it yet.
+        Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: true, imported: true, catalogAvailable: true,
+            receiptLive: false, hasSelectedSession: true, selectionBound: true));
+
+        // Refresh: the failed receipt is re-read live from this connection and
+        // the earlier pass is dropped. The refresh never re-runs the preflight
+        // for a failed receipt, so this is the state a realistic resume
+        // reaches - and it must offer the explicit action.
+        Assert.False(OfflineUpdateUiState.ShouldRefreshPreflight("failed"));
+        Assert.True(OfflineUpdateUiState.IsBoundForReplacement(
+            FailedPrepare(), Selected, Model, TxId, DescriptorSha));
+        Assert.True(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: true, imported: true, catalogAvailable: true,
+            receiptLive: true, hasSelectedSession: true, selectionBound: true));
+
+        // Click: the handler runs the read-only preflight fresh. Its denial
+        // begins nothing; its pass, with the same live bound selection, is what
+        // authorizes the begin.
+        Assert.False(OfflineUpdateUiState.CanBeginReplacementSession(
+            freshPreflightPassed: false, receiptLive: true,
+            hasSelectedSession: true, selectionBound: true));
+        Assert.True(OfflineUpdateUiState.CanBeginReplacementSession(
+            freshPreflightPassed: true, receiptLive: true,
+            hasSelectedSession: true, selectionBound: true));
+
+        // The begin still rides on the live receipt and the same selection: a
+        // receipt or selection that changed while the fresh exchange ran
+        // begins nothing even when that exchange passed.
+        Assert.False(OfflineUpdateUiState.CanBeginReplacementSession(
+            freshPreflightPassed: true, receiptLive: false,
+            hasSelectedSession: true, selectionBound: true));
+        Assert.False(OfflineUpdateUiState.CanBeginReplacementSession(
+            freshPreflightPassed: true, receiptLive: true,
+            hasSelectedSession: false, selectionBound: false));
     }
 
     [Fact]

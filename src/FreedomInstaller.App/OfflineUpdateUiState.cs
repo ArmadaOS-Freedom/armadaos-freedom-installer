@@ -351,19 +351,36 @@ namespace FreedomInstaller.App
         }
 
         /// <summary>
-        /// The complete replacement-begin gate. It needs the same live
-        /// evidence as a first prepare — connection, validated package, passed
-        /// read-only preflight — plus a readable records location, a receipt
-        /// read live from this connection, and the fully verified failed
-        /// preparation of the selected record. The caller still runs a fresh
-        /// preflight and lets the tablet's begin verify the package, the free
-        /// space and the new id before anything is prepared; the failed record
-        /// stays on disk throughout.
+        /// Whether the explicit replacement action is offered. It needs a
+        /// connection, a validated package, a readable records location, a
+        /// receipt read live from this connection, and the fully verified
+        /// failed preparation of the selected record.
+        /// The earlier read-only preflight pass is deliberately absent: a
+        /// resumed session never holds it together with live evidence.
+        /// Re-validating the package clears the live flag, and a normal status
+        /// refresh re-reads the failed receipt live while dropping the pass
+        /// (<see cref="ShouldRefreshPreflight"/> excludes <c>failed</c>). The
+        /// handler earns a fresh pass itself and requires it through
+        /// <see cref="CanBeginReplacementSession"/> before the only write; the
+        /// tablet's begin still verifies the package, the free space and the
+        /// new id, and the failed record stays on disk throughout.
         /// </summary>
-        internal static bool CanStartReplacementSession(bool connected, bool imported, bool preflightPassed,
+        internal static bool CanStartReplacementSession(bool connected, bool imported,
             bool catalogAvailable, bool receiptLive, bool hasSelectedSession, bool selectionBound) =>
-            connected && imported && preflightPassed && catalogAvailable && receiptLive &&
+            connected && imported && catalogAvailable && receiptLive &&
             hasSelectedSession && selectionBound;
+
+        /// <summary>
+        /// The handler's own precondition for the only write of the explicit
+        /// replacement begin: the fresh read-only preflight just run by that
+        /// handler, with the same live receipt and the same verified failed
+        /// preparation still selected. A denied fresh check begins nothing,
+        /// and neither does a receipt or selection that changed while the
+        /// exchange ran.
+        /// </summary>
+        internal static bool CanBeginReplacementSession(bool freshPreflightPassed,
+            bool receiptLive, bool hasSelectedSession, bool selectionBound) =>
+            freshPreflightPassed && receiptLive && hasSelectedSession && selectionBound;
 
         internal static bool CanExecute(JsonElement? receipt, bool hasSavedRecovery, bool preflightPassed) =>
             preflightPassed && hasSavedRecovery && State(receipt) == "prepared" && !HasBlockingFlags(receipt);

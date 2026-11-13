@@ -179,10 +179,10 @@ internal sealed class OfflineUpdateSshElevatedProcess : IAsyncDisposable
     internal bool PasswordSent => _prompts.PasswordSent;
 
     /// <summary>
-    /// True once a password write was given up on while its physical send was
-    /// still running. SSH.NET performs that send under the session write lock,
-    /// so cleanup must release the socket instead of queueing a cancel behind
-    /// it.
+    /// True once a password write or its flush was given up on while the
+    /// physical send was still running. SSH.NET performs that send under the
+    /// session write lock, so cleanup must release the socket instead of
+    /// queueing a cancel behind it.
     /// </summary>
     internal bool WriteAbandoned => Volatile.Read(ref _writeAbandoned) != 0;
 
@@ -288,6 +288,16 @@ internal static class OfflineUpdateSshSudo
     /// </summary>
     private static readonly TimeSpan ErrorTailSettleTimeout = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// The one-shot command's deadline failure. The wait loop and the password
+    /// write share it, so an expired budget reads the same wherever it is
+    /// observed.
+    /// </summary>
+    private const string CommandTimeoutMessage = "The sudo command did not finish in time.";
+
+    /// <summary>Same rule for the updater startup handshake.</summary>
+    private const string UpdaterStartTimeoutMessage = "The tablet did not start the offline updater in time.";
+
     internal static string NewPromptMarker() => PromptPrefix + Guid.NewGuid().ToString("N");
 
     internal static string BuildSudoCommand(string innerCommand, string marker)
@@ -331,7 +341,7 @@ internal static class OfflineUpdateSshSudo
 
                 var remaining = deadline - DateTime.UtcNow;
                 if (remaining <= TimeSpan.Zero)
-                    throw new TimeoutException("The sudo command did not finish in time.");
+                    throw new TimeoutException(CommandTimeoutMessage);
 
                 var waitSet = new List<Task>(3) { exitTask, Task.Delay(remaining, token) };
                 waitSet.Add(promptPending ? elevated.FirstPrompt : elevated.RepeatedPrompt);
@@ -342,19 +352,20 @@ internal static class OfflineUpdateSshSudo
                 if (completed == elevated.FirstPrompt)
                 {
                     promptPending = false;
-                    await WritePasswordOnceAsync(channel, elevated, password, token).ConfigureAwait(false);
+                    await WritePasswordOnceAsync(
+                        channel, elevated, password, deadline, CommandTimeoutMessage, token).ConfigureAwait(false);
                     continue;
                 }
                 if (completed == exitTask)
                     break;
 
                 token.ThrowIfCancellationRequested();
-                throw new TimeoutException("The sudo command did not finish in time.");
+                throw new TimeoutException(CommandTimeoutMessage);
             }
 
             var exited = await exitTask.ConfigureAwait(false);
             if (!exited)
-                throw new TimeoutException("The sudo command did not finish in time.");
+                throw new TimeoutException(CommandTimeoutMessage);
 
             await DrainAsync(stdoutTask).ConfigureAwait(false);
             await DrainAsync(elevated.StderrDrained).ConfigureAwait(false);
@@ -428,7 +439,7 @@ internal static class OfflineUpdateSshSudo
 
                 var remaining = deadline - DateTime.UtcNow;
                 if (remaining <= TimeSpan.Zero)
-                    throw new TimeoutException("The tablet did not start the offline updater in time.");
+                    throw new TimeoutException(UpdaterStartTimeoutMessage);
 
                 var waitSet = new List<Task>(3) { lineTask, Task.Delay(remaining, token) };
                 waitSet.Add(promptPending ? elevated.FirstPrompt : elevated.RepeatedPrompt);
@@ -439,7 +450,8 @@ internal static class OfflineUpdateSshSudo
                 if (completed == elevated.FirstPrompt)
                 {
                     promptPending = false;
-                    await WritePasswordOnceAsync(channel, elevated, password, token).ConfigureAwait(false);
+                    await WritePasswordOnceAsync(
+                        channel, elevated, password, deadline, UpdaterStartTimeoutMessage, token).ConfigureAwait(false);
                     continue;
                 }
                 if (completed == lineTask)
@@ -485,7 +497,7 @@ internal static class OfflineUpdateSshSudo
                         BuildStartupFailureMessage(reason, detail));
                 }
                 token.ThrowIfCancellationRequested();
-                throw new TimeoutException("The tablet did not start the offline updater in time.");
+                throw new TimeoutException(UpdaterStartTimeoutMessage);
             }
         }
         finally
@@ -516,10 +528,17 @@ internal static class OfflineUpdateSshSudo
         }
     }
 
+    /// <summary>
+    /// Writes the elevation secret once, within the remaining budget of the
+    /// command that asked for it. The response is never retried, so a caller
+    /// cancellation and an expired budget both leave the attempt finished.
+    /// </summary>
     internal static async Task WritePasswordOnceAsync(
         IOfflineUpdateSshChannel channel,
         OfflineUpdateSshElevatedProcess elevated,
         string? password,
+        DateTime deadline,
+        string timeoutMessage,
         CancellationToken token)
     {
         if (elevated.PasswordSent)
@@ -532,6 +551,15 @@ internal static class OfflineUpdateSshSudo
                 "The tablet requires a sudo password, but no password is available for this connection.");
         }
 
+        // The prompt can arrive just before the command's own budget runs out.
+        // Check it before the secret is handed to the stream: a send that
+        // starts past the deadline could only be abandoned.
+        if (deadline - DateTime.UtcNow <= TimeSpan.Zero)
+        {
+            token.ThrowIfCancellationRequested();
+            throw new TimeoutException(timeoutMessage);
+        }
+
         // Mark first: a cancelled or failed write must never be retried and send
         // the secret a second time.
         elevated.MarkPasswordSent();
@@ -542,27 +570,78 @@ internal static class OfflineUpdateSshSudo
             bytes[written] = (byte)'\n';
 
             // SSH.NET writes stdin with a synchronous socket send under the
-            // session write lock, and it need not observe the token. Racing the
-            // write keeps the handshake bounded; when the race is lost, the
-            // physical send is recorded so cleanup releases the socket instead
-            // of queueing a cancel behind the lock that send may still hold.
+            // session write lock, and neither the write nor the flush need to
+            // observe the token. Both are bounded by the command's own
+            // remaining budget instead of a fresh timeout per stage, so a
+            // stalled prompt response ends the handshake with the caller's
+            // deadline; racing the send keeps that bound effective, and a lost
+            // race is recorded so cleanup releases the exact socket instead of
+            // queueing a cancel behind the lock the send may still hold.
             var write = channel.StandardInput.WriteAsync(bytes, token).AsTask();
-            try
-            {
-                await write.WaitAsync(token).ConfigureAwait(false);
-                await channel.StandardInput.FlushAsync(token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!write.IsCompleted)
-            {
-                elevated.MarkWriteAbandoned();
-                ObserveLateFailure(write);
-                throw;
-            }
+            await AwaitPasswordSendAsync(write, elevated, deadline, timeoutMessage, token).ConfigureAwait(false);
+            await AwaitPasswordSendAsync(
+                channel.StandardInput.FlushAsync(token), elevated, deadline, timeoutMessage, token).ConfigureAwait(false);
         }
         finally
         {
             Array.Clear(bytes);
         }
+    }
+
+    /// <summary>
+    /// Waits for one physical stdin send inside the command's remaining
+    /// budget. Caller cancellation stays an
+    /// <see cref="OperationCanceledException"/>; an expired budget is the
+    /// command's own <see cref="TimeoutException"/>, so the two causes never
+    /// collapse into one another.
+    /// </summary>
+    private static async Task AwaitPasswordSendAsync(
+        Task send,
+        OfflineUpdateSshElevatedProcess elevated,
+        DateTime deadline,
+        string timeoutMessage,
+        CancellationToken token)
+    {
+        var remaining = deadline - DateTime.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+        {
+            AbandonPasswordSend(send, elevated);
+            token.ThrowIfCancellationRequested();
+            throw new TimeoutException(timeoutMessage);
+        }
+
+        try
+        {
+            await send.WaitAsync(remaining, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            AbandonPasswordSend(send, elevated);
+            throw;
+        }
+        catch (TimeoutException)
+        {
+            AbandonPasswordSend(send, elevated);
+
+            // Same precedence as the wait loop: a caller who cancelled in the
+            // same instant still gets cancellation, not a deadline failure.
+            token.ThrowIfCancellationRequested();
+            throw new TimeoutException(timeoutMessage);
+        }
+    }
+
+    /// <summary>
+    /// Records a send that outlived its bounded wait, so teardown releases the
+    /// exact socket before it cancels or disposes the channel. A send that
+    /// already finished needs nothing: no writer is left behind.
+    /// </summary>
+    private static void AbandonPasswordSend(Task send, OfflineUpdateSshElevatedProcess elevated)
+    {
+        if (send.IsCompleted)
+            return;
+
+        elevated.MarkWriteAbandoned();
+        ObserveLateFailure(send);
     }
 
     /// <summary>

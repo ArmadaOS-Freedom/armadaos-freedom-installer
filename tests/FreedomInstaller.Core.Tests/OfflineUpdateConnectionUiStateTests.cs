@@ -295,12 +295,28 @@ public sealed class OfflineUpdateConnectionUiStateTests
 
         // Both new-session begins refuse the mutation itself while the saved
         // records cannot be read, and the control gates carry the same reason.
-        Assert.Equal(2, CountOccurrences(code, "EnsureOfflineCatalogAvailable();"));
+        // The replacement begin checks it again after its fresh preflight,
+        // immediately before the only write.
+        Assert.Equal(3, CountOccurrences(code, "EnsureOfflineCatalogAvailable();"));
         Assert.Contains("bool catalogAvailable = _offlineSavedSessionsUnavailableReason == null;",
             code, StringComparison.Ordinal);
         Assert.Contains("bool canPrepare = !busy && bootPolicySupported && catalogAvailable &&",
             code, StringComparison.Ordinal);
         Assert.Contains("catalogAvailable, _offlineReceiptLive, _offlineSelectedSession != null, failedPrepareSelected",
+            code, StringComparison.Ordinal);
+
+        // The offer never requires an earlier preflight pass: on a resumed
+        // failed preparation the live receipt and the pass cannot both hold,
+        // so the handler runs a fresh read-only preflight and gates the write
+        // on its result together with the unchanged live binding.
+        Assert.Contains("OfflineUpdateUiState.CanStartReplacementSession(connected, imported,",
+            code, StringComparison.Ordinal);
+        Assert.DoesNotContain("CanStartReplacementSession(connected, imported, _offlinePreflightPassed",
+            code, StringComparison.Ordinal);
+        Assert.Contains("bool freshPreflightPassed = await RunOfflinePreflightAsync(null, ct);",
+            code, StringComparison.Ordinal);
+        Assert.Contains("if (!freshPreflightPassed)", code, StringComparison.Ordinal);
+        Assert.Contains("OfflineUpdateUiState.CanBeginReplacementSession(freshPreflightPassed,",
             code, StringComparison.Ordinal);
     }
 

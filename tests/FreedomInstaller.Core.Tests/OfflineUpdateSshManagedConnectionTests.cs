@@ -143,6 +143,28 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
     private static readonly Task Never = new TaskCompletionSource<bool>().Task;
 
+    /// <summary>
+    /// A sudo channel that prompts immediately and takes its standard input
+    /// from the supplied stream, so a fixture can stall exactly one password
+    /// send without touching a real transport.
+    /// </summary>
+    private static FakeChannel PromptedSudoChannel(
+        string command,
+        Stream standardInput,
+        List<string>? events = null,
+        Task? outputGate = null) =>
+        new(
+            string.Empty,
+            gaiteOutputOnPassword: false,
+            exited: false,
+            errorSegments: new[]
+            {
+                new ScriptedStream.Segment(Encoding.UTF8.GetBytes(PromptMarker(command)), Task.CompletedTask),
+            },
+            outputGate: outputGate,
+            standardInput: standardInput,
+            events: events);
+
     [Fact]
     public async Task Connect_RootDirect_NeverUsesSudoOrPassword()
     {
@@ -1315,6 +1337,124 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     }
 
     [Fact]
+    public async Task SudoRun_PasswordWriteStallsPastTheCommandDeadline_ReportsTimeoutAndReleasesTheSocket()
+    {
+        // The fake stdin stands in for SSH.NET's password send under the
+        // session write lock: it ignores the caller's token and only returns
+        // once the exact socket is released. Nothing cancels this run, so the
+        // command's own remaining budget is the only bound left.
+        var hostKey = HostKey(48);
+        var events = new List<string>();
+        var input = new BlockingWriteStream();
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = command => PromptedSudoChannel(command, input, events),
+            SocketAbortFactory = () => new FakeSocketAbort(() =>
+            {
+                events.Add("socket-release");
+                input.Release();
+            }),
+        };
+
+        var run = OfflineUpdateSshSudo.RunAsync(
+            transport, "/bin/true", "topsecret", TimeSpan.FromSeconds(2), 4096, CancellationToken.None);
+
+        await input.WriteStarted.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The wait is strict but bounded: losing it means the deadline was
+        // never applied, and the test fails instead of hanging the run.
+        Assert.Same(run, await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(10))));
+
+        var error = await Assert.ThrowsAsync<TimeoutException>(() => run);
+
+        Assert.Equal("The sudo command did not finish in time.", error.Message);
+        Assert.DoesNotContain("topsecret", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, transport.SocketAbortCount);
+        Assert.True(
+            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
+            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+    }
+
+    [Fact]
+    public async Task SudoRun_PasswordWriteCancelledByCaller_ReportsCancellationNotTheDeadline()
+    {
+        // The same stalled send must still surface the caller's cancellation,
+        // not the command's deadline: the budget here is far longer than the
+        // test, so only the token can end the handshake.
+        var hostKey = HostKey(49);
+        var events = new List<string>();
+        var input = new BlockingWriteStream();
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = command => PromptedSudoChannel(command, input, events),
+            SocketAbortFactory = () => new FakeSocketAbort(() =>
+            {
+                events.Add("socket-release");
+                input.Release();
+            }),
+        };
+        using var cancelled = new CancellationTokenSource();
+
+        var run = OfflineUpdateSshSudo.RunAsync(
+            transport, "/bin/true", "topsecret", TimeSpan.FromSeconds(30), 4096, cancelled.Token);
+
+        await input.WriteStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => run.WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(1, transport.SocketAbortCount);
+        Assert.True(
+            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
+            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+    }
+
+    [Fact]
+    public async Task StartUpdater_PasswordFlushStallsPastTheStartupDeadline_ReportsTimeoutAndReleasesTheSocket()
+    {
+        // The write reaches the peer but the flush never returns on its own.
+        // With no caller cancellation the startup budget must still end the
+        // handshake, and the socket is released before the channel is
+        // cancelled so the stalled flush does not hold cleanup.
+        var hostKey = HostKey(50);
+        var events = new List<string>();
+        var input = new BlockingFlushStream();
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = command => PromptedSudoChannel(command, input, events, outputGate: Never),
+            SocketAbortFactory = () => new FakeSocketAbort(() =>
+            {
+                events.Add("socket-release");
+                input.Release();
+            }),
+        };
+
+        var startup = OfflineUpdateSshSudo.StartUpdaterAsync(
+            transport,
+            "/bin/sh -c 'true'",
+            useSudo: true,
+            OfflineUpdateSshManagedConnection.ReadyMarker,
+            "topsecret",
+            TimeSpan.FromSeconds(2),
+            4096,
+            CancellationToken.None);
+
+        await input.FlushStarted.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Same(startup, await Task.WhenAny(startup, Task.Delay(TimeSpan.FromSeconds(10))));
+
+        var error = await Assert.ThrowsAsync<TimeoutException>(() => startup);
+
+        Assert.Equal("The tablet did not start the offline updater in time.", error.Message);
+        Assert.DoesNotContain("topsecret", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, transport.SocketAbortCount);
+        Assert.True(
+            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
+            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+    }
+
+    [Fact]
     public async Task SudoRun_CompletedProbe_KeepsTheTransportAndNeverReleasesTheSocket()
     {
         // A probe that completed, even with its own exit status, must leave the
@@ -1798,6 +1938,62 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         public override void Write(byte[] buffer, int offset, int count) =>
             WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A standard input whose write completes but whose flush never returns on
+    /// its own, standing in for SSH.NET flushing the password while it holds
+    /// the session write lock. The token is deliberately ignored: only the
+    /// socket release ends the flush.
+    /// </summary>
+    private sealed class BlockingFlushStream : Stream
+    {
+        private readonly TaskCompletionSource<bool> _flushStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task FlushStarted => _flushStarted.Task;
+
+        internal void Release() => _released.TrySetResult(true);
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            _flushStarted.TrySetResult(true);
+            return _released.Task;
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+        }
 
         public override void Flush()
         {

@@ -198,12 +198,17 @@ namespace FreedomInstaller.App
             // Starting a replacement session is a separate, explicitly
             // confirmed action, offered only for a live, fully verified failed
             // preparation of the selected record. It never retries that
-            // record, and it never enables Execute or Restart.
+            // record, and it never enables Execute or Restart. The earlier
+            // read-only preflight pass is not part of the offer: a resumed
+            // session cannot hold it beside live evidence (re-validation
+            // clears the live flag, a refresh re-reads the failed receipt and
+            // drops the pass), so the handler runs a fresh preflight and
+            // begins only when it passes.
             bool failedPrepareSelected =
                 OfflineUpdateUiState.IsBoundForReplacement(_offlineLastReceipt, _offlineSelectedSession,
                     _offlineConnectedModel, _offlineRecoveryPartUuid, _offlineDescriptorSha256);
             bool canStartReplacement = !busy && bootPolicySupported &&
-                OfflineUpdateUiState.CanStartReplacementSession(connected, imported, _offlinePreflightPassed,
+                OfflineUpdateUiState.CanStartReplacementSession(connected, imported,
                     catalogAvailable, _offlineReceiptLive, _offlineSelectedSession != null, failedPrepareSelected);
             OfflineUpgradePanel.StartReplacementSessionButton.Visibility =
                 failedPrepareSelected && _offlineReceiptLive ? Visibility.Visible : Visibility.Collapsed;
@@ -962,6 +967,11 @@ namespace FreedomInstaller.App
         /// that new id is uploaded and prepared. Nothing is deleted, executed,
         /// restarted or upgraded, and the failed receipt never makes Prepare,
         /// Execute or Restart actionable again.
+        /// The offer never requires the earlier preflight pass, because a
+        /// resumed failed preparation cannot hold a live receipt and that pass
+        /// at once; instead this handler runs the read-only preflight again and
+        /// re-checks the same selection, device, package and readable records
+        /// right before the begin, so a denied fresh check creates nothing.
         /// </summary>
         private async void OnStartReplacementOfflineSessionAsync(object? sender, RoutedEventArgs e)
         {
@@ -991,13 +1001,33 @@ namespace FreedomInstaller.App
                 var failed = _offlineSelectedSession!;
 
                 // The new attempt never inherits the pass the failed attempt
-                // ran under: it re-earns a fresh read-only preflight, and a
-                // failure stops here before anything is created. The rejection
-                // is already rendered and logged by the preflight exchange
-                // itself, and the live failed receipt stays readable behind it.
+                // ran under: it re-earns a fresh read-only preflight.
                 ClearOfflinePreflightState();
-                if (!await RunOfflinePreflightAsync(null, ct))
-                    return;
+                bool freshPreflightPassed = await RunOfflinePreflightAsync(null, ct);
+
+                // The fresh pass is evidence only for the selection, device and
+                // package it was run against. All of them, the readable records
+                // and the live verified failed preparation are checked again
+                // immediately before the only write; anything that changed
+                // while the exchange ran begins nothing.
+                EnsureOfflineCatalogAvailable();
+                EnsureReadyForSessionWork(requireSelectedSession: true);
+                string? selectedSessionId = _offlineSelectedSession?.SessionId;
+                bool stillSameFailedPrepare = selectedSessionId != null &&
+                    string.Equals(selectedSessionId, failed.SessionId, StringComparison.Ordinal) &&
+                    OfflineSelectionIsVerifiedFailedPrepare();
+                if (!OfflineUpdateUiState.CanBeginReplacementSession(freshPreflightPassed,
+                        _offlineReceiptLive, selectedSessionId != null, stillSameFailedPrepare))
+                {
+                    // A denied fresh check has already rendered and logged its
+                    // own rejection, and the live failed receipt stays readable
+                    // behind it: return without failing the panel. Any other
+                    // refusal is thrown so nothing is created.
+                    if (!freshPreflightPassed)
+                        return;
+
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
+                }
 
                 ClearOfflineActionEligibility();
                 string recordsRoot = GetPersistentRecordsRoot();
