@@ -297,6 +297,7 @@
   "Static.OfflineUpdate.Password": "Password",
   "Static.OfflineUpdate.PasswordPrivacy": "The password is used only for this connection and kept in memory. It is not saved to disk or written to logs.",
   "Static.OfflineUpdate.Prepare": "Prepare upgrade",
+  "Static.OfflineUpdate.StartReplacementSession": "Start a new session",
   "Static.OfflineUpdate.Desc": "The tablet must be running Linux. The upgrade writes both A/B physical boot slots with the same Linux deployment and keeps Android and Linux data, without repartitioning or initialization. Android keeps control of the active slot.",
   "Static.OfflineUpdate.Title": "Offline Upgrade",
   "Static.OfflineUpdate.PrepareHelp": "Automatically saves the boot and rollback data changed by this upgrade, including the original A/B data; no old boot selection or rescue environment is required.",

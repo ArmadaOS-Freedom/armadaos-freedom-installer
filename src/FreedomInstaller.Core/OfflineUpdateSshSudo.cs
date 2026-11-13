@@ -155,6 +155,7 @@ internal sealed class OfflineUpdateSshElevatedProcess : IAsyncDisposable
     private readonly CancellationTokenSource _stderrCts = new();
     private readonly Task _stderrTask;
     private int _disposed;
+    private int _writeAbandoned;
 
     internal OfflineUpdateSshElevatedProcess(
         IOfflineUpdateSshChannel channel,
@@ -176,6 +177,16 @@ internal sealed class OfflineUpdateSshElevatedProcess : IAsyncDisposable
     internal Task RepeatedPrompt => _prompts.RepeatedPrompt;
 
     internal bool PasswordSent => _prompts.PasswordSent;
+
+    /// <summary>
+    /// True once a password write was given up on while its physical send was
+    /// still running. SSH.NET performs that send under the session write lock,
+    /// so cleanup must release the socket instead of queueing a cancel behind
+    /// it.
+    /// </summary>
+    internal bool WriteAbandoned => Volatile.Read(ref _writeAbandoned) != 0;
+
+    internal void MarkWriteAbandoned() => Volatile.Write(ref _writeAbandoned, 1);
 
     internal Task StderrDrained => _stderrTask;
 
@@ -355,6 +366,15 @@ internal static class OfflineUpdateSshSudo
         finally
         {
             await stdoutCts.CancelAsync().ConfigureAwait(false);
+
+            // A password write that outlived its bounded wait can still be
+            // inside SSH.NET's synchronous send, so the exact socket is
+            // released before the channel cancel that would queue behind its
+            // writer lock. A handshake that never wrote keeps the session --
+            // and the transport -- reusable.
+            if (elevated.WriteAbandoned)
+                AbortTransportSocket(transport);
+
             try
             {
                 channel.Cancel();
@@ -473,6 +493,13 @@ internal static class OfflineUpdateSshSudo
             await lineCts.CancelAsync().ConfigureAwait(false);
             if (!handedOff)
             {
+                // Same rule as RunAsync: the startup handshake may have
+                // abandoned a password write whose physical send still holds
+                // the session writer lock, and this attempt owns no connection
+                // yet to release it later.
+                if (elevated.WriteAbandoned)
+                    AbortTransportSocket(transport);
+
                 try
                 {
                     channel.Cancel();
@@ -513,12 +540,74 @@ internal static class OfflineUpdateSshSudo
         {
             var written = Encoding.UTF8.GetBytes(password, bytes);
             bytes[written] = (byte)'\n';
-            await channel.StandardInput.WriteAsync(bytes, token).ConfigureAwait(false);
-            await channel.StandardInput.FlushAsync(token).ConfigureAwait(false);
+
+            // SSH.NET writes stdin with a synchronous socket send under the
+            // session write lock, and it need not observe the token. Racing the
+            // write keeps the handshake bounded; when the race is lost, the
+            // physical send is recorded so cleanup releases the socket instead
+            // of queueing a cancel behind the lock that send may still hold.
+            var write = channel.StandardInput.WriteAsync(bytes, token).AsTask();
+            try
+            {
+                await write.WaitAsync(token).ConfigureAwait(false);
+                await channel.StandardInput.FlushAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!write.IsCompleted)
+            {
+                elevated.MarkWriteAbandoned();
+                ObserveLateFailure(write);
+                throw;
+            }
         }
         finally
         {
             Array.Clear(bytes);
+        }
+    }
+
+    /// <summary>
+    /// Keeps watching an abandoned physical write so a late failure cannot
+    /// surface as an unobserved task exception.
+    /// </summary>
+    private static void ObserveLateFailure(Task task)
+    {
+        _ = task.ContinueWith(
+            static completed =>
+            {
+                _ = completed.Exception;
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Releases the exact authenticated socket without taking SSH.NET's write
+    /// path, so a send the peer stopped reading can still be broken before
+    /// cleanup asks the channel anything. Best effort: an unresolvable socket
+    /// leaves the bounded cleanup waits to finish on their own.
+    /// </summary>
+    private static void AbortTransportSocket(IOfflineUpdateSshTransport transport)
+    {
+        IOfflineUpdateSshSocketAbort? release;
+        try
+        {
+            release = transport.TryCreateSocketAbort();
+        }
+        catch
+        {
+            return;
+        }
+
+        if (release is null)
+            return;
+
+        try
+        {
+            release.Abort();
+        }
+        catch
+        {
         }
     }
 

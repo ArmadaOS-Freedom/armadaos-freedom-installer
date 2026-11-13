@@ -294,6 +294,17 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
             ? OfflineUpdateSshNetUploadGuard.TryCreate(client, sendTimeout)
             : null;
 
+    /// <summary>
+    /// Same exact-socket resolution as the upload guard, without applying a
+    /// send timeout: teardown only needs to break a writer that a cancelled
+    /// exchange may still hold, and the surviving RPC traffic must keep
+    /// SSH.NET's own socket budget.
+    /// </summary>
+    public IOfflineUpdateSshSocketAbort? TryCreateSocketAbort() =>
+        _clientLease.Current is SshClient client
+            ? OfflineUpdateSshNetSocketAbort.TryCreate(client)
+            : null;
+
     public void Dispose()
     {
         // Atomically claim the installed client and mark the lease disposed.
@@ -1027,24 +1038,7 @@ internal sealed class OfflineUpdateSshNetUploadGuard : IOfflineUpdateSshUploadGu
         if (Interlocked.Exchange(ref _aborted, 1) != 0)
             return;
 
-        // Shutdown first: closing alone does not reliably wake a send that is
-        // already blocked inside the OS. Both calls are best effort because a
-        // concurrent teardown may have closed the socket.
-        try
-        {
-            _socket.Shutdown(SocketShutdown.Both);
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            _socket.Close();
-        }
-        catch
-        {
-        }
+        OfflineUpdateSshNetSocketAbort.ShutdownSocket(_socket);
     }
 
     public void Dispose()
@@ -1057,6 +1051,78 @@ internal sealed class OfflineUpdateSshNetUploadGuard : IOfflineUpdateSshUploadGu
         try
         {
             _socket.SendTimeout = _previousSendTimeout;
+        }
+        catch
+        {
+        }
+    }
+}
+
+/// <summary>
+/// Bare abort handle over the exact socket of an authenticated session, used by
+/// teardown. It performs the same shutdown as the upload guard -- the only way
+/// to break a send SSH.NET executes synchronously under its session write lock
+/// -- but it never changes the socket's send timeout, so a transient upload
+/// budget can never be left behind on a long-lived RPC session.
+/// </summary>
+internal sealed class OfflineUpdateSshNetSocketAbort : IOfflineUpdateSshSocketAbort
+{
+    private readonly Socket _socket;
+    private int _aborted;
+
+    private OfflineUpdateSshNetSocketAbort(Socket socket) => _socket = socket;
+
+    internal static OfflineUpdateSshNetSocketAbort? TryCreate(SshClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        var socket = OfflineUpdateSshNetSessionSocket.TryGetSocket(client);
+        return socket is null ? null : TryCreate(socket);
+    }
+
+    internal static OfflineUpdateSshNetSocketAbort? TryCreate(Socket socket)
+    {
+        ArgumentNullException.ThrowIfNull(socket);
+        try
+        {
+            // A socket that is already closed has nothing left to release.
+            return socket.SafeHandle.IsClosed || socket.SafeHandle.IsInvalid
+                ? null
+                : new OfflineUpdateSshNetSocketAbort(socket);
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
+    }
+
+    public bool IsAborted => Volatile.Read(ref _aborted) != 0;
+
+    public void Abort()
+    {
+        if (Interlocked.Exchange(ref _aborted, 1) != 0)
+            return;
+
+        ShutdownSocket(_socket);
+    }
+
+    /// <summary>
+    /// Shutdown first: closing alone does not reliably wake a send that is
+    /// already blocked inside the OS. Both calls are best effort because a
+    /// concurrent teardown may have closed the socket.
+    /// </summary>
+    internal static void ShutdownSocket(Socket socket)
+    {
+        try
+        {
+            socket.Shutdown(SocketShutdown.Both);
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            socket.Close();
         }
         catch
         {

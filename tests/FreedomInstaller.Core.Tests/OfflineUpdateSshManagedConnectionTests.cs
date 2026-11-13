@@ -951,6 +951,10 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         Assert.True(transport.LastUploadSendTimeout > TimeSpan.Zero);
         Assert.True(transport.LastUploadSendTimeout < TimeSpan.FromMinutes(5));
         Assert.True(transport.LastChannel!.Disposed);
+
+        // A completed upload keeps the session reusable: no socket release, and
+        // the batch path never applies a transient budget to it.
+        Assert.Equal(0, transport.SocketAbortCount);
     }
 
     [Fact]
@@ -1130,6 +1134,211 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         Assert.True(channel.Disposed);
     }
 
+    [Fact]
+    public async Task Dispose_HealthyRpc_DisconnectsInOrderAndNeverReleasesTheSocket()
+    {
+        // No exchange is in flight and none was interrupted, so teardown is an
+        // ordinary cancel-and-disconnect: the session socket stays untouched and
+        // only the channel and the transport are released, exactly once.
+        var hostKey = HostKey(43);
+        var events = new List<string>();
+        var channel = new FakeChannel(
+            ReadyOutput(), gaiteOutputOnPassword: false, exited: false, events: events);
+        var transport = new FakeTransport(hostKey) { ChannelFactory = _ => channel };
+
+        var connection = await OfflineUpdateSshManagedConnection.ConnectCoreAsync(
+            Options(hostKey), TimeSpan.FromSeconds(5), CancellationToken.None, Factory(transport));
+        Assert.False(connection.Rpc.IsPoisoned);
+
+        await connection.DisposeAsync();
+        await connection.DisposeAsync();
+
+        Assert.Equal(0, transport.SocketAbortCount);
+        Assert.Equal(1, transport.DisposeCount);
+        Assert.True(channel.Disposed);
+        Assert.Contains("channel-cancel", events);
+    }
+
+    [Fact]
+    public async Task Dispose_AfterAnInterruptedRpcSend_ReleasesTheSocketBeforeCancellingTheChannel()
+    {
+        // The fake stdin stands in for SSH.NET's synchronous send under the
+        // session write lock: it ignores the token, so cancelling the request
+        // leaves the physical write running and poisons the RPC. Teardown has
+        // to shut that socket down before it cancels the sudo channel or
+        // disconnects, or cleanup would queue behind the blocked writer.
+        // The stall is armed only after connect and its own info exchange
+        // completed, so this proves the interrupted RPC send rather than a
+        // bootstrap that never got its info frame written.
+        var hostKey = HostKey(44);
+        var events = new List<string>();
+        var input = new BlockingWriteStream(armed: false);
+        var channel = new FakeChannel(
+            ReadyOutput(),
+            gaiteOutputOnPassword: false,
+            exited: false,
+            standardInput: input,
+            events: events);
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = _ => channel,
+            SocketAbortFactory = () => new FakeSocketAbort(() =>
+            {
+                events.Add("socket-release");
+                input.Release();
+            }),
+        };
+
+        var connection = await OfflineUpdateSshManagedConnection.ConnectCoreAsync(
+            Options(hostKey), TimeSpan.FromSeconds(5), CancellationToken.None, Factory(transport));
+        Assert.False(connection.Rpc.IsPoisoned);
+        Assert.Equal(0, transport.SocketAbortCount);
+
+        // From here every write stalls, exactly like a peer that stopped
+        // reading the session's stdin.
+        input.Arm();
+
+        using var cancelled = new CancellationTokenSource();
+        var query = connection.Rpc.GetInfoAsync(cancelled.Token);
+        await input.WriteStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => query);
+        Assert.True(connection.Rpc.IsPoisoned);
+
+        await connection.DisposeAsync();
+
+        Assert.Equal(1, transport.SocketAbortCount);
+        Assert.Equal(1, transport.DisposeCount);
+        Assert.True(channel.Disposed);
+
+        var released = events.IndexOf("socket-release");
+        Assert.True(released >= 0, "The teardown never released the socket: " + string.Join(",", events));
+        Assert.True(
+            released < events.IndexOf("channel-cancel"),
+            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+    }
+
+    [Fact]
+    public async Task Connect_InfoQueryCancelledWhileItsSendIsBlocked_ReleasesTheSocketBeforeTeardown()
+    {
+        // Ownership never reaches a connection object here, so the connect
+        // cleanup has to apply the same abort-before-cancel rule on its own.
+        var hostKey = HostKey(45);
+        var events = new List<string>();
+        var input = new BlockingWriteStream();
+        var channel = new FakeChannel(
+            ReadyOutput(),
+            gaiteOutputOnPassword: false,
+            exited: false,
+            standardInput: input,
+            events: events);
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = _ => channel,
+            SocketAbortFactory = () => new FakeSocketAbort(() =>
+            {
+                events.Add("socket-release");
+                input.Release();
+            }),
+        };
+        using var cancelled = new CancellationTokenSource();
+
+        var connect = OfflineUpdateSshManagedConnection.ConnectCoreAsync(
+            Options(hostKey), TimeSpan.FromSeconds(5), cancelled.Token, Factory(transport));
+
+        await input.WriteStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
+
+        Assert.Equal(1, transport.SocketAbortCount);
+        Assert.Equal(1, transport.DisposeCount);
+        Assert.True(channel.Disposed);
+        Assert.True(
+            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
+            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+    }
+
+    [Fact]
+    public async Task StartUpdater_CancelledWhileThePasswordSendIsBlocked_ReleasesTheSocketBeforeCleanup()
+    {
+        // The startup handshake abandoned its password write, so it owns no
+        // updater yet and nobody else can release the writer it left behind.
+        var hostKey = HostKey(46);
+        var events = new List<string>();
+        var input = new BlockingWriteStream();
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = command =>
+            {
+                var marker = PromptMarker(command);
+                return new FakeChannel(
+                    string.Empty,
+                    gaiteOutputOnPassword: false,
+                    exited: false,
+                    errorSegments: new[]
+                    {
+                        new ScriptedStream.Segment(Encoding.UTF8.GetBytes(marker), Task.CompletedTask),
+                    },
+                    outputGate: Never,
+                    standardInput: input,
+                    events: events);
+            },
+            SocketAbortFactory = () => new FakeSocketAbort(() =>
+            {
+                events.Add("socket-release");
+                input.Release();
+            }),
+        };
+        using var cancelled = new CancellationTokenSource();
+
+        var startup = OfflineUpdateSshSudo.StartUpdaterAsync(
+            transport,
+            "/bin/sh -c 'true'",
+            useSudo: true,
+            OfflineUpdateSshManagedConnection.ReadyMarker,
+            "topsecret",
+            TimeSpan.FromSeconds(5),
+            4096,
+            cancelled.Token);
+
+        await input.WriteStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
+
+        Assert.Equal(1, transport.SocketAbortCount);
+        Assert.True(
+            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
+            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+    }
+
+    [Fact]
+    public async Task SudoRun_CompletedProbe_KeepsTheTransportAndNeverReleasesTheSocket()
+    {
+        // A probe that completed, even with its own exit status, must leave the
+        // reusable session alone: only the disposable command is released.
+        var transport = new FakeTransport(HostKey(47))
+        {
+            ChannelFactory = _ => new FakeChannel("installed", gaiteOutputOnPassword: false, exited: true),
+        };
+
+        var result = await OfflineUpdateSshSudo.RunAsync(
+            transport,
+            "/bin/true",
+            password: "topsecret",
+            TimeSpan.FromSeconds(5),
+            4096,
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitStatus);
+        Assert.Equal("installed", result.StandardOutput);
+        Assert.Equal(0, transport.SocketAbortCount);
+        Assert.Equal(0, transport.DisposeCount);
+        Assert.True(transport.LastChannel!.Disposed);
+    }
+
     private static byte[] Payload(int length, byte seed)
     {
         var data = new byte[length];
@@ -1185,6 +1394,15 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         internal int UploadGuardCount { get; private set; }
 
         internal TimeSpan? LastUploadSendTimeout { get; private set; }
+
+        /// <summary>
+        /// Teardown handle for the same socket. The default records the call
+        /// and does nothing, so an untouched session stays healthy.
+        /// </summary>
+        internal Func<IOfflineUpdateSshSocketAbort?> SocketAbortFactory { get; init; } =
+            () => new FakeSocketAbort();
+
+        internal int SocketAbortCount { get; private set; }
 
         internal Queue<Func<string, FakeChannel>> ChannelQueue { get; } = new();
 
@@ -1244,6 +1462,12 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             return UploadGuardFactory();
         }
 
+        public IOfflineUpdateSshSocketAbort? TryCreateSocketAbort()
+        {
+            SocketAbortCount++;
+            return SocketAbortFactory();
+        }
+
         public void Dispose()
         {
             DisposeCount++;
@@ -1277,6 +1501,28 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
     }
 
+    /// <summary>
+    /// Bare teardown handle. It has no send timeout to restore, and its optional
+    /// action stands in for the real socket shutdown breaking a blocked send.
+    /// </summary>
+    private sealed class FakeSocketAbort : IOfflineUpdateSshSocketAbort
+    {
+        private readonly Action? _onAbort;
+        private int _abortCount;
+
+        internal FakeSocketAbort(Action? onAbort = null) => _onAbort = onAbort;
+
+        internal int AbortCount => Volatile.Read(ref _abortCount);
+
+        public bool IsAborted => AbortCount > 0;
+
+        public void Abort()
+        {
+            if (Interlocked.Increment(ref _abortCount) == 1)
+                _onAbort?.Invoke();
+        }
+    }
+
     private sealed class FakeChannel : IOfflineUpdateSshChannel
     {
         private readonly RecordingInput _input;
@@ -1287,6 +1533,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         private readonly int _exitStatus;
         private readonly string _errorTail;
         private readonly bool _waitForExitIgnoresTimeout;
+        private readonly List<string>? _events;
 
         internal FakeChannel(
             string output,
@@ -1303,10 +1550,12 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             IReadOnlyList<ScriptedStream.Segment>? outputSegments = null,
             bool exitOnInputClosed = false,
             Stream? standardInput = null,
-            bool waitForExitIgnoresTimeout = false)
+            bool waitForExitIgnoresTimeout = false,
+            List<string>? events = null)
         {
             _exitStatus = exitStatus;
             _errorTail = errorTail;
+            _events = events;
             _input = new RecordingInput(inputClosed);
             _standardInput = standardInput ?? _input;
             _waitForExitIgnoresTimeout = waitForExitIgnoresTimeout;
@@ -1375,11 +1624,16 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             _exit.Task.Wait(_waitForExitIgnoresTimeout ? Timeout.InfiniteTimeSpan : timeout) &&
             _exit.Task.Result;
 
-        public void Cancel() => _exit.TrySetResult(false);
+        public void Cancel()
+        {
+            _events?.Add("channel-cancel");
+            _exit.TrySetResult(false);
+        }
 
         public void Dispose()
         {
             Cancel();
+            _events?.Add("channel-dispose");
             Disposed = true;
         }
 
@@ -1491,10 +1745,13 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     }
 
     /// <summary>
-    /// A standard input whose write never returns on its own, standing in for
-    /// SSH.NET's synchronous socket send when the peer stops reading. The
-    /// cancellation token is deliberately ignored: only the upload guard can
-    /// end the write, exactly like a real socket send under the write lock.
+    /// A standard input whose write never returns on its own once armed,
+    /// standing in for SSH.NET's synchronous socket send when the peer stops
+    /// reading. The cancellation token is deliberately ignored: only the
+    /// upload guard can end the write, exactly like a real socket send under
+    /// the write lock. A stream that starts unarmed is an ordinary sink, so a
+    /// fixture can finish the connect handshake and arm the stall only for the
+    /// exchange it means to interrupt.
     /// </summary>
     private sealed class BlockingWriteStream : Stream
     {
@@ -1502,8 +1759,14 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _released =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _armed;
+
+        internal BlockingWriteStream(bool armed = true) => _armed = armed ? 1 : 0;
 
         internal Task WriteStarted => _writeStarted.Task;
+
+        /// <summary>Engages the stall; every write before this one completed.</summary>
+        internal void Arm() => Volatile.Write(ref _armed, 1);
 
         internal void Release() => _released.TrySetResult(true);
 
@@ -1525,6 +1788,9 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             ReadOnlyMemory<byte> buffer,
             CancellationToken cancellationToken = default)
         {
+            if (Volatile.Read(ref _armed) == 0)
+                return;
+
             _writeStarted.TrySetResult(true);
             await _released.Task.ConfigureAwait(false);
             throw new IOException("The transport connection has been closed.");

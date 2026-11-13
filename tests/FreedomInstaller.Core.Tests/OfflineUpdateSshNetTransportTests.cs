@@ -359,6 +359,45 @@ public sealed class OfflineUpdateSshNetTransportTests
         Assert.Null(OfflineUpdateSshNetUploadGuard.TryCreate(socket, TimeSpan.FromSeconds(3)));
     }
 
+    [Fact]
+    public void TheTeardownAbortLeavesTheSocketSendTimeoutUntouched()
+    {
+        // Teardown shares the upload guard's socket shutdown but must not carry
+        // the upload's transient send budget onto the long-lived RPC session.
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        Assert.Equal(0, socket.SendTimeout);
+
+        var abort = OfflineUpdateSshNetSocketAbort.TryCreate(socket);
+
+        Assert.NotNull(abort);
+        Assert.False(abort!.IsAborted);
+        Assert.Equal(0, socket.SendTimeout);
+    }
+
+    [Fact]
+    public void AbortingTheTeardownHandleClosesTheCapturedSocketExactlyOnce()
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        var abort = OfflineUpdateSshNetSocketAbort.TryCreate(socket);
+
+        Assert.NotNull(abort);
+        abort!.Abort();
+        abort.Abort();
+
+        Assert.True(abort.IsAborted);
+        Assert.Throws<ObjectDisposedException>(() => socket.Send(new byte[] { 1 }));
+        socket.Dispose();
+    }
+
+    [Fact]
+    public void AClosedSocketHasNoTeardownHandle()
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        socket.Dispose();
+
+        Assert.Null(OfflineUpdateSshNetSocketAbort.TryCreate(socket));
+    }
+
     private static OfflineUpdateSshPasswordOptions UsbOptions() =>
         new("172.16.42.10", 2222, "armada", "topsecret", Path.GetTempPath(), "172.16.42.2");
 

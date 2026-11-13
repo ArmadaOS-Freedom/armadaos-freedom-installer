@@ -297,6 +297,7 @@
   "Static.OfflineUpdate.Password": "密码",
   "Static.OfflineUpdate.PasswordPrivacy": "密码仅在本次连接中使用，不保存到磁盘或日志。",
   "Static.OfflineUpdate.Prepare": "准备升级",
+  "Static.OfflineUpdate.StartReplacementSession": "新建替代会话",
   "Static.OfflineUpdate.Desc": "平板需运行 Linux。升级会用同一份 Linux 部署写入 A/B 两个物理引导槽位，保留安卓和 Linux 数据，不重新分区、不初始化；Android 自行管理活动槽位。",
   "Static.OfflineUpdate.Title": "离线升级",
   "Static.OfflineUpdate.PrepareHelp": "自动保存本次会修改的引导与回滚资料（含原 A/B 数据），无需选择旧 boot，也不需要救援环境。",

@@ -43,9 +43,12 @@ namespace FreedomInstaller.App
         private IReadOnlyList<OfflineDamagedSessionRecord> _offlineDamagedSessionRecords =
             Array.Empty<OfflineDamagedSessionRecord>();
         // The records location itself could not be resolved or read (for
-        // example its saved drive is gone). It is kept apart from an empty
-        // device and from damaged records so an unreachable location is never
-        // presented as "no saved session".
+        // example its saved drive is gone, or the session store denies
+        // enumeration or is not a directory). It is kept apart from an empty
+        // device and from damaged records so an unreadable location is never
+        // presented as "no saved session", never lets a new session begin
+        // beside records nobody could inspect, and is cleared again only by a
+        // fresh readable scan.
         private string? _offlineSavedSessionsUnavailableReason;
         private OfflineUpdateSession? _offlineSelectedSession;
         private SavedOfflineUpdateRecovery? _offlineSavedRecovery;
@@ -90,6 +93,7 @@ namespace FreedomInstaller.App
             OfflineUpgradePanel.SessionCombo.SelectionChanged += OnOfflineSessionSelectionChanged;
             OfflineUpgradePanel.RefreshButton.Click += OnRefreshOfflineStatusAsync;
             OfflineUpgradePanel.PrepareButton.Click += OnPrepareOfflineUpgradeAsync;
+            OfflineUpgradePanel.StartReplacementSessionButton.Click += OnStartReplacementOfflineSessionAsync;
             OfflineUpgradePanel.ConfirmCheck.Checked += OnOfflineConfirmChanged;
             OfflineUpgradePanel.ConfirmCheck.Unchecked += OnOfflineConfirmChanged;
             OfflineUpgradePanel.ExecuteButton.Click += OnExecuteOfflineUpgradeAsync;
@@ -171,7 +175,13 @@ namespace FreedomInstaller.App
             // one, while executing also needs the selected session.
             OfflineUpgradePanel.SessionCombo.IsEnabled = !busy && connected && _offlineSessions.Count > 0;
 
-            bool canPrepare = !busy && bootPolicySupported &&
+            // A records location that cannot be read is reported, not treated
+            // as an empty device: no new session may begin while the saved
+            // records are invisible, because it would be added beside records
+            // nobody could inspect.
+            bool catalogAvailable = _offlineSavedSessionsUnavailableReason == null;
+
+            bool canPrepare = !busy && bootPolicySupported && catalogAvailable &&
                 OfflineUpdateUiState.CanPrepareSession(connected, imported, _offlinePreflightPassed,
                 _offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null);
             // A session the tablet already prepared reaches the recovery
@@ -179,11 +189,25 @@ namespace FreedomInstaller.App
             // is enabled with the same live evidence a prepare needs (package,
             // selection, preflight), a prepared receipt whose nested metadata
             // matches, and only while no verified local bundle is held; the
-            // boot policy is not part of this gate.
-            bool canExportRecovery = !busy && OfflineUpdateUiState.CanExportRecoverySession(
+            // boot policy is not part of this gate. It still writes under the
+            // records location, so an unreadable store blocks it too.
+            bool canExportRecovery = !busy && catalogAvailable && OfflineUpdateUiState.CanExportRecoverySession(
                 connected, imported, _offlinePreflightPassed, _offlineSelectedSession != null,
                 _offlineLastReceipt, _offlineSavedRecovery != null);
             OfflineUpgradePanel.PrepareButton.IsEnabled = canPrepare || canExportRecovery;
+            // Starting a replacement session is a separate, explicitly
+            // confirmed action, offered only for a live, fully verified failed
+            // preparation of the selected record. It never retries that
+            // record, and it never enables Execute or Restart.
+            bool failedPrepareSelected =
+                OfflineUpdateUiState.IsBoundForReplacement(_offlineLastReceipt, _offlineSelectedSession,
+                    _offlineConnectedModel, _offlineRecoveryPartUuid, _offlineDescriptorSha256);
+            bool canStartReplacement = !busy && bootPolicySupported &&
+                OfflineUpdateUiState.CanStartReplacementSession(connected, imported, _offlinePreflightPassed,
+                    catalogAvailable, _offlineReceiptLive, _offlineSelectedSession != null, failedPrepareSelected);
+            OfflineUpgradePanel.StartReplacementSessionButton.Visibility =
+                failedPrepareSelected && _offlineReceiptLive ? Visibility.Visible : Visibility.Collapsed;
+            OfflineUpgradePanel.StartReplacementSessionButton.IsEnabled = canStartReplacement;
             // A saved session's status is read with only a selection. When a
             // validation failed after importing the package there is no
             // session yet, and the same button retries only that read-only
@@ -856,6 +880,11 @@ namespace FreedomInstaller.App
             await RunOfflineUpgradeAsync(async (gen, ct) =>
             {
                 EnsureReadyForSessionWork(requireSelectedSession: _offlineSessions.Count > 0);
+                // A store nobody can enumerate is not an empty device: a new
+                // session begun now would be added beside records that could
+                // not be inspected. This check is repeated under the button
+                // gate, before anything is created or written.
+                EnsureOfflineCatalogAvailable();
                 // A session the tablet already prepared reaches the export step
                 // instead of failing the prepare gate; it is never prepared a
                 // second time. Only the canonical top-level prepared state
@@ -897,7 +926,6 @@ namespace FreedomInstaller.App
                     AppendOfflineLog("Dynamic.OfflineUpdate.LogSessionCreated", session.SessionId);
                 }
 
-                var progress = CreateOfflineProgress(gen);
                 string sessionRoot = Path.Combine(recordsRoot, session.SessionId);
                 Directory.CreateDirectory(sessionRoot);
 
@@ -916,32 +944,178 @@ namespace FreedomInstaller.App
                 }
                 else
                 {
-                    var receipt = await _offlineTransfer!.PrepareAsync(_offlinePackage!, session, progress, ct);
-                    _offlineReceiptLive = true;
-                    _offlineLastReceipt = receipt.Clone();
-                    await TryPersistReceiptAsync(session, _offlineLastReceipt.Value);
-                    UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
-
-                    string state = GetReceiptState(_offlineLastReceipt) ?? string.Empty;
-                    if (state == "up_to_date")
-                    {
-                        SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateUpToDate");
-                        AppendOfflineLog("Dynamic.OfflineUpdate.LogUpToDate");
+                    JsonElement prepared = await PrepareOfflineSessionAsync(session, sessionRoot, gen, ct);
+                    if (GetReceiptState(prepared) == "up_to_date")
                         return;
-                    }
-
-                    EnsureNoBlockingReceiptFlags(_offlineLastReceipt.Value);
-                    await EnsureOfflineRecoveryAsync(session, _offlineLastReceipt.Value, sessionRoot, gen, ct);
                 }
 
-                Interlocked.Increment(ref _offlineOperationGeneration);
-                var status = await _offlineTransfer!.QueryStatusAsync(_offlinePackage!, session, ct);
-                _offlineReceiptLive = true;
-                _offlineLastReceipt = status.Clone();
-                await TryPersistReceiptAsync(session, _offlineLastReceipt.Value);
-                UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
-                await ApplyQueriedReceiptState(_offlineLastReceipt.Value, sessionRoot, ct, allowLoadRecovery: true);
+                await FinishOfflineSessionAsync(session, sessionRoot, ct);
             });
+        }
+
+        /// <summary>
+        /// Start a replacement session for the selected record whose
+        /// preparation failed before any boot write. It is a separate,
+        /// explicitly confirmed action: the failed record and its saved receipt
+        /// are kept untouched, the tablet's begin independently verifies the
+        /// package and the free space and generates a fresh session id, and only
+        /// that new id is uploaded and prepared. Nothing is deleted, executed,
+        /// restarted or upgraded, and the failed receipt never makes Prepare,
+        /// Execute or Restart actionable again.
+        /// </summary>
+        private async void OnStartReplacementOfflineSessionAsync(object? sender, RoutedEventArgs e)
+        {
+            if (_busy || _offlineSsh == null || _offlineTransfer == null || _offlinePackage == null ||
+                _offlineSelectedSession == null || !_offlineBootPolicySupported || !_offlineReceiptLive ||
+                !OfflineSelectionIsVerifiedFailedPrepare())
+                return;
+
+            var res = MessageBox.Show(this,
+                T("Dynamic.OfflineUpdate.ConfirmStartReplacementSessionPrompt", _offlineSelectedSession.SessionId),
+                T("Static.OfflineUpdate.Title"), MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (res != MessageBoxResult.Yes)
+                return;
+
+            await RunOfflineUpgradeAsync(async (gen, ct) =>
+            {
+                EnsureReadyForSessionWork(requireSelectedSession: true);
+                EnsureOfflineCatalogAvailable();
+                if (!_offlineBootPolicySupported)
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
+                // Repeated here so the action rests on this exact live receipt,
+                // this device and this package even if the panel changed while
+                // the confirmation was open.
+                if (!_offlineReceiptLive || !OfflineSelectionIsVerifiedFailedPrepare())
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
+
+                var failed = _offlineSelectedSession!;
+
+                // The new attempt never inherits the pass the failed attempt
+                // ran under: it re-earns a fresh read-only preflight, and a
+                // failure stops here before anything is created. The rejection
+                // is already rendered and logged by the preflight exchange
+                // itself, and the live failed receipt stays readable behind it.
+                ClearOfflinePreflightState();
+                if (!await RunOfflinePreflightAsync(null, ct))
+                    return;
+
+                ClearOfflineActionEligibility();
+                string recordsRoot = GetPersistentRecordsRoot();
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogReplacementSessionStarted", failed.SessionId);
+
+                var replacement = await _offlineTransfer!.CreateSessionAsync(_offlinePackage!, (s, token) =>
+                {
+                    PackageImporter.SaveOfflineUpdateSession(recordsRoot, s, token);
+                    return Task.CompletedTask;
+                }, ct);
+                KeepOfflineSessionsAndSelect(replacement);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogSessionCreated", replacement.SessionId);
+
+                string sessionRoot = Path.Combine(recordsRoot, replacement.SessionId);
+                Directory.CreateDirectory(sessionRoot);
+                JsonElement prepared = await PrepareOfflineSessionAsync(replacement, sessionRoot, gen, ct);
+                if (GetReceiptState(prepared) == "up_to_date")
+                    return;
+
+                await FinishOfflineSessionAsync(replacement, sessionRoot, ct);
+            });
+        }
+
+        /// <summary>
+        /// Upload, seal and prepare one session, persist the tablet's receipt
+        /// and produce the local recovery bundle execution will acknowledge.
+        /// </summary>
+        private async Task<JsonElement> PrepareOfflineSessionAsync(
+            OfflineUpdateSession session, string sessionRoot, long gen, CancellationToken ct)
+        {
+            var progress = CreateOfflineProgress(gen);
+            JsonElement receipt = await _offlineTransfer!.PrepareAsync(_offlinePackage!, session, progress, ct);
+            _offlineReceiptLive = true;
+            _offlineLastReceipt = receipt.Clone();
+            await TryPersistReceiptAsync(session, _offlineLastReceipt.Value);
+            UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
+
+            string state = GetReceiptState(_offlineLastReceipt) ?? string.Empty;
+            if (state == "up_to_date")
+            {
+                SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateUpToDate");
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogUpToDate");
+                return _offlineLastReceipt.Value;
+            }
+
+            EnsureNoBlockingReceiptFlags(_offlineLastReceipt.Value);
+            await EnsureOfflineRecoveryAsync(session, _offlineLastReceipt.Value, sessionRoot, gen, ct);
+            return _offlineLastReceipt.Value;
+        }
+
+        /// <summary>
+        /// Read the tablet's own verdict for the session that was just
+        /// prepared, and render it. This is a read-only status query: it never
+        /// prepares or executes anything.
+        /// </summary>
+        private async Task FinishOfflineSessionAsync(
+            OfflineUpdateSession session, string sessionRoot, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _offlineOperationGeneration);
+            JsonElement status = await _offlineTransfer!.QueryStatusAsync(_offlinePackage!, session, ct);
+            _offlineReceiptLive = true;
+            _offlineLastReceipt = status.Clone();
+            await TryPersistReceiptAsync(session, _offlineLastReceipt.Value);
+            UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
+            await ApplyQueriedReceiptState(_offlineLastReceipt.Value, sessionRoot, ct, allowLoadRecovery: true);
+        }
+
+        /// <summary>
+        /// Add the replacement session to the selector and select it, leaving
+        /// every earlier record exactly where it is so the failed session and
+        /// its receipt stay inspectable.
+        /// </summary>
+        private void KeepOfflineSessionsAndSelect(OfflineUpdateSession replacement)
+        {
+            var sessions = new List<OfflineUpdateSession>(_offlineSessions.Count + 1);
+            foreach (var existing in _offlineSessions)
+            {
+                if (!string.Equals(existing.SessionId, replacement.SessionId, StringComparison.Ordinal))
+                    sessions.Add(existing);
+            }
+            sessions.Add(replacement);
+
+            _suppressOfflineSessionSelectionChanged = true;
+            try
+            {
+                ClearOfflineSelectionState();
+                _offlineSessions = sessions;
+                OfflineUpgradePanel.SessionCombo.ItemsSource = _offlineSessions;
+                OfflineUpgradePanel.SessionCombo.SelectedItem = replacement;
+                _offlineSelectedSession = replacement;
+            }
+            finally
+            {
+                _suppressOfflineSessionSelectionChanged = false;
+            }
+        }
+
+        /// <summary>
+        /// The selected record, the live receipt, the connected tablet and the
+        /// imported package must still describe the same failed preparation
+        /// before a replacement begin is offered or performed.
+        /// </summary>
+        private bool OfflineSelectionIsVerifiedFailedPrepare() =>
+            OfflineUpdateUiState.IsBoundForReplacement(_offlineLastReceipt, _offlineSelectedSession,
+                _offlineConnectedModel, _offlineRecoveryPartUuid, _offlineDescriptorSha256);
+
+        /// <summary>
+        /// Refuse to begin a session while the saved records cannot be read: an
+        /// unavailable store is not an empty device, and the new record would
+        /// be added beside records nobody could inspect.
+        /// </summary>
+        private void EnsureOfflineCatalogAvailable()
+        {
+            if (_offlineSavedSessionsUnavailableReason == null)
+                return;
+
+            throw new InvalidOperationException(
+                T("Dynamic.OfflineUpdate.ErrorSavedSessionsUnavailable", _offlineSavedSessionsUnavailableReason));
         }
 
         /// <summary>
@@ -1231,8 +1405,24 @@ namespace FreedomInstaller.App
             JsonElement receipt, string? sessionRoot, CancellationToken ct,
             bool allowLoadRecovery, string? recordsUnavailableReason = null)
         {
-            EnsureNoBlockingReceiptFlags(receipt);
             string state = GetReceiptState(receipt) ?? "unknown";
+            if (state == "failed")
+            {
+                // The tablet's own failure result is kept as the receipt so the
+                // operator can read it, and it is never thrown away here: the
+                // explicit replacement action must be able to rest on it. The
+                // failure itself never enables prepare, execute or restart —
+                // only a separately confirmed replacement begin may follow, and
+                // only when the result proves a pre-write preparation failure.
+                string detail = GetJsonString(receipt, "error") ??
+                    GetJsonString(receipt, "message") ?? string.Empty;
+                ClearOfflineActionEligibility();
+                SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateFailed", detail);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", detail);
+                return;
+            }
+
+            EnsureNoBlockingReceiptFlags(receipt);
 
             switch (state)
             {
@@ -1511,8 +1701,10 @@ namespace FreedomInstaller.App
         /// A damaged record is remembered with its name for
         /// <see cref="ReportSavedOfflineSessionIssues"/> instead of hiding
         /// the intact sessions, and it is never rewritten. A location that
-        /// cannot be resolved at all is remembered separately, because it is
-        /// an unavailable store rather than a device without sessions.
+        /// cannot be read at all — no access, not a directory, an enumeration
+        /// error — is remembered separately from a device without sessions,
+        /// because an unreadable store is not an empty one. A readable scan
+        /// clears that reason again.
         /// </summary>
         private IReadOnlyList<OfflineUpdateSession> LoadSavedOfflineSessions()
         {
@@ -1520,7 +1712,7 @@ namespace FreedomInstaller.App
             {
                 OfflineSessionRecordScan scan = OfflineUpdateSessionCatalog.Load(
                     GetPersistentRecordsRoot(), _offlineConnectedModel, _offlineRecoveryPartUuid, _offlineDescriptorSha256);
-                _offlineSavedSessionsUnavailableReason = null;
+                _offlineSavedSessionsUnavailableReason = scan.UnavailableReason;
                 _offlineDamagedSessionRecords = scan.Damaged;
                 return scan.Sessions;
             }

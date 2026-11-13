@@ -977,4 +977,178 @@ public class OfflineUpdateUiStateTests
         var receipt = Parse(json.Replace("PLAN", PlanSha).Replace("MANIFEST", ManifestSha));
         Assert.False(OfflineUpdateUiState.TryGetRecoveryMetadata(receipt, out _, out _, out _));
     }
+
+    // ---------- Replacement of a failed preparation ----------
+
+    private const string Sid = "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a";
+    private const string Model = "TB322FC";
+    private static readonly string DescriptorSha = new('d', 64);
+    private static readonly OfflineUpdateSession Selected =
+        new(Sid, Model, TxId, DescriptorSha);
+
+    // The exact receipt the producer stores for a preparation the tablet failed
+    // before any boot write (offline_jobs.py: the job keeps jobOperation=prepare
+    // at the top level, and its worker result is recorded with only state and
+    // error). The nested result deliberately has no jobOperation.
+    private const string FailedPrepareJson =
+        "{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\"," +
+        "\"result\":{\"state\":\"failed\",\"error\":\"free space too small\"}}";
+
+    private static JsonElement? FailedPrepare(string? json = null) =>
+        Parse((json ?? FailedPrepareJson).Replace("SID", Sid));
+
+    [Fact]
+    public void JobOperationAndSessionId_AreReadFromTheReceipt()
+    {
+        var receipt = FailedPrepare();
+        Assert.Equal("prepare", OfflineUpdateUiState.JobOperation(receipt));
+        Assert.Equal(Sid, OfflineUpdateUiState.SessionId(receipt));
+
+        Assert.Null(OfflineUpdateUiState.JobOperation(Parse("{\"jobOperation\":5}")));
+        Assert.Null(OfflineUpdateUiState.JobOperation(null));
+        Assert.Null(OfflineUpdateUiState.SessionId(Parse("{\"state\":\"failed\"}")));
+    }
+
+    [Fact]
+    public void IsVerifiedFailedPrepare_CanonicalFailedPreparation_IsVerified()
+    {
+        // The producer's exact receipt: a failed prepare job at the top level
+        // and a nested failed result with no operation marker of its own.
+        Assert.True(OfflineUpdateUiState.IsVerifiedFailedPrepare(FailedPrepare()));
+
+        // The operation is optional in the retained result, but a marker that
+        // is present must still be the exact prepare string.
+        Assert.True(OfflineUpdateUiState.IsVerifiedFailedPrepare(FailedPrepare(
+            "{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\"," +
+            "\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"," +
+            "\"error\":\"free space too small\"}}")));
+
+        // An explicit false on either flag contradicts nothing.
+        Assert.True(OfflineUpdateUiState.IsVerifiedFailedPrepare(FailedPrepare(
+            "{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\"," +
+            "\"jobInterrupted\":false,\"attentionRequired\":false," +
+            "\"result\":{\"state\":\"failed\",\"jobInterrupted\":false,\"attentionRequired\":false}}")));
+    }
+
+    [Theory]
+    // Another top-level operation is never a failed preparation.
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"execute\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"recovery\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"Prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    // The retained result may repeat the operation, but then it must name the
+    // same prepare job. An execution or recovery result refutes the claim, and
+    // so does a present marker that is not the exact string.
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"execute\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"recovery\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"Prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":5}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":null}}")]
+    // Another terminal state is never a failed preparation.
+    [InlineData("{\"state\":\"executing\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"prepared\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"awaiting_reboot\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    // An ambiguous nested result proves nothing: only an exact failed prepare
+    // may authorize a new begin.
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"preparing\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"uncertain\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed_unknown\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"jobOperation\":\"prepare\"}}")]
+    // A missing or non-object nested result cannot prove the operation at all.
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\"}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":\"failed\"}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":[]}")]
+    // Interrupted or attention-bound jobs are ambiguous at either level, and a
+    // malformed flag is not evidence that the job finished.
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"jobInterrupted\":true,\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"jobInterrupted\":\"yes\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"attentionRequired\":true,\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"jobInterrupted\":true}}")]
+    [InlineData("{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"sessionId\":\"SID\",\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\",\"attentionRequired\":1}}")]
+    // Not a receipt at all.
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("\"failed\"")]
+    public void IsVerifiedFailedPrepare_AmbiguousOrForeignFailure_IsRefused(string json)
+    {
+        Assert.False(OfflineUpdateUiState.IsVerifiedFailedPrepare(FailedPrepare(json)));
+    }
+
+    [Fact]
+    public void IsVerifiedFailedPrepare_NullReceipt_IsRefused()
+    {
+        Assert.False(OfflineUpdateUiState.IsVerifiedFailedPrepare(null));
+    }
+
+    [Fact]
+    public void IsBoundForReplacement_RequiresTheSameSessionDeviceAndPackage()
+    {
+        Assert.True(OfflineUpdateUiState.IsBoundForReplacement(
+            FailedPrepare(), Selected, Model, TxId, DescriptorSha));
+
+        Assert.False(OfflineUpdateUiState.IsBoundForReplacement(
+            FailedPrepare(), null, Model, TxId, DescriptorSha));
+        Assert.False(OfflineUpdateUiState.IsBoundForReplacement(
+            FailedPrepare(), Selected, "TB323FU", TxId, DescriptorSha));
+        Assert.False(OfflineUpdateUiState.IsBoundForReplacement(
+            FailedPrepare(), Selected, Model, Guid.Empty.ToString("D"), DescriptorSha));
+        Assert.False(OfflineUpdateUiState.IsBoundForReplacement(
+            FailedPrepare(), Selected, Model, TxId, new string('e', 64)));
+        // A receipt read for another record never authorizes this one.
+        Assert.False(OfflineUpdateUiState.IsBoundForReplacement(
+            FailedPrepare("{\"state\":\"failed\",\"jobOperation\":\"prepare\"," +
+                "\"sessionId\":\"0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b\"," +
+                "\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}"),
+            Selected, Model, TxId, DescriptorSha));
+        Assert.False(OfflineUpdateUiState.IsBoundForReplacement(
+            FailedPrepare("{\"state\":\"failed\",\"jobOperation\":\"prepare\"," +
+                "\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}"),
+            Selected, Model, TxId, DescriptorSha));
+    }
+
+    [Fact]
+    public void CanStartReplacementSession_RequiresEveryLiveGate()
+    {
+        Assert.True(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: true, imported: true, preflightPassed: true, catalogAvailable: true,
+            receiptLive: true, hasSelectedSession: true, selectionBound: true));
+
+        // Connection, package, preflight, readable records, a live receipt, a
+        // selection and its exact binding are each required.
+        Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: false, imported: true, preflightPassed: true, catalogAvailable: true,
+            receiptLive: true, hasSelectedSession: true, selectionBound: true));
+        Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: true, imported: false, preflightPassed: true, catalogAvailable: true,
+            receiptLive: true, hasSelectedSession: true, selectionBound: true));
+        Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: true, imported: true, preflightPassed: false, catalogAvailable: true,
+            receiptLive: true, hasSelectedSession: true, selectionBound: true));
+        Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: true, imported: true, preflightPassed: true, catalogAvailable: false,
+            receiptLive: true, hasSelectedSession: true, selectionBound: true));
+        Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: true, imported: true, preflightPassed: true, catalogAvailable: true,
+            receiptLive: false, hasSelectedSession: true, selectionBound: true));
+        Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: true, imported: true, preflightPassed: true, catalogAvailable: true,
+            receiptLive: true, hasSelectedSession: false, selectionBound: true));
+        Assert.False(OfflineUpdateUiState.CanStartReplacementSession(
+            connected: true, imported: true, preflightPassed: true, catalogAvailable: true,
+            receiptLive: true, hasSelectedSession: true, selectionBound: false));
+    }
+
+    [Fact]
+    public void FailedPreparation_NeverReopensPrepareExecuteOrRestart()
+    {
+        var receipt = FailedPrepare();
+
+        // The failed record is never retried, executed or restarted; only the
+        // separate replacement begin may follow it.
+        Assert.False(OfflineUpdateUiState.CanPrepare(receipt, hasMatchingSessions: true, hasSelectedSession: true));
+        Assert.False(OfflineUpdateUiState.CanExecute(receipt, hasSavedRecovery: true, preflightPassed: true));
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(receipt, hasSavedRecovery: false));
+        Assert.False(OfflineUpdateUiState.NeedsRecoveryExport(receipt));
+        Assert.False(OfflineUpdateUiState.CanRestartToVerify(receipt));
+    }
 }

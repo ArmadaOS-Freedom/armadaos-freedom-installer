@@ -144,12 +144,128 @@ public sealed class OfflineUpdateSessionCatalogTests : IDisposable
     }
 
     [Fact]
-    public void MissingRecordDirectory_IsReadOnlyAndReportsNothing()
+    public void ReplacementSession_IsListedBesideTheFailedRecord_WhichStaysByteIdentical()
+    {
+        // A failed preparation the operator explicitly replaces with a new
+        // session: the new record is listed next to the old one, and neither the
+        // failed record nor its saved receipt is rewritten or removed.
+        var failed = Session();
+        string failedPath = PackageImporter.SaveOfflineUpdateSession(_root, failed);
+        string receiptDir = Path.Combine(_root, SidA);
+        Directory.CreateDirectory(receiptDir);
+        string receiptPath = Path.Combine(receiptDir, "last-receipt.json");
+        const string FailedReceipt =
+            "{\"sessionId\":\"" + SidA + "\",\"state\":\"failed\",\"jobOperation\":\"prepare\"," +
+            "\"result\":{\"state\":\"failed\",\"jobOperation\":\"prepare\"}}";
+        File.WriteAllText(receiptPath, FailedReceipt);
+        byte[] failedBytes = File.ReadAllBytes(failedPath);
+
+        var replacement = Session(SidB);
+        string replacementPath = PackageImporter.SaveOfflineUpdateSession(_root, replacement);
+
+        var scan = OfflineUpdateSessionCatalog.Load(_root, Model, Uuid, Sha);
+
+        Assert.Equal(new[] { failed, replacement }, scan.Sessions);
+        Assert.Empty(scan.Damaged);
+        Assert.Null(scan.UnavailableReason);
+        Assert.True(File.Exists(replacementPath));
+        Assert.Equal(failedBytes, File.ReadAllBytes(failedPath));
+        Assert.Equal(FailedReceipt, File.ReadAllText(receiptPath));
+        Assert.Equal(failed, PackageImporter.LoadOfflineUpdateSession(_root, SidA));
+    }
+
+    [Fact]
+    public void MissingRecordDirectory_IsAGenuinelyEmptyStore_NotAnUnavailableOne()
     {
         var scan = OfflineUpdateSessionCatalog.Load(_root, Model, Uuid, Sha);
 
         Assert.Empty(scan.Sessions);
         Assert.Empty(scan.Damaged);
+        // The records root exists and the store directory was simply never
+        // created: this is the first upgrade of the tablet, not a broken store.
+        Assert.Null(scan.UnavailableReason);
         Assert.False(Directory.Exists(Store()));
+    }
+
+    [Fact]
+    public void EmptyRecordDirectory_IsAGenuinelyEmptyStore_NotAnUnavailableOne()
+    {
+        Directory.CreateDirectory(Store());
+
+        var scan = OfflineUpdateSessionCatalog.Load(_root, Model, Uuid, Sha);
+
+        Assert.Empty(scan.Sessions);
+        Assert.Empty(scan.Damaged);
+        Assert.Null(scan.UnavailableReason);
+    }
+
+    [Fact]
+    public void StorePathThatIsNotADirectory_IsReportedUnavailable_NotAsAnEmptyDevice()
+    {
+        // Directory.Exists answers false for this store exactly as it does for
+        // a missing one, which is the masking this scan must not repeat: a
+        // non-directory store is a broken location that may hide records, not a
+        // tablet without sessions.
+        File.WriteAllText(Store(), "not a directory");
+
+        var scan = OfflineUpdateSessionCatalog.Load(_root, Model, Uuid, Sha);
+
+        Assert.Empty(scan.Sessions);
+        Assert.Empty(scan.Damaged);
+        Assert.False(string.IsNullOrWhiteSpace(scan.UnavailableReason));
+        // Reporting it never rewrites the location.
+        Assert.Equal("not a directory", File.ReadAllText(Store()));
+    }
+
+    [Fact]
+    public void UnreadableRecordDirectory_IsReportedUnavailable_WhenTheFixtureCanDenyEnumeration()
+    {
+        // A POSIX deny fixture is the only portable way to provoke the
+        // access-denied path; the test is injected only where it can actually
+        // deny (never as root) and the non-directory case above covers the rest.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string store = Store();
+        Directory.CreateDirectory(store);
+        File.WriteAllText(Path.Combine(store, SidA + ".json"), DamagedJson);
+        try
+        {
+            File.SetUnixFileMode(store, UnixFileMode.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        try
+        {
+            bool denied;
+            try
+            {
+                _ = Directory.GetFiles(store, "*.json", SearchOption.TopDirectoryOnly);
+                denied = false;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                // The scan classifies either failure as an unreadable store;
+                // this probe only asks whether the fixture really denies.
+                denied = true;
+            }
+
+            if (!denied)
+                return; // running as root: the store cannot deny its own owner
+
+            var scan = OfflineUpdateSessionCatalog.Load(_root, Model, Uuid, Sha);
+
+            Assert.Empty(scan.Sessions);
+            Assert.Empty(scan.Damaged);
+            Assert.False(string.IsNullOrWhiteSpace(scan.UnavailableReason));
+        }
+        finally
+        {
+            File.SetUnixFileMode(store,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 }

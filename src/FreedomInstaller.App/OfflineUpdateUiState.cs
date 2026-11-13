@@ -231,6 +231,9 @@ namespace FreedomInstaller.App
         /// creates it. Whether an existing selection is needed is decided by
         /// <see cref="CanPrepare"/> from the receipt and the saved-session
         /// count.
+        /// The caller must also withhold this gate while the records location
+        /// cannot be read: <paramref name="hasMatchingSessions"/> is false in
+        /// that case too, and an unreadable store is not an empty device.
         /// </summary>
         internal static bool CanPrepareSession(bool connected, bool imported, bool preflightPassed,
             JsonElement? receipt, bool hasMatchingSessions, bool hasSelectedSession) =>
@@ -252,6 +255,115 @@ namespace FreedomInstaller.App
 
             return State(receipt) is "uploading" or "uploaded" or "prepare_queued" or "preparing" or "prepared";
         }
+
+        /// <summary>
+        /// The job operation the tablet recorded on a receipt. The device keeps
+        /// it on the job result, so a terminal failure still names the
+        /// operation that failed instead of only "failed".
+        /// </summary>
+        internal static string? JobOperation(JsonElement? receipt)
+        {
+            if (!receipt.HasValue || receipt.Value.ValueKind != JsonValueKind.Object)
+                return null;
+
+            string? value = GetString(receipt.Value, "jobOperation");
+            return string.IsNullOrEmpty(value) ? null : value;
+        }
+
+        /// <summary>The session a receipt names, when it names one.</summary>
+        internal static string? SessionId(JsonElement? receipt)
+        {
+            if (!receipt.HasValue || receipt.Value.ValueKind != JsonValueKind.Object)
+                return null;
+
+            string? value = GetString(receipt.Value, "sessionId");
+            return string.IsNullOrEmpty(value) ? null : value;
+        }
+
+        /// <summary>
+        /// True only for the one terminal receipt an explicit replacement
+        /// session may follow: a failure the tablet recorded for the
+        /// preparation job itself. The operation is named once, at the top
+        /// level; the retained nested job result only repeats the failed state
+        /// (the canonical producer stores <c>jobOperation</c> on the job and
+        /// writes the worker result with just state and error). A nested
+        /// result that does name an operation must still say prepare.
+        /// Preparation verifies the package, checks free space and generates a
+        /// fresh session id without writing a boot slot, so a failed
+        /// preparation proves nothing was written — but only while every one of
+        /// those facts is stated. A missing, malformed, interrupted or
+        /// recovery/execute result is ambiguous: it never authorizes a new
+        /// begin, a retry of the failed record, an execute or a restart.
+        /// </summary>
+        internal static bool IsVerifiedFailedPrepare(JsonElement? receipt)
+        {
+            if (!receipt.HasValue || receipt.Value.ValueKind != JsonValueKind.Object)
+                return false;
+            // This gate authorizes starting over, so a flag that is present in
+            // any form other than an explicit false refutes it: a malformed
+            // value is not evidence that the job finished cleanly.
+            if (IsFlagRaised(receipt.Value, "jobInterrupted") ||
+                IsFlagRaised(receipt.Value, "attentionRequired"))
+                return false;
+            if (State(receipt) != "failed" || !IsPrepareOperation(receipt.Value))
+                return false;
+
+            if (!receipt.Value.TryGetProperty("result", out JsonElement result) ||
+                result.ValueKind != JsonValueKind.Object)
+                return false;
+            if (IsFlagRaised(result, "jobInterrupted") || IsFlagRaised(result, "attentionRequired"))
+                return false;
+            if (!string.Equals(GetString(result, "state"), "failed", StringComparison.Ordinal))
+                return false;
+
+            // The canonical failed result carries no operation marker; only one
+            // that is present must agree. Any other value names a different
+            // operation and refutes the preparation claim.
+            return !result.TryGetProperty("jobOperation", out _) || IsPrepareOperation(result);
+        }
+
+        private static bool IsPrepareOperation(JsonElement block) =>
+            string.Equals(GetString(block, "jobOperation"), "prepare", StringComparison.Ordinal);
+
+        private static bool IsFlagRaised(JsonElement block, string property) =>
+            block.TryGetProperty(property, out JsonElement value) && value.ValueKind != JsonValueKind.False;
+
+        /// <summary>
+        /// The selected record, the connected tablet, the imported package and
+        /// the receipt must still name the same session before a replacement
+        /// begin is offered or performed. A receipt read for another record,
+        /// device or package never authorizes a new session, and the failed
+        /// record itself is never retried or rewritten.
+        /// </summary>
+        internal static bool IsBoundForReplacement(JsonElement? receipt, OfflineUpdateSession? session,
+            string? deviceModel, string? recoveryPartUuid, string? packageDescriptorSha256)
+        {
+            if (session == null || !IsVerifiedFailedPrepare(receipt))
+                return false;
+            if (!string.Equals(session.DeviceModel, deviceModel, StringComparison.Ordinal) ||
+                !string.Equals(session.RecoveryPartUuid, recoveryPartUuid, StringComparison.Ordinal))
+                return false;
+            if (!string.IsNullOrEmpty(packageDescriptorSha256) &&
+                !string.Equals(session.PackageDescriptorSha256, packageDescriptorSha256, StringComparison.Ordinal))
+                return false;
+
+            return string.Equals(SessionId(receipt), session.SessionId, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// The complete replacement-begin gate. It needs the same live
+        /// evidence as a first prepare — connection, validated package, passed
+        /// read-only preflight — plus a readable records location, a receipt
+        /// read live from this connection, and the fully verified failed
+        /// preparation of the selected record. The caller still runs a fresh
+        /// preflight and lets the tablet's begin verify the package, the free
+        /// space and the new id before anything is prepared; the failed record
+        /// stays on disk throughout.
+        /// </summary>
+        internal static bool CanStartReplacementSession(bool connected, bool imported, bool preflightPassed,
+            bool catalogAvailable, bool receiptLive, bool hasSelectedSession, bool selectionBound) =>
+            connected && imported && preflightPassed && catalogAvailable && receiptLive &&
+            hasSelectedSession && selectionBound;
 
         internal static bool CanExecute(JsonElement? receipt, bool hasSavedRecovery, bool preflightPassed) =>
             preflightPassed && hasSavedRecovery && State(receipt) == "prepared" && !HasBlockingFlags(receipt);

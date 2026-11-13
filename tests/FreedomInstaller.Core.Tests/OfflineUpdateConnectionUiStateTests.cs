@@ -273,6 +273,37 @@ public sealed class OfflineUpdateConnectionUiStateTests
         Assert.DoesNotContain("bool canExportRecovery = !busy && bootPolicySupported", code, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ReplacementSession_IsASeparateConfirmedActionGatedOnAReadableStore()
+    {
+        string xaml = ReadEmbedded("FreedomInstaller.Tests.OfflineUpgradeView.xaml");
+        string buttonLine = Assert.Single(xaml.Split('\n')
+            .Where(line => line.Contains("x:Name=\"StartReplacementSessionButton\"", StringComparison.Ordinal)));
+        // Its own label, disabled and hidden: it is never the Prepare action and
+        // it never appears without the exact failed-preparation receipt.
+        Assert.Contains("Content=\"{DynamicResource Static.OfflineUpdate.StartReplacementSession}\"",
+            buttonLine, StringComparison.Ordinal);
+        Assert.Contains("Visibility=\"Collapsed\"", buttonLine, StringComparison.Ordinal);
+        Assert.Contains("IsEnabled=\"False\"", buttonLine, StringComparison.Ordinal);
+
+        string code = ReadEmbedded("FreedomInstaller.Tests.MainWindow.OfflineUpgrade.cs");
+
+        // The action runs only from the explicit click and is wired once.
+        Assert.Equal(1, CountOccurrences(code, "StartReplacementSessionButton.Click +="));
+        Assert.Contains("StartReplacementSessionButton.Click += OnStartReplacementOfflineSessionAsync;",
+            code, StringComparison.Ordinal);
+
+        // Both new-session begins refuse the mutation itself while the saved
+        // records cannot be read, and the control gates carry the same reason.
+        Assert.Equal(2, CountOccurrences(code, "EnsureOfflineCatalogAvailable();"));
+        Assert.Contains("bool catalogAvailable = _offlineSavedSessionsUnavailableReason == null;",
+            code, StringComparison.Ordinal);
+        Assert.Contains("bool canPrepare = !busy && bootPolicySupported && catalogAvailable &&",
+            code, StringComparison.Ordinal);
+        Assert.Contains("catalogAvailable, _offlineReceiptLive, _offlineSelectedSession != null, failedPrepareSelected",
+            code, StringComparison.Ordinal);
+    }
+
     private static void AssertLabeledBy(string xaml, string labelName, string controlName)
     {
         string line = Assert.Single(xaml.Split('\n')

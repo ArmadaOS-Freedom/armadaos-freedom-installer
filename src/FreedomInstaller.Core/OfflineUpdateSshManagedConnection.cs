@@ -51,12 +51,11 @@ internal interface IOfflineUpdateSshChannel : IDisposable
 }
 
 /// <summary>
-/// Upload-only abort handle for the exact socket that carries the
-/// authenticated session. It closes that socket directly, without SSH.NET's
-/// write path and without its session lock, so a send the peer stopped reading
-/// can still be broken.
+/// Direct abort handle for the exact socket that carries the authenticated
+/// session. It closes that socket without SSH.NET's write path and without its
+/// session lock, so a send the peer stopped reading can still be broken.
 /// </summary>
-internal interface IOfflineUpdateSshUploadGuard : IDisposable
+internal interface IOfflineUpdateSshSocketAbort
 {
     /// <summary>True once the captured socket has been shut down.</summary>
     bool IsAborted { get; }
@@ -67,6 +66,15 @@ internal interface IOfflineUpdateSshUploadGuard : IDisposable
     /// a synchronous send holds the session write lock.
     /// </summary>
     void Abort();
+}
+
+/// <summary>
+/// Upload-only abort handle. It additionally owns the upload's finite send
+/// timeout, which teardown must never apply: the long-lived RPC session has to
+/// keep SSH.NET's own socket budget.
+/// </summary>
+internal interface IOfflineUpdateSshUploadGuard : IOfflineUpdateSshSocketAbort, IDisposable
+{
 }
 
 internal interface IOfflineUpdateSshTransport : IDisposable
@@ -88,6 +96,15 @@ internal interface IOfflineUpdateSshTransport : IDisposable
     /// instead of starting a transfer it could not abort.
     /// </summary>
     IOfflineUpdateSshUploadGuard? TryCreateUploadGuard(TimeSpan sendTimeout);
+
+    /// <summary>
+    /// Captures a bare abort handle for the exact authenticated socket, without
+    /// touching its send timeout. Teardown uses it to release a writer that a
+    /// cancelled exchange may still hold; the upload guard's transient send
+    /// budget must never be carried onto the long-lived RPC session. Returns
+    /// null when the socket cannot be resolved.
+    /// </summary>
+    IOfflineUpdateSshSocketAbort? TryCreateSocketAbort();
 }
 
 internal interface IOfflineUpdateSshTransportFactory
@@ -173,6 +190,18 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
         OfflineUpdateSshStartedUpdater? updater = null;
         OfflineUpdateRpcClient? rpc = null;
         var handedOff = false;
+        var socketReleased = false;
+
+        // Both failure handlers of one attempt may observe the same broken
+        // exchange; the socket is only ever released once.
+        void ReleaseSocket()
+        {
+            if (socketReleased || transport is null)
+                return;
+
+            socketReleased = true;
+            AbortTransportSocket(transport);
+        }
 
         try
         {
@@ -298,6 +327,13 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
                 }
                 catch (Exception ex) when (ex is IOException or TimeoutException or ObjectDisposedException)
                 {
+                    // The info query may have been interrupted while its
+                    // synchronous stdin send was still running. Releasing the
+                    // socket here keeps the updater teardown from queueing
+                    // behind the session writer lock.
+                    if (createdRpc.RequiresSocketRelease)
+                        ReleaseSocket();
+
                     await updater.DisposeAsync().ConfigureAwait(false);
                     throw new OfflineUpdateSshManagedException(
                         OfflineUpdateSshManagedFailure.UpdaterUnavailable,
@@ -337,6 +373,15 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
         {
             if (!handedOff)
             {
+                // Ownership never reached the connection object, so this
+                // teardown has to apply the same rule it does: an info query
+                // that was interrupted, or that is still in flight, may have a
+                // synchronous stdin send under SSH.NET's writer lock, and both
+                // the updater's Cancel and the transport's Disconnect queue
+                // behind it.
+                if (rpc is not null && rpc.RequiresSocketRelease)
+                    ReleaseSocket();
+
                 if (rpc is not null)
                 {
                     try
@@ -375,6 +420,16 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
+        // An interrupted RPC exchange can leave its synchronous stdin send
+        // running under SSH.NET's session writer lock. RPC stream disposal, the
+        // sudo channel's Cancel and the transport's Disconnect all queue behind
+        // that lock, so the exact authenticated socket is released first. This
+        // is the pinned-socket shutdown the upload guard uses, without its send
+        // timeout: the long-lived RPC session must not inherit that transient
+        // budget. A healthy teardown takes no handle and disconnects in order.
+        if (_rpc.RequiresSocketRelease)
+            AbortTransportSocket(_transport);
+
         try
         {
             await _rpc.DisposeAsync().ConfigureAwait(false);
@@ -403,6 +458,36 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
     internal static string BuildUpdaterCommand() =>
         string.Concat(
             "/bin/sh -c 'printf \"", ReadyMarker, "\\n\"; exec ", UpdaterCommand, "'");
+
+    /// <summary>
+    /// Releases the exact authenticated socket so a pending synchronous send
+    /// cannot keep SSH.NET's writer lock occupied during teardown. Best effort:
+    /// a socket that cannot be resolved is left to the bounded waits of the
+    /// individual cleanup steps.
+    /// </summary>
+    private static void AbortTransportSocket(IOfflineUpdateSshTransport transport)
+    {
+        IOfflineUpdateSshSocketAbort? release;
+        try
+        {
+            release = transport.TryCreateSocketAbort();
+        }
+        catch
+        {
+            return;
+        }
+
+        if (release is null)
+            return;
+
+        try
+        {
+            release.Abort();
+        }
+        catch
+        {
+        }
+    }
 
     private static string? VerifyHostKey(
         OfflineUpdateSshPasswordOptions options,

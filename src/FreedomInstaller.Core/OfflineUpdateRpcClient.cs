@@ -80,6 +80,22 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
     /// </summary>
     public bool IsPoisoned => Volatile.Read(ref _poisoned);
 
+    /// <summary>
+    /// True while one exchange still holds the gate. Its physical stdin write
+    /// can still be running, so the session's writer lock may still be taken
+    /// even after the request itself reported a result.
+    /// </summary>
+    internal bool IsExchangeInFlight => _gate.CurrentCount == 0;
+
+    /// <summary>
+    /// True when teardown must release the session socket before it asks
+    /// SSH.NET for anything else: an interrupted exchange, or one still in
+    /// flight, may hold the writer lock that a channel cancel or a disconnect
+    /// would queue behind. Computed before disposal; a healthy teardown has
+    /// neither condition and keeps the orderly disconnect order.
+    /// </summary>
+    internal bool RequiresSocketRelease => IsPoisoned || IsExchangeInFlight;
+
     public Task<JsonElement> GetInfoAsync(CancellationToken cancellationToken = default) =>
         SendAsync("info", new Dictionary<string, object?>(0), cancellationToken);
 

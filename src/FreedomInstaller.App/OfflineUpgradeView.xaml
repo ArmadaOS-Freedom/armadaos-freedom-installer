@@ -154,6 +154,10 @@
                             <Button x:Name="RefreshButton" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.Refresh}" Margin="0,0,8,0"/>
                             <Button x:Name="PrepareButton" Style="{DynamicResource PrimaryButton}" Content="{DynamicResource Static.OfflineUpdate.Prepare}" IsEnabled="False"/>
                         </StackPanel>
+                        <!-- A separate, explicitly confirmed action beside the Prepare action:
+                             it starts a new session for a verified failed preparation and never
+                             retries the failed record. Hidden until that exact receipt is selected. -->
+                        <Button x:Name="StartReplacementSessionButton" Style="{DynamicResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.StartReplacementSession}" IsEnabled="False" Visibility="Collapsed" HorizontalAlignment="Left" Margin="0,8,0,0"/>
                     </StackPanel>
                 </Border>
 

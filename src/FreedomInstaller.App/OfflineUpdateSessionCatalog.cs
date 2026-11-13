@@ -8,7 +8,8 @@ namespace FreedomInstaller.App
 
     internal sealed record OfflineSessionRecordScan(
         IReadOnlyList<OfflineUpdateSession> Sessions,
-        IReadOnlyList<OfflineDamagedSessionRecord> Damaged);
+        IReadOnlyList<OfflineDamagedSessionRecord> Damaged,
+        string? UnavailableReason = null);
 
     /// <summary>
     /// Enumerates the device-bound session records one file at a time.
@@ -19,6 +20,12 @@ namespace FreedomInstaller.App
     /// damaged record is therefore reported with its name and reason and
     /// skipped. Nothing is rewritten or deleted here, so the damaged file stays
     /// byte-identical for inspection.
+    ///
+    /// A store that cannot be enumerated at all is reported separately from an
+    /// empty one: an access-denied, non-directory or otherwise unreadable
+    /// location is <see cref="OfflineSessionRecordScan.UnavailableReason"/>,
+    /// never "no saved sessions". Only a genuinely missing store directory under
+    /// an existing records root is an empty install.
     /// </summary>
     internal static class OfflineUpdateSessionCatalog
     {
@@ -33,9 +40,13 @@ namespace FreedomInstaller.App
             var sessions = new List<OfflineUpdateSession>();
             var damaged = new List<OfflineDamagedSessionRecord>();
             string sessionsDir = Path.Combine(recordsRoot, "offline-update-sessions");
-            if (!Directory.Exists(sessionsDir))
-                return new OfflineSessionRecordScan(sessions, damaged);
 
+            // Directory.Exists answers false both for a missing directory and
+            // for an access-denied or non-directory path, so it cannot separate
+            // an empty install from a store nobody can read. The enumeration is
+            // attempted and its failure classified instead: a store entry that
+            // was never created under a records root that still exists is an
+            // empty install, everything else leaves the location unavailable.
             string[] files;
             try
             {
@@ -43,8 +54,9 @@ namespace FreedomInstaller.App
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                damaged.Add(new OfflineDamagedSessionRecord(sessionsDir, ex.Message));
-                return new OfflineSessionRecordScan(sessions, damaged);
+                return IsMissingStore(sessionsDir, recordsRoot)
+                    ? new OfflineSessionRecordScan(sessions, damaged)
+                    : new OfflineSessionRecordScan(sessions, damaged, ex.Message);
             }
 
             Array.Sort(files, StringComparer.Ordinal);
@@ -90,6 +102,49 @@ namespace FreedomInstaller.App
 
             sessions.Sort((a, b) => string.CompareOrdinal(a.SessionId, b.SessionId));
             return new OfflineSessionRecordScan(sessions, damaged);
+        }
+
+        /// <summary>
+        /// True only when the session store was never created: its entry does
+        /// not exist while the records root that holds it still does. The entry
+        /// is asked for through attributes, because
+        /// <see cref="Directory.Exists"/> answers false for a denied or
+        /// non-directory entry as well.
+        /// </summary>
+        private static bool IsMissingStore(string sessionsDir, string recordsRoot)
+        {
+            try
+            {
+                _ = File.GetAttributes(sessionsDir);
+                // The entry exists: a file, a link or a directory that could not
+                // be enumerated. All of those are unreadable, not empty.
+                return false;
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return IsExistingDirectory(recordsRoot);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Whether the records root is still a directory, asked through
+        /// attributes rather than <see cref="Directory.Exists"/> so a vanished
+        /// or unreadable root is not mistaken for "the store was never made".
+        /// </summary>
+        private static bool IsExistingDirectory(string path)
+        {
+            try
+            {
+                return (File.GetAttributes(path) & FileAttributes.Directory) != 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
         }
     }
 }
