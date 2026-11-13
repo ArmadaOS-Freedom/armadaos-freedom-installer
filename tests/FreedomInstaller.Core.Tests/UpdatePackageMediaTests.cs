@@ -498,6 +498,82 @@ public sealed class UpdatePackageMediaTests : IDisposable
         AssertMediaInvalid(() => PackageImporter.ReadBoundedRegularFile(link, 4096, default));
     }
 
+    [Fact]
+    public void ArchivePartOpenStreamsSingleAndSplitRegularFiles()
+    {
+        var firstBytes = new byte[1024];
+        for (var index = 0; index < firstBytes.Length; index++)
+        {
+            firstBytes[index] = (byte)index;
+        }
+
+        var singlePath = Path.Combine(root, "part-open-single.zip");
+        File.WriteAllBytes(singlePath, firstBytes);
+
+        // One ordinary part stays a streaming, seekable file whose type was checked on the descriptor
+        // that is read; nothing is buffered beyond the copy that already belongs to the snapshot.
+        using (var single = PackageImporter.CaptureArchiveSnapshot(
+            [singlePath], firstBytes.Length, root, default))
+        {
+            Assert.Equal(firstBytes.Length, single.Length);
+            Assert.Equal(firstBytes, ReadAll(single.Stream));
+
+            single.Stream.Position = 8;
+            var probe = new byte[4];
+            single.Stream.ReadExactly(probe);
+            Assert.Equal(firstBytes.AsSpan(8, 4).ToArray(), probe);
+        }
+
+        var splitFirstPath = Path.Combine(root, "part-open-split.zip.001");
+        var splitSecondPath = Path.Combine(root, "part-open-split.zip.002");
+        var secondBytes = new byte[512];
+        Array.Fill(secondBytes, (byte)0xA5);
+        File.WriteAllBytes(splitFirstPath, firstBytes);
+        File.WriteAllBytes(splitSecondPath, secondBytes);
+
+        var expected = firstBytes.Concat(secondBytes).ToArray();
+        using (var split = PackageImporter.CaptureArchiveSnapshot(
+            [splitFirstPath, splitSecondPath], expected.Length, root, default))
+        {
+            Assert.Equal(expected.Length, split.Length);
+            Assert.Equal(expected, ReadAll(split.Stream));
+
+            // A read that crosses the volume boundary is served from the next verified part.
+            split.Stream.Position = firstBytes.Length - 2;
+            var probe = new byte[4];
+            split.Stream.ReadExactly(probe);
+            Assert.Equal(expected.AsSpan(firstBytes.Length - 2, 4).ToArray(), probe);
+        }
+
+        Assert.Equal(firstBytes, File.ReadAllBytes(splitFirstPath));
+        Assert.Equal(secondBytes, File.ReadAllBytes(splitSecondPath));
+    }
+
+    [Fact]
+    public void ArchivePartOpenRejectsDirectoryFixtureAndReleasesEarlierParts()
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(root, "archive-part-directory")).FullName;
+
+        // A directory is a benign stand-in for every non-regular part: on Unix the descriptor check
+        // refuses it after the nonblocking no-follow open, on Windows the existing attribute gate does.
+        AssertMediaInvalid(() =>
+            PackageImporter.CaptureArchiveSnapshot([directory], 1, root, default));
+
+        // A missing part keeps its existing refusal and is not reported as a type error.
+        Assert.Throws<FileNotFoundException>(() =>
+            PackageImporter.CaptureArchiveSnapshot(
+                [Path.Combine(root, "archive-part-absent.zip.001")], 1, root, default));
+
+        // In a split set the part opened before the refusal has to be closed again, so the file can be
+        // removed while the failed open is still unwinding.
+        var opened = Path.Combine(root, "archive-part-second.zip.001");
+        File.WriteAllBytes(opened, new byte[16]);
+        AssertMediaInvalid(() => PackageImporter.CaptureArchiveSnapshot(
+            [opened, directory], 17, root, default));
+        File.Delete(opened);
+        Assert.False(File.Exists(opened));
+    }
+
     [Theory]
     [InlineData(0x81A4, true)]  // regular file, 0644
     [InlineData(0x8000, true)]  // regular file type without permission bits
@@ -564,6 +640,14 @@ public sealed class UpdatePackageMediaTests : IDisposable
 
     private static void AssertMediaInvalid(Action action) =>
         Assert.IsType<InvalidDataException>(Record.Exception(action));
+
+    private static byte[] ReadAll(Stream stream)
+    {
+        stream.Position = 0;
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
+    }
 
     private static UpdatePackageDescriptor DescriptorOf(Case c)
     {

@@ -738,39 +738,10 @@ public static partial class PackageImporter
 
     private static byte[] ReadBoundedRegularFileUnix(string path, int maxBytes, CancellationToken token)
     {
-        if (!TryGetUnixOpenFlags(out var openFlags))
-        {
-            // Without the per-OS flags the descriptor could be opened under weaker semantics, so the
-            // platform fails closed instead of reading a file whose type was not established.
-            throw new InvalidDataException($"无法在当前平台安全校验签名文件：{path}。");
-        }
-
-        var descriptor = NativeOpen(path, openFlags);
-        if (descriptor < 0)
-        {
-            var errno = Marshal.GetLastPInvokeError();
-            if (errno == NativeNoEntry)
-            {
-                throw new FileNotFoundException($"找不到文件：{path}。", path);
-            }
-
-            throw new InvalidDataException($"无法安全打开文件：{path}（errno {errno}）。");
-        }
-
-        var handle = new SafeFileHandle(new IntPtr(descriptor), ownsHandle: true);
+        var handle = OpenUnixVerifiedRegularFile(path, out var status);
         FileStream stream;
         try
         {
-            if (!TryReadNativeFileStatus(handle, out var status))
-            {
-                throw new InvalidDataException($"无法读取文件状态：{path}。");
-            }
-
-            if (!IsRegularFileMode(status.Mode))
-            {
-                throw new InvalidDataException($"拒绝读取符号链接、重解析点或目录：{path}。");
-            }
-
             // The size comes from the same descriptor as the type check, so an oversized sidecar is
             // refused before a single byte is read or a managed stream is created.
             if (status.Size <= 0 || status.Size > maxBytes)
@@ -791,6 +762,100 @@ public static partial class PackageImporter
         {
             return ReadBoundedStream(stream, path, maxBytes, token);
         }
+    }
+
+    /// <summary>
+    /// Opens one archive part (the selected archive or one volume of a split set) as a streaming,
+    /// seekable read-only file whose type was established from the descriptor that is read. Unlike a
+    /// signed sidecar there is no byte cap: a part is expected to be large, so the file is never
+    /// buffered and only its handles are held for the pass that reads it. On Unix the path is opened
+    /// with the same no-follow and nonblocking flags as <see cref="ReadBoundedRegularFile"/> and the
+    /// regular-file decision comes from <c>fstat</c> on that descriptor, so a FIFO cannot park the
+    /// open and a link, device or directory is refused instead of read. Windows keeps the existing
+    /// share-mode open after its attribute gate. The returned stream owns the only handle.
+    /// </summary>
+    private static FileStream OpenVerifiedRegularFile(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // FileInfo.Exists is false for a directory, so the path is checked for one first to keep
+            // the refusal a data error instead of a misleading "file not found".
+            if (Directory.Exists(path))
+            {
+                throw new InvalidDataException($"拒绝读取符号链接、重解析点或目录：{path}。");
+            }
+
+            EnsureRegularFile(path);
+
+            return new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                CopyBufferSize,
+                FileOptions.SequentialScan);
+        }
+
+        var handle = OpenUnixVerifiedRegularFile(path, out _);
+        try
+        {
+            return new FileStream(handle, FileAccess.Read, CopyBufferSize);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The single open-and-verify primitive behind both the signed sidecars and the archive parts:
+    /// <c>open(2)</c> with the per-OS O_NOFOLLOW, O_NONBLOCK and O_CLOEXEC flags, then <c>fstat(2)</c>
+    /// on that same descriptor. The caller owns the returned handle and must dispose it; every failure
+    /// path closes it here, and a platform without verified flags fails closed rather than opening the
+    /// file under weaker semantics.
+    /// </summary>
+    private static SafeFileHandle OpenUnixVerifiedRegularFile(string path, out FileStatus status)
+    {
+        if (!TryGetUnixOpenFlags(out var openFlags))
+        {
+            // Without the per-OS flags the descriptor could be opened under weaker semantics, so the
+            // platform fails closed instead of reading a file whose type was not established.
+            throw new InvalidDataException($"无法在当前平台安全校验文件：{path}。");
+        }
+
+        var descriptor = NativeOpen(path, openFlags);
+        if (descriptor < 0)
+        {
+            var errno = Marshal.GetLastPInvokeError();
+            if (errno == NativeNoEntry)
+            {
+                throw new FileNotFoundException($"找不到文件：{path}。", path);
+            }
+
+            throw new InvalidDataException($"无法安全打开文件：{path}（errno {errno}）。");
+        }
+
+        var handle = new SafeFileHandle(new IntPtr(descriptor), ownsHandle: true);
+        try
+        {
+            if (!TryReadNativeFileStatus(handle, out status))
+            {
+                throw new InvalidDataException($"无法读取文件状态：{path}。");
+            }
+
+            if (!IsRegularFileMode(status.Mode))
+            {
+                throw new InvalidDataException($"拒绝读取符号链接、重解析点或目录：{path}。");
+            }
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+
+        return handle;
     }
 
     /// <summary>

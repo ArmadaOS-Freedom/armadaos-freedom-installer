@@ -1371,6 +1371,7 @@
   "Dynamic.OfflineUpdate.LogPreflightPassed": "升级包只读预检通过（部署 {0}，阶段 {1}）。",
   "Dynamic.OfflineUpdate.LogPreflightFailed": "升级包只读预检失败，已阻止准备：{0}",
   "Dynamic.OfflineUpdate.StatePreflightFailed": "预检失败：{0}",
+  "Dynamic.OfflineUpdate.StatePreflightPassed": "升级包只读预检已通过，准备本次升级不再被预检阻止。",
   "Dynamic.OfflineUpdate.ErrorPreflightFailed": "平板拒绝了升级包只读预检。{0}",
   "Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse": "平板未报告通过只读预检（阶段：{0}）。",
   "Dynamic.OfflineUpdate.ErrorPreflightRequired": "请先校验升级包并通过只读预检，再准备本次升级。",

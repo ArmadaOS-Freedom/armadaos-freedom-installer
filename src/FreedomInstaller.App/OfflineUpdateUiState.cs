@@ -205,6 +205,19 @@ namespace FreedomInstaller.App
             connected && hasSelectedSession;
 
         /// <summary>
+        /// Validation imports the package first and runs the read-only
+        /// preflight second, so a failed preflight leaves the validated
+        /// package imported while no session exists. Retrying that read-only
+        /// step needs exactly the connection and the imported package: it
+        /// creates no session and uploads, imports or prepares nothing.
+        /// A device that already has saved sessions still requires a
+        /// selection, which only <see cref="CanRefreshStatus"/> can satisfy.
+        /// </summary>
+        internal static bool CanRetryPreflightWithoutSession(
+            bool connected, bool imported, bool hasSavedSessions) =>
+            connected && imported && !hasSavedSessions;
+
+        /// <summary>
         /// Preparing, saving recovery and executing still require a validated
         /// package in addition to the connection and the selected session.
         /// </summary>

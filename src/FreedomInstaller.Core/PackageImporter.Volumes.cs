@@ -249,14 +249,13 @@ public static partial class PackageImporter
                 : new ConcatenatedArchiveStream(Parts);
     }
 
-    private static FileStream OpenPart(string path) =>
-        new(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            CopyBufferSize,
-            FileOptions.SequentialScan);
+    /// <summary>
+    /// Opens one part for streaming. The descriptor that is read is the descriptor whose type was
+    /// checked, so a volume that has become a link, FIFO, device or directory since the group was
+    /// resolved is refused instead of followed or parked on; the stream stays seekable and nothing is
+    /// buffered beyond the pass. See <see cref="OpenVerifiedRegularFile"/> for the platform rules.
+    /// </summary>
+    private static FileStream OpenPart(string path) => OpenVerifiedRegularFile(path);
 
     /// <summary>
     /// Seekable read-only stream over the raw split volumes, in volume order, without a combined

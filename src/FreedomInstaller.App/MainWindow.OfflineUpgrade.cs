@@ -184,8 +184,13 @@ namespace FreedomInstaller.App
                 connected, imported, _offlinePreflightPassed, _offlineSelectedSession != null,
                 _offlineLastReceipt, _offlineSavedRecovery != null);
             OfflineUpgradePanel.PrepareButton.IsEnabled = canPrepare || canExportRecovery;
+            // A saved session's status is read with only a selection. When a
+            // validation failed after importing the package there is no
+            // session yet, and the same button retries only that read-only
+            // preflight from the package already imported.
             OfflineUpgradePanel.RefreshButton.IsEnabled = !busy &&
-                OfflineUpdateUiState.CanRefreshStatus(connected, _offlineSelectedSession != null);
+                (OfflineUpdateUiState.CanRefreshStatus(connected, _offlineSelectedSession != null) ||
+                 OfflineUpdateUiState.CanRetryPreflightWithoutSession(connected, imported, _offlineSessions.Count > 0));
 
             OfflineUpgradePanel.ConfirmCheck.IsEnabled = !busy && OfflineUpdateUiState.CanMutateSession(connected, imported, _offlineSelectedSession != null) && preparedReady;
             OfflineUpgradePanel.ExecuteButton.IsEnabled = !busy && OfflineUpdateUiState.CanMutateSession(connected, imported, _offlineSelectedSession != null) && preparedReady && OfflineUpgradePanel.ConfirmCheck.IsChecked == true;
@@ -757,42 +762,7 @@ namespace FreedomInstaller.App
                     // schema unlocks Prepare; every failure keeps the package
                     // imported for inspection but records the actionable
                     // reason and blocks any new prepare/execute.
-                    var deviceInfo = _offlineSsh!.DeviceInfo;
-                    if (!OfflineUpdateUiState.IsUpdaterVersionAtLeast(deviceInfo, "0.8.0"))
-                    {
-                        MarkOfflinePreflightFailed(T("Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater",
-                            GetJsonString(deviceInfo, "updaterVersion") ?? "?"));
-                        return;
-                    }
-
-                    try
-                    {
-                        // A matching session already on the tablet is named so
-                        // the device can credit the payload it already stores
-                        // instead of demanding the full compressed size again.
-                        var preflight = await _offlineTransfer!.PreflightAsync(imported, _offlineSelectedSession, ct);
-                        if (!OfflineUpdateUiState.PreflightPassed(preflight))
-                        {
-                            MarkOfflinePreflightFailed(T("Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse",
-                                OfflineUpdateUiState.PreflightPhase(preflight) ?? "?"));
-                            return;
-                        }
-
-                        _offlinePreflightPassed = true;
-                        _offlinePreflightError = null;
-                        AppendOfflineLog("Dynamic.OfflineUpdate.LogPreflightPassed",
-                            OfflineUpdateUiState.PreflightDeployment(preflight) ?? "?",
-                            OfflineUpdateUiState.PreflightPhase(preflight) ?? "?");
-                    }
-                    catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or ObjectDisposedException or OfflineUpdateTransferException)
-                    {
-                        // The device-side code (for example operation_failed)
-                        // names the rejected check; keep it next to its cause.
-                        string detail = ex is OfflineUpdateRemoteException remote
-                            ? $"{remote.Code}: {remote.Message}"
-                            : ex.Message;
-                        MarkOfflinePreflightFailed(T("Dynamic.OfflineUpdate.ErrorPreflightFailed", detail));
-                    }
+                    await RunOfflinePreflightAsync(_offlineSelectedSession, ct);
                 }
                 catch
                 {
@@ -1035,12 +1005,31 @@ namespace FreedomInstaller.App
             {
                 if (_offlineSsh == null || _offlineTransfer == null || string.IsNullOrEmpty(_offlineConnectedModel))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+
+                bool hasPackage = _offlinePackage != null && !string.IsNullOrEmpty(_offlineDescriptorSha256);
                 if (_offlineSelectedSession == null)
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                {
+                    // A saved session must be chosen before its status is read;
+                    // its binding is what the read-only query is for.
+                    if (_offlineSessions.Count > 0)
+                        throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+
+                    // No session exists yet, so the only read-only work left is
+                    // the preflight that failed after the package was imported.
+                    // It is retried against that same imported package: nothing
+                    // is imported, uploaded, prepared or created, and preparing
+                    // stays blocked until this exact exchange passes.
+                    if (!hasPackage)
+                        throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
+
+                    ClearOfflineActionEligibility();
+                    if (await RunOfflinePreflightAsync(null, ct))
+                        SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StatePreflightPassed");
+                    return;
+                }
 
                 ClearOfflineActionEligibility();
                 var session = _offlineSelectedSession!;
-                bool hasPackage = _offlinePackage != null && !string.IsNullOrEmpty(_offlineDescriptorSha256);
 
                 // Read-only. Without an imported package only the saved
                 // session/device binding is verified; nothing is uploaded,
@@ -1088,36 +1077,40 @@ namespace FreedomInstaller.App
                 string? refreshed = GetReceiptState(_offlineLastReceipt);
                 bool preflightable = OfflineUpdateUiState.ShouldRefreshPreflight(refreshed);
                 if (hasPackage && preflightable)
-                    await RefreshOfflinePreflightAsync(ct);
+                    await RunOfflinePreflightAsync(session, ct);
             });
         }
 
         /// <summary>
-        /// Read-only preflight for the imported package and the selected
-        /// session. It records the pass or the device's rejection and never
-        /// throws, so the status query that preceded it stays usable.
+        /// The one read-only preflight exchange, shared by package validation
+        /// and the status refresh. A session that already holds the payload is
+        /// named so the device is not charged for it twice. It never creates a
+        /// session, imports, uploads or prepares anything, and it never throws:
+        /// it records the exact pass or the actionable rejection and returns
+        /// whether it passed, so the status the caller already showed stays
+        /// usable.
         /// </summary>
-        private async Task RefreshOfflinePreflightAsync(CancellationToken ct)
+        private async Task<bool> RunOfflinePreflightAsync(OfflineUpdateSession? session, CancellationToken ct)
         {
             if (_offlineSsh == null || _offlineTransfer == null || _offlinePackage == null)
-                return;
+                return false;
 
             var deviceInfo = _offlineSsh.DeviceInfo;
             if (!OfflineUpdateUiState.IsUpdaterVersionAtLeast(deviceInfo, "0.8.0"))
             {
                 MarkOfflinePreflightFailed(T("Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater",
                     GetJsonString(deviceInfo, "updaterVersion") ?? "?"));
-                return;
+                return false;
             }
 
             try
             {
-                var preflight = await _offlineTransfer.PreflightAsync(_offlinePackage, _offlineSelectedSession, ct);
+                var preflight = await _offlineTransfer.PreflightAsync(_offlinePackage, session, ct);
                 if (!OfflineUpdateUiState.PreflightPassed(preflight))
                 {
                     MarkOfflinePreflightFailed(T("Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse",
                         OfflineUpdateUiState.PreflightPhase(preflight) ?? "?"));
-                    return;
+                    return false;
                 }
 
                 _offlinePreflightPassed = true;
@@ -1125,13 +1118,17 @@ namespace FreedomInstaller.App
                 AppendOfflineLog("Dynamic.OfflineUpdate.LogPreflightPassed",
                     OfflineUpdateUiState.PreflightDeployment(preflight) ?? "?",
                     OfflineUpdateUiState.PreflightPhase(preflight) ?? "?");
+                return true;
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or ObjectDisposedException or OfflineUpdateTransferException)
             {
+                // The device-side code (for example operation_failed) names the
+                // rejected check; keep it next to its cause.
                 string detail = ex is OfflineUpdateRemoteException remote
                     ? $"{remote.Code}: {remote.Message}"
                     : ex.Message;
                 MarkOfflinePreflightFailed(T("Dynamic.OfflineUpdate.ErrorPreflightFailed", detail));
+                return false;
             }
         }
 

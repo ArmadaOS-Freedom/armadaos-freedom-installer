@@ -1371,6 +1371,7 @@
   "Dynamic.OfflineUpdate.LogPreflightPassed": "Read-only package preflight passed (deployment {0}, phase {1}).",
   "Dynamic.OfflineUpdate.LogPreflightFailed": "Read-only package preflight failed; Prepare is blocked: {0}",
   "Dynamic.OfflineUpdate.StatePreflightFailed": "Preflight failed: {0}",
+  "Dynamic.OfflineUpdate.StatePreflightPassed": "Read-only preflight passed for the validated package; preparing this upgrade is no longer blocked by it.",
   "Dynamic.OfflineUpdate.ErrorPreflightFailed": "The tablet rejected the read-only package preflight. {0}",
   "Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse": "The tablet did not report a passed read-only preflight (phase: {0}).",
   "Dynamic.OfflineUpdate.ErrorPreflightRequired": "Validate the upgrade package and pass the read-only preflight before preparing this upgrade.",

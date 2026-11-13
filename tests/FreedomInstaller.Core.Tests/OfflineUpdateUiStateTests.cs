@@ -423,6 +423,69 @@ public class OfflineUpdateUiStateTests
             OfflineUpdateUiState.CanMutateSession(connected, imported, hasSelectedSession));
     }
 
+    // ---------- Preflight retry after a failed validation (no session yet) ----------
+
+    [Fact]
+    public void FailedPreflightWithNoSession_KeepsTheImportedPackageRefreshable()
+    {
+        // Validation imports the package before the read-only preflight runs,
+        // so a failure leaves a valid package and no session at all. Refreshing
+        // must be able to retry that read-only step from the same package
+        // instead of demanding a session that does not exist yet.
+        Assert.True(OfflineUpdateUiState.CanRetryPreflightWithoutSession(
+            connected: true, imported: true, hasSavedSessions: false));
+    }
+
+    [Theory]
+    [InlineData(true, true, false, true)]
+    [InlineData(false, true, false, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(true, false, true, false)]
+    public void CanRetryPreflightWithoutSession_NeedsTheConnectionAndTheValidatedPackage(
+        bool connected, bool imported, bool hasSavedSessions, bool expected)
+    {
+        Assert.Equal(expected, OfflineUpdateUiState.CanRetryPreflightWithoutSession(
+            connected, imported, hasSavedSessions));
+    }
+
+    [Fact]
+    public void SavedSessionStatusRead_IsUnchangedByThePreflightRetry()
+    {
+        // A saved session's status is still read with only the connection and
+        // a selection, and never with the retry gate standing in for it.
+        Assert.True(OfflineUpdateUiState.CanRefreshStatus(connected: true, hasSelectedSession: true));
+        Assert.False(OfflineUpdateUiState.CanRefreshStatus(connected: true, hasSelectedSession: false));
+        Assert.False(OfflineUpdateUiState.CanRefreshStatus(connected: false, hasSelectedSession: true));
+
+        // Sessions exist but none is selected: the saved status read needs the
+        // choice, and the retry must not silently pick one.
+        Assert.False(OfflineUpdateUiState.CanRetryPreflightWithoutSession(
+            connected: true, imported: true, hasSavedSessions: true));
+    }
+
+    [Fact]
+    public void SuccessfulRetry_OnlyUnlocksPreparation_ExecutionStillNeedsRecovery()
+    {
+        // The retry exchange itself is read-only and enables nothing. Only the
+        // pass it records unlocks preparation, and execution still needs the
+        // prepared receipt with the saved recovery bundle.
+        Assert.True(OfflineUpdateUiState.CanRetryPreflightWithoutSession(true, true, hasSavedSessions: false));
+
+        Assert.False(OfflineUpdateUiState.CanPrepareSession(
+            connected: true, imported: true, preflightPassed: false, receipt: null,
+            hasMatchingSessions: false, hasSelectedSession: false));
+        Assert.True(OfflineUpdateUiState.CanPrepareSession(
+            connected: true, imported: true, preflightPassed: true, receipt: null,
+            hasMatchingSessions: false, hasSelectedSession: false));
+
+        Assert.False(OfflineUpdateUiState.CanExecute(
+            Receipt("prepared"), hasSavedRecovery: false, preflightPassed: true));
+        Assert.True(OfflineUpdateUiState.CanExecute(
+            Receipt("prepared"), hasSavedRecovery: true, preflightPassed: true));
+    }
+
     // ---------- Combined prepare gate (exactly what the button uses) ----------
 
     [Fact]
