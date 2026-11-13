@@ -13,6 +13,7 @@ namespace FreedomInstaller.Core.Tests;
 /// </summary>
 public sealed class InstallerLogTests
 {
+    /// <summary>诊断行必须原样采用 <see cref="Exception.ToString"/>：真实类型全名与完整消息都要保留。</summary>
     [Theory]
     [InlineData("requires-compatible-bootloader: the original vbmeta_a root or its boot chain is unknown.")]
     [InlineData("requires-complete-backup-with-efisp: boot recovery material is incomplete.")]
@@ -30,6 +31,7 @@ public sealed class InstallerLogTests
         Assert.Contains(message, line);
     }
 
+    /// <summary>非拒绝类失败（例如写盘 IO 错误）同样保留真实异常类型，不被换成笼统文案。</summary>
     [Fact]
     public void DescribeFailureKeepsRealTypeForNonRefusalFailures()
     {
@@ -41,6 +43,7 @@ public sealed class InstallerLogTests
         Assert.StartsWith(typeof(IOException).FullName!, line);
     }
 
+    /// <summary>包装异常的原始内部原因（类型与消息）也必须出现在诊断行里。</summary>
     [Fact]
     public void DescribeFailureKeepsWrappedInnerCause()
     {
@@ -54,6 +57,7 @@ public sealed class InstallerLogTests
         Assert.Contains("the captured device disappeared", line);
     }
 
+    /// <summary>入队后 <see cref="InstallerLog.Flush"/> 返回即可读到内容，不必等窗口关闭。</summary>
     [Fact]
     public void FlushWithoutClosingPersistsQueuedSnapshot()
     {
@@ -67,6 +71,7 @@ public sealed class InstallerLogTests
         Assert.Equal(lines, File.ReadAllLines(Path.Combine(directory, "installer.log")));
     }
 
+    /// <summary>三份累积快照按 FIFO 串行写入：最终文件是最后入队的那份，不被更早的写入覆盖。</summary>
     [Fact]
     public void QueuedSnapshotsKeepFifoOrder()
     {
@@ -85,6 +90,7 @@ public sealed class InstallerLogTests
         Assert.Equal(third, File.ReadAllLines(path));
     }
 
+    /// <summary>单份快照里的每条记录都按原顺序落盘，不丢行也不改序。</summary>
     [Fact]
     public void QueuedSnapshotPreservesEveryEntryInOrder()
     {
@@ -99,6 +105,7 @@ public sealed class InstallerLogTests
         Assert.Equal(lines, File.ReadAllLines(Path.Combine(directory, "installer.log")));
     }
 
+    /// <summary>入队时复制数组：调用方之后改写原数组不影响已排队的日志行。</summary>
     [Fact]
     public void QueuedSnapshotIsImmutableAfterEnqueue()
     {
@@ -113,6 +120,7 @@ public sealed class InstallerLogTests
         Assert.Equal(new[] { "10:00:00  original" }, File.ReadAllLines(Path.Combine(directory, "installer.log")));
     }
 
+    /// <summary>同步落盘直接写会话目录里的同一个日志文件；第二次写入把文件覆盖成最新快照。</summary>
     [Fact]
     public void AppendPersistsToWorkSessionWithoutClosingTheWindow()
     {
@@ -132,6 +140,7 @@ public sealed class InstallerLogTests
         Assert.Equal(second, File.ReadAllLines(path));
     }
 
+    /// <summary>目标目录不存在时失败只影响日志文件：不抛异常，也不留下半份文件。</summary>
     [Fact]
     public void PersistenceFailureStaysInsideTheLogFile()
     {
@@ -143,6 +152,7 @@ public sealed class InstallerLogTests
         Assert.False(File.Exists(Path.Combine(missing, "installer.log")));
     }
 
+    /// <summary>队列里的写入失败不能卡住队列：这份快照丢掉，后续入队仍能正常落盘。</summary>
     [Fact]
     public void QueuedPersistenceFailureStaysNonFatal()
     {
@@ -161,6 +171,7 @@ public sealed class InstallerLogTests
         Assert.Equal(new[] { "after failure" }, File.ReadAllLines(Path.Combine(directory, "installer.log")));
     }
 
+    /// <summary>在 TEST_ARTIFACT_ROOT 下建唯一子目录；变量未设置时直接失败，避免测试写到别处。</summary>
     private static string NewDirectory()
     {
         string root = Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")
