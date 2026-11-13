@@ -319,9 +319,24 @@ namespace FreedomInstaller.App
                     ClearOfflineActionEligibility();
                     if (tex.Receipt.HasValue)
                     {
-                        _offlineLastReceipt = tex.Receipt.Value.Clone();
-                        await TryPersistReceiptAsync(_offlineSelectedSession, _offlineLastReceipt.Value);
-                        UpdateDetailsWithReceipt(_offlineLastReceipt.Value, tex.Message);
+                        JsonElement receipt = tex.Receipt.Value;
+                        if (OfflineUpdateUiState.BelongsToSession(receipt, _offlineSelectedSession))
+                        {
+                            _offlineLastReceipt = receipt.Clone();
+                            await TryPersistReceiptAsync(_offlineSelectedSession, _offlineLastReceipt.Value);
+                            UpdateDetailsWithReceipt(_offlineLastReceipt.Value, tex.Message);
+                        }
+                        else
+                        {
+                            // A receipt for another session (for example a
+                            // terminal result of a replacement begin) is not
+                            // evidence for the selected record. Keep that
+                            // record's live receipt, display and saved result
+                            // untouched, and keep the foreign receipt only as
+                            // isolated local diagnostics.
+                            await TryPersistUnmatchedReceiptAsync(receipt);
+                            SetText(OfflineUpgradePanel.DetailsText, "Dynamic.OfflineUpdate.Value", tex.Message);
+                        }
                     }
                     else
                     {
@@ -2055,7 +2070,10 @@ namespace FreedomInstaller.App
 
         private async Task TryPersistReceiptAsync(OfflineUpdateSession? session, JsonElement receipt)
         {
-            if (session == null)
+            // A per-session record only ever holds that exact session's own
+            // receipt. A receipt for another session is kept apart by
+            // TryPersistUnmatchedReceiptAsync instead of being written here.
+            if (session == null || !OfflineUpdateUiState.BelongsToSession(receipt, session))
                 return;
             try
             {
@@ -2064,6 +2082,30 @@ namespace FreedomInstaller.App
                 Directory.CreateDirectory(sessionDir);
                 string finalPath = Path.Combine(sessionDir, "last-receipt.json");
                 string tempPath = Path.Combine(sessionDir, $"last-receipt.{Guid.NewGuid():N}.tmp");
+                await File.WriteAllTextAsync(tempPath, FormatJson(receipt));
+                File.Move(tempPath, finalPath, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Preserve a receipt the tablet returned for a session other than the
+        /// selected record. It is written under the existing records location
+        /// with a fixed local name, never through a path built from the
+        /// receipt's device-supplied session id, and it is never read back as
+        /// the selected session's result. A storage failure is only logged; it
+        /// never replaces the original operation failure.
+        /// </summary>
+        private async Task TryPersistUnmatchedReceiptAsync(JsonElement receipt)
+        {
+            try
+            {
+                string recordsRoot = GetPersistentRecordsRoot();
+                string finalPath = Path.Combine(recordsRoot, "unmatched-receipt.json");
+                string tempPath = Path.Combine(recordsRoot, $"unmatched-receipt.{Guid.NewGuid():N}.tmp");
                 await File.WriteAllTextAsync(tempPath, FormatJson(receipt));
                 File.Move(tempPath, finalPath, overwrite: true);
             }

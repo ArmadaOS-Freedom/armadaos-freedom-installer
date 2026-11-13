@@ -1010,6 +1010,39 @@ public class OfflineUpdateUiStateTests
     }
 
     [Fact]
+    public void BelongsToSession_KeepsAnotherSessionsReceiptApart()
+    {
+        // The selected failed record's own result is the only receipt allowed
+        // to become its live state and overwrite its saved last-receipt.json.
+        Assert.True(OfflineUpdateUiState.BelongsToSession(FailedPrepare(), Selected));
+
+        // A terminal begin result for a replacement names a different session.
+        // Binding it to the still-selected failed record would replace that
+        // record's evidence and could expose the wrong recovery action.
+        const string ReplacementSid = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b";
+        var replacementReceipt = Parse(
+            "{\"state\":\"failed\",\"jobOperation\":\"prepare\"," +
+            $"\"sessionId\":\"{ReplacementSid}\"," +
+            "\"result\":{\"state\":\"failed\",\"error\":\"replacement failed\"}}");
+        Assert.False(OfflineUpdateUiState.BelongsToSession(replacementReceipt, Selected));
+        Assert.True(OfflineUpdateUiState.BelongsToSession(
+            replacementReceipt, new OfflineUpdateSession(ReplacementSid, Model, TxId, DescriptorSha)));
+
+        // The original failed receipt is unchanged and still binds only its
+        // own explicit replacement, never the other session's evidence.
+        Assert.True(OfflineUpdateUiState.IsBoundForReplacement(
+            FailedPrepare(), Selected, Model, TxId, DescriptorSha));
+
+        // A receipt without a session, a missing selection and a missing
+        // receipt all fail closed.
+        Assert.False(OfflineUpdateUiState.BelongsToSession(
+            FailedPrepare("{\"state\":\"failed\",\"jobOperation\":\"prepare\"," +
+                "\"result\":{\"state\":\"failed\"}}"), Selected));
+        Assert.False(OfflineUpdateUiState.BelongsToSession(FailedPrepare(), null));
+        Assert.False(OfflineUpdateUiState.BelongsToSession(null, Selected));
+    }
+
+    [Fact]
     public void IsVerifiedFailedPrepare_CanonicalFailedPreparation_IsVerified()
     {
         // The producer's exact receipt: a failed prepare job at the top level

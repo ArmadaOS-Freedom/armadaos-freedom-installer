@@ -281,6 +281,15 @@ namespace FreedomInstaller.App
         }
 
         /// <summary>
+        /// True only when the receipt names the exact selected session. A
+        /// receipt for another session never replaces that record's live
+        /// state, displayed result or per-session saved receipt.
+        /// </summary>
+        internal static bool BelongsToSession(JsonElement? receipt, OfflineUpdateSession? session) =>
+            session != null &&
+            string.Equals(SessionId(receipt), session.SessionId, StringComparison.Ordinal);
+
+        /// <summary>
         /// True only for the one terminal receipt an explicit replacement
         /// session may follow: a failure the tablet recorded for the
         /// preparation job itself. The operation is named once, at the top
