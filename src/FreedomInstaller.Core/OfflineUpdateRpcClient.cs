@@ -44,7 +44,8 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
     private int _readCount;
     private int _nextRequestId;
     private bool _poisoned;
-    private int _disposed;
+    private int _disposed;      // 0 while new exchanges may still be admitted
+    private int _disposeRan;    // the drain of DisposeAsync runs exactly once
 
     public OfflineUpdateRpcClient(
         Stream requestOutput,
@@ -91,10 +92,32 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
     /// True when teardown must release the session socket before it asks
     /// SSH.NET for anything else: an interrupted exchange, or one still in
     /// flight, may hold the writer lock that a channel cancel or a disconnect
-    /// would queue behind. Computed before disposal; a healthy teardown has
-    /// neither condition and keeps the orderly disconnect order.
+    /// would queue behind. Only <see cref="BeginTeardown"/> reads this, and it
+    /// reads the gate before the sticky flag. An exchange publishes the flag
+    /// while it still holds the gate and releases the gate afterwards, so a
+    /// free gate observed first orders that write before the flag read: a
+    /// request that was interrupted and released the gate between two reads is
+    /// still reported as interrupted. In the opposite order the flag read can
+    /// see false and the gate read can see the release that followed it, so an
+    /// interrupted send that may still be running would be reported healthy.
     /// </summary>
-    internal bool RequiresSocketRelease => IsPoisoned || IsExchangeInFlight;
+    private bool RequiresSocketRelease => IsExchangeInFlight || IsPoisoned;
+
+    /// <summary>
+    /// First teardown step: closes admission and answers the socket question
+    /// above. Admission has to close before the answer is used, or a request
+    /// that has not reached its write yet could start one after the decision
+    /// was taken. Such a request re-checks the same flag once it holds the
+    /// gate, so it fails before a single byte is sent and leaves nothing for
+    /// teardown to unblock. With admission closed, every write that could
+    /// still be running belongs to an exchange admitted before this call,
+    /// which the ordered reads above cannot miss.
+    /// </summary>
+    internal bool BeginTeardown()
+    {
+        Interlocked.Exchange(ref _disposed, 1);
+        return RequiresSocketRelease;
+    }
 
     public Task<JsonElement> GetInfoAsync(CancellationToken cancellationToken = default) =>
         SendAsync("info", new Dictionary<string, object?>(0), cancellationToken);
@@ -265,7 +288,10 @@ public sealed class OfflineUpdateRpcClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        // Admission may already be closed by BeginTeardown; the drain below
+        // still has to run exactly once.
+        Interlocked.Exchange(ref _disposed, 1);
+        if (Interlocked.Exchange(ref _disposeRan, 1) != 0)
             return;
 
         await _lifetimeCts.CancelAsync().ConfigureAwait(false);

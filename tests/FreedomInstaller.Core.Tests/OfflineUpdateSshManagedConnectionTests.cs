@@ -1242,6 +1242,59 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Dispose_WhileAnRpcSendIsStillBlocked_ReleasesTheSocketBeforeCancellingTheChannel()
+    {
+        // Nothing has failed here: the exchange is healthy and merely waits in
+        // a send the peer stopped reading. The decision therefore has to come
+        // from the exchange that still holds the gate, not from a poison flag,
+        // and the socket has to be released before the channel cancel queues
+        // behind the same writer.
+        var hostKey = HostKey(47);
+        var events = new List<string>();
+        var input = new BlockingWriteStream(armed: false);
+        var channel = new FakeChannel(
+            ReadyOutput(),
+            gaiteOutputOnPassword: false,
+            exited: false,
+            standardInput: input,
+            events: events);
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = _ => channel,
+            SocketAbortFactory = () => new FakeSocketAbort(() =>
+            {
+                events.Add("socket-release");
+                input.Release();
+            }),
+        };
+
+        var connection = await OfflineUpdateSshManagedConnection.ConnectCoreAsync(
+            Options(hostKey), TimeSpan.FromSeconds(5), CancellationToken.None, Factory(transport));
+        Assert.False(connection.Rpc.IsPoisoned);
+
+        input.Arm();
+        var query = connection.Rpc.PrepareAsync("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        await input.WriteStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(connection.Rpc.IsPoisoned);
+
+        var dispose = connection.DisposeAsync().AsTask();
+        var winner = await Task.WhenAny(dispose, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(dispose, winner);
+        await dispose;
+
+        // The abandoned exchange ends with teardown. Which of its guard
+        // clauses reports that is a race, so only the failure is asserted.
+        await Assert.ThrowsAnyAsync<Exception>(() => query);
+
+        Assert.Equal(1, transport.SocketAbortCount);
+        Assert.Equal(1, transport.DisposeCount);
+        Assert.True(channel.Disposed);
+        Assert.True(
+            events.IndexOf("socket-release") < events.IndexOf("channel-cancel"),
+            "The socket must be released before the channel is cancelled: " + string.Join(",", events));
+    }
+
+    [Fact]
     public async Task Connect_InfoQueryCancelledWhileItsSendIsBlocked_ReleasesTheSocketBeforeTeardown()
     {
         // Ownership never reaches a connection object here, so the connect

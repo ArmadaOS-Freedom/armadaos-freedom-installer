@@ -429,6 +429,79 @@ public sealed class OfflineUpdateRpcClientTests
     }
 
     [Fact]
+    public async Task BeginTeardown_ReportsACleanIdleClientAsNotNeedingTheSocket()
+    {
+        // Nothing was ever sent and nothing is in flight, so teardown has no
+        // writer to unblock and must keep the orderly disconnect order.
+        using var io = new IoStream();
+        var client = new OfflineUpdateRpcClient(io, io);
+
+        Assert.False(client.BeginTeardown());
+
+        await client.DisposeAsync();
+        Assert.Equal(1, io.DisposeCount);
+    }
+
+    [Fact]
+    public async Task BeginTeardown_ReportsAnExchangeThatStillHoldsTheGate()
+    {
+        // The request only waits for its answer, so nothing is poisoned yet:
+        // the gate alone says a synchronous send may still be running.
+        using var io = new IoStream();
+        var client = new OfflineUpdateRpcClient(io, io);
+        var pending = client.GetInfoAsync();
+        await io.Written.Task;
+        Assert.False(client.IsPoisoned);
+
+        Assert.True(client.BeginTeardown());
+
+        await client.DisposeAsync();
+        await Assert.ThrowsAnyAsync<ObjectDisposedException>(() => pending);
+        Assert.Single(io.Frames);
+    }
+
+    [Fact]
+    public async Task BeginTeardown_ReportsAnInterruptedExchangeThatAlreadyReleasedTheGate()
+    {
+        // The interrupted request has finished and released the gate, so the
+        // sticky flag is the only trace of the abandoned send left for teardown.
+        using var io = new IoStream();
+        var client = new OfflineUpdateRpcClient(io, io);
+        using var cancelled = new CancellationTokenSource();
+        var pending = client.GetInfoAsync(cancelled.Token);
+        await io.Written.Task;
+        cancelled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.True(client.IsPoisoned);
+
+        Assert.True(client.BeginTeardown());
+
+        await client.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task BeginTeardown_StopsAQueuedRequestBeforeItWrites()
+    {
+        // The gate owner already started its frame, so the decision covers it.
+        // The queued request must fail once it gets the gate instead of sending
+        // a frame that teardown was never computed for.
+        using var io = new IoStream();
+        var client = new OfflineUpdateRpcClient(io, io);
+        var active = client.GetInfoAsync();
+        await io.Written.Task;
+        var queued = client.GetStatusAsync(Session);
+
+        Assert.True(client.BeginTeardown());
+
+        ReplyOk(io, 1);
+        await active;
+        await Assert.ThrowsAnyAsync<ObjectDisposedException>(() => queued);
+        Assert.Single(io.Frames);
+
+        await client.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Precancelled_token_and_invalid_inputs_send_nothing()
     {
         using var io = new IoStream();

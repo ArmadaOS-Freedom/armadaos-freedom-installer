@@ -330,8 +330,9 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
                     // The info query may have been interrupted while its
                     // synchronous stdin send was still running. Releasing the
                     // socket here keeps the updater teardown from queueing
-                    // behind the session writer lock.
-                    if (createdRpc.RequiresSocketRelease)
+                    // behind the session writer lock. The decision also closes
+                    // RPC admission, so no new send can start afterwards.
+                    if (createdRpc.BeginTeardown())
                         ReleaseSocket();
 
                     await updater.DisposeAsync().ConfigureAwait(false);
@@ -378,8 +379,9 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
                 // that was interrupted, or that is still in flight, may have a
                 // synchronous stdin send under SSH.NET's writer lock, and both
                 // the updater's Cancel and the transport's Disconnect queue
-                // behind it.
-                if (rpc is not null && rpc.RequiresSocketRelease)
+                // behind it. BeginTeardown closes RPC admission first so that
+                // no request can start a send the decision did not account for.
+                if (rpc is not null && rpc.BeginTeardown())
                     ReleaseSocket();
 
                 if (rpc is not null)
@@ -427,7 +429,10 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
         // is the pinned-socket shutdown the upload guard uses, without its send
         // timeout: the long-lived RPC session must not inherit that transient
         // budget. A healthy teardown takes no handle and disconnects in order.
-        if (_rpc.RequiresSocketRelease)
+        // The decision closes RPC admission first, so a request that has not
+        // written yet cannot start a send after it was taken; it fails against
+        // the closed client instead, exactly as it would after disposal.
+        if (_rpc.BeginTeardown())
             AbortTransportSocket(_transport);
 
         try
