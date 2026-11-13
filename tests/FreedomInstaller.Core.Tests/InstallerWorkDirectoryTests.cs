@@ -5,6 +5,12 @@ namespace FreedomInstaller.Core.Tests;
 public sealed class InstallerWorkDirectoryTests : IDisposable
 {
     private const long GiB = 1024L * 1024 * 1024;
+
+    // Tests of host-independent selection logic pin the non-macOS policy so the host OS
+    // cannot filter or re-rank the synthetic volume list; macOS policy tests opt in.
+    private static readonly InstallerWorkDirectoryPlatform NonMacPlatform = new(IsMacOS: false);
+    private static readonly InstallerWorkDirectoryPlatform MacPlatform = new(IsMacOS: true);
+
     private readonly string _sandboxRoot;
     private readonly string _systemRoot;
     private readonly string _dataRoot;
@@ -46,7 +52,8 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
             {
                 Assert.Equal(expectedPath, candidate);
                 InstallerWorkDirectory.ProbeDirectoryWritability(candidate);
-            });
+            },
+            NonMacPlatform);
 
         Assert.Equal(expectedPath, result.RootPath);
     }
@@ -78,7 +85,8 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
                 if (!candidate.StartsWith(_sandboxRoot, StringComparison.Ordinal))
                     throw new IOException($"unexpected probe outside the test sandbox: {candidate}");
                 InstallerWorkDirectory.ProbeDirectoryWritability(candidate);
-            });
+            },
+            MacPlatform);
 
         Assert.Equal(expectedPath, result.RootPath);
         Assert.Equal(new[] { expectedPath }, probed);
@@ -108,7 +116,7 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
                     throw new IOException($"unexpected probe outside the test sandbox: {candidate}");
                 InstallerWorkDirectory.ProbeDirectoryWritability(candidate);
             },
-            new InstallerWorkDirectoryPlatform(IsMacOS: true));
+            MacPlatform);
 
         Assert.Equal(expectedPath, result.RootPath);
         Assert.Equal(12 * GiB, result.AvailableFreeBytes);
@@ -120,11 +128,14 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
     {
         string localVolumeRoot = Path.GetPathRoot(_sandboxRoot)!;
         string localWorkPath = Path.Combine(_localAppData, "ArmadaOS Freedom", "Work");
-        string expectedPath = Path.Combine("/Volumes/External", "ArmadaOS Freedom", "Work");
+        string externalVolumeRoot = "/Volumes/External";
+        // Mirror the production normalization so the POSIX mount root is compared as the
+        // host resolves it (on Windows "/Volumes/External" is rooted on the current drive).
+        string expectedPath = Path.Combine(Path.GetFullPath(externalVolumeRoot), "ArmadaOS Freedom", "Work");
         var volumes = new[]
         {
             new InstallerWorkVolume(localVolumeRoot, DriveType.Fixed, true, "apfs"),
-            new InstallerWorkVolume("/Volumes/External", DriveType.Fixed, true, "apfs")
+            new InstallerWorkVolume(externalVolumeRoot, DriveType.Fixed, true, "apfs")
         };
         var probed = new List<string>();
 
@@ -139,7 +150,7 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
                 if (candidate.StartsWith(_sandboxRoot, StringComparison.Ordinal))
                     throw new UnauthorizedAccessException("Local volume is read-only");
             },
-            new InstallerWorkDirectoryPlatform(IsMacOS: true));
+            MacPlatform);
 
         Assert.Equal(expectedPath, result.RootPath);
         Assert.Equal(100 * GiB, result.AvailableFreeBytes);
@@ -167,7 +178,7 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
             volumes,
             path => path.StartsWith(_sandboxRoot, StringComparison.Ordinal) ? 256L * 1024 * 1024 : 500 * GiB,
             _ => probed = true,
-            new InstallerWorkDirectoryPlatform(IsMacOS: true)));
+            MacPlatform));
 
         Assert.False(probed);
     }
@@ -182,7 +193,8 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
             _localAppData,
             volumes,
             _ => 20 * GiB,
-            InstallerWorkDirectory.ProbeDirectoryWritability);
+            InstallerWorkDirectory.ProbeDirectoryWritability,
+            NonMacPlatform);
 
         Assert.Equal(Path.Combine(_dataRoot, "ArmadaOS Freedom", "Work"), result.RootPath);
     }
@@ -203,7 +215,8 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
             _localAppData,
             volumes,
             path => path.StartsWith(_dataRoot, StringComparison.Ordinal) ? 40 * GiB : systemFree,
-            InstallerWorkDirectory.ProbeDirectoryWritability);
+            InstallerWorkDirectory.ProbeDirectoryWritability,
+            NonMacPlatform);
 
         Assert.Equal(Path.Combine(_dataRoot, "ArmadaOS Freedom", "Work"), result.RootPath);
         Assert.Equal(40 * GiB, result.AvailableFreeBytes);
@@ -222,7 +235,8 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
             _localAppData,
             volumes,
             _ => 12 * GiB,
-            InstallerWorkDirectory.ProbeDirectoryWritability);
+            InstallerWorkDirectory.ProbeDirectoryWritability,
+            NonMacPlatform);
 
         Assert.Equal(Path.Combine(_localAppData, "ArmadaOS Freedom", "Work"), result.RootPath);
         Assert.Equal(12 * GiB, result.AvailableFreeBytes);
@@ -251,7 +265,8 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
             _localAppData,
             volumes,
             path => path.StartsWith(_systemRoot, StringComparison.Ordinal) ? null : 8 * GiB,
-            InstallerWorkDirectory.ProbeDirectoryWritability);
+            InstallerWorkDirectory.ProbeDirectoryWritability,
+            NonMacPlatform);
 
         Assert.Equal(Path.Combine(_dataRoot, "ArmadaOS Freedom", "Work"), result.RootPath);
     }
@@ -282,7 +297,8 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
                 if (path.StartsWith(_dataRoot, StringComparison.Ordinal))
                     throw new UnauthorizedAccessException("Access denied");
                 InstallerWorkDirectory.ProbeDirectoryWritability(path);
-            });
+            },
+            NonMacPlatform);
 
         Assert.Equal(Path.Combine(_localAppData, "ArmadaOS Freedom", "Work"), result.RootPath);
         Assert.Equal(10 * GiB, result.AvailableFreeBytes);
@@ -350,7 +366,8 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
             _localAppData,
             volumes,
             _ => 512L * 1024 * 1024,
-            InstallerWorkDirectory.ProbeDirectoryWritability));
+            InstallerWorkDirectory.ProbeDirectoryWritability,
+            NonMacPlatform));
     }
 
     [Fact]
@@ -385,7 +402,8 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
             {
                 InstallerWorkDirectory.ProbeDirectoryWritability(path);
                 if (path.StartsWith(_dataRoot, StringComparison.Ordinal)) dataProbed = true;
-            });
+            },
+            NonMacPlatform);
         Assert.Equal(Path.Combine(_localAppData, "ArmadaOS Freedom", "Work"), result.RootPath);
     }
 
@@ -405,7 +423,7 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
     {
         var selected = InstallerWorkDirectory.Resolve(null, _localAppData,
             new[] { new InstallerWorkVolume(_dataRoot, DriveType.Fixed, true, "NTFS") },
-            _ => 100 * GiB, InstallerWorkDirectory.ProbeDirectoryWritability);
+            _ => 100 * GiB, InstallerWorkDirectory.ProbeDirectoryWritability, NonMacPlatform);
         string backup = Path.Combine(_dataRoot, "original-backup.img");
         File.WriteAllText(backup, "keep original backup");
         var session = new InstallerWorkSession(selected.RootPath);
