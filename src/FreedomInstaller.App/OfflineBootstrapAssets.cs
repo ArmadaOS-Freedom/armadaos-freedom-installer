@@ -18,6 +18,14 @@ namespace FreedomInstaller.App
         internal const string ScriptResourceName = "FreedomInstaller.OfflineBootstrap.Script.py";
         internal const string BundleResourceName = "FreedomInstaller.OfflineBootstrap.Updater.tar.gz";
 
+        /// <summary>
+        /// Metadata key emitted by the build from the validated bundle
+        /// manifest. The coordinator accepts only this version in the install
+        /// receipt and in the post-install probe, so a bundle bump does not
+        /// require a code change.
+        /// </summary>
+        internal const string VersionMetadataName = "BundledOfflineUpdaterVersion";
+
         private static string? _bundleSha256;
 
         internal static OfflineUpdateBootstrapCoordinator? TryCreate(
@@ -36,8 +44,28 @@ namespace FreedomInstaller.App
                 () => Open(assembly, ScriptResourceName),
                 () => Open(assembly, BundleResourceName),
                 expected,
+                ReadBundleVersion(assembly),
                 progress,
                 useSudoForInstall);
+        }
+
+        private static string ReadBundleVersion(Assembly assembly)
+        {
+            foreach (var attribute in assembly.GetCustomAttributes<AssemblyMetadataAttribute>())
+            {
+                if (string.Equals(attribute.Key, VersionMetadataName, StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(attribute.Value))
+                {
+                    return attribute.Value;
+                }
+            }
+
+            // A single-file publish without this metadata cannot validate the
+            // install receipt, so it fails here instead of comparing against a
+            // guessed version.
+            throw new InvalidOperationException(
+                "The embedded offline updater bundle has no validated '" +
+                VersionMetadataName + "' build metadata.");
         }
 
         private static Stream Open(Assembly assembly, string name) =>

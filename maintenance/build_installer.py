@@ -67,6 +67,11 @@ _OFFLINE_PROPERTY_NAMES = (
     "BundledOfflineUpdaterBundle",
 )
 
+# Value property (not a path) taken from the validated bundle manifest.  The
+# installer embeds it as assembly metadata and requires exactly this version in
+# the install receipt and in the post-install probe.
+_OFFLINE_VERSION_PROPERTY = "BundledOfflineUpdaterVersion"
+
 _OFFLINE_ASSET_SOURCE = "system build_files/build-offline-updater-bundle.py"
 
 # The bundle contract is explicit.  A bundle manifest names the capabilities
@@ -80,7 +85,11 @@ _OFFLINE_MANIFEST_NAME = "manifest.json"
 _OFFLINE_BUNDLE_NAME = "armada-offline-updater"
 _OFFLINE_ENTRY = "usr/libexec/armada/armada-offline-update"
 _OFFLINE_REQUIRED_CAPABILITY = "preflight-session-v1"
-_OFFLINE_MAX_BUNDLE_BYTES = 512 * 1024 * 1024
+# The managed SSH session refuses an upload larger than 256 MiB
+# (OfflineUpdateSshManagedSession.MaxUploadBytes).  The builder must never
+# accept a bundle the transport can never deliver, so the build-side limit
+# matches that transport instead of being larger.
+_OFFLINE_MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 _OFFLINE_MAX_MEMBER_BYTES = 128 * 1024 * 1024
 _OFFLINE_MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _OFFLINE_MAX_MEMBERS = 4096
@@ -401,11 +410,13 @@ def _validate_offline_inputs(script, bundle):
     the capability this installer requires, after which the entry script
     member is streamed and checked against the manifest's size and SHA-256.
     This runs before the expensive build phases so a typo or a stale bundle
-    never costs a full tool compilation.  Returns a mapping of props name to
-    the resolved absolute path, or an empty mapping when both are omitted.
+    never costs a full tool compilation.  Returns a ``(resolved, version)``
+    pair: the props-name to resolved-path mapping and the bundle manifest
+    version that the installer will require in the install receipt, or
+    ``({}, None)`` when both inputs are omitted.
     """
     if script is None and bundle is None:
-        return {}
+        return {}, None
     if script is None or bundle is None:
         missing = (
             "--offline-bootstrap-script" if script is None
@@ -435,7 +446,7 @@ def _validate_offline_inputs(script, bundle):
     _offline_entry_member(
         bundle_path, _validate_offline_manifest(bundle_path, document)
     )
-    return resolved
+    return resolved, document["version"]
 
 
 def _make_controlled_env(work_dir):
@@ -618,7 +629,7 @@ def _source_digest(repo_root, manifest):
     return entries
 
 
-def _write_props(path, inputs):
+def _write_props(path, inputs, offline_updater_version=None):
     lines = ["<Project>", "  <PropertyGroup>"]
     for prop in _PROPERTY_NAMES:
         if prop not in inputs:
@@ -626,12 +637,18 @@ def _write_props(path, inputs):
         value = str(Path(inputs[prop]).resolve())
         lines.append(f"    <{prop}>{_xml_escape(value)}</{prop}>")
     # The offline bootstrap pair is optional: a prepare-only run may omit it,
-    # while a single-file publish requires both.
+    # while a single-file publish requires both.  Its version is a value, not
+    # a path, and comes from the already validated manifest.
     for prop in _OFFLINE_PROPERTY_NAMES:
         if prop not in inputs:
             continue
         value = str(Path(inputs[prop]).resolve())
         lines.append(f"    <{prop}>{_xml_escape(value)}</{prop}>")
+    if offline_updater_version is not None:
+        lines.append(
+            f"    <{_OFFLINE_VERSION_PROPERTY}>"
+            f"{_xml_escape(offline_updater_version)}</{_OFFLINE_VERSION_PROPERTY}>"
+        )
     lines.append("  </PropertyGroup>")
     lines.append("</Project>")
     lines.append("")
@@ -650,7 +667,8 @@ def prepare(repo_root, work_dir, manifest_path=None,
     ``offline_bootstrap_script`` and ``offline_updater_bundle`` are optional
     but paired: when supplied they are validated as readable regular files
     before any expensive phase, recorded with size and SHA-256, and written
-    into the generated props for the single-file publish.
+    into the generated props for the single-file publish together with the
+    bundle manifest version that the installer requires in the receipt.
 
     Returns a record dict describing every generated artefact.
     """
@@ -661,11 +679,14 @@ def prepare(repo_root, work_dir, manifest_path=None,
     manifest_path = Path(manifest_path)
 
     # --- Phase 0: offline bootstrap pair (cheap, before any build) -------
-    offline_inputs = _validate_offline_inputs(
+    offline_inputs, offline_updater_version = _validate_offline_inputs(
         offline_bootstrap_script, offline_updater_bundle
     )
     if offline_inputs:
-        _log("offline", "paired bootstrap script and updater bundle OK")
+        _log(
+            "offline",
+            f"paired bootstrap script and updater bundle OK (version {offline_updater_version})",
+        )
 
     # --- Phase 1a: manifest load -----------------------------------------
     _log("manifest", f"loading {manifest_path}")
@@ -877,7 +898,7 @@ def prepare(repo_root, work_dir, manifest_path=None,
     if offline_assets:
         _log("offline", "hashed paired bootstrap script and updater bundle")
 
-    props_xml = _write_props(None, inputs)
+    props_xml = _write_props(None, inputs, offline_updater_version)
     marker = "  <PropertyGroup>\n"
     extra = f"    <BundledToolPinsSource>{_xml_escape(str(pins_cs_path.resolve()))}</BundledToolPinsSource>\n"
     if marker not in props_xml:
@@ -906,6 +927,7 @@ def prepare(repo_root, work_dir, manifest_path=None,
         "toolPaths": tool_paths,
         "inputs": {k: str(Path(v).resolve()) for k, v in inputs.items()},
         "offlineBootstrap": offline_assets,
+        "offlineUpdaterVersion": offline_updater_version,
         "toolPinsJson": str(tool_pins_json_path.resolve()),
         "toolPinsSource": str(pins_cs_path.resolve()),
         "propsPath": str(props_path.resolve()),

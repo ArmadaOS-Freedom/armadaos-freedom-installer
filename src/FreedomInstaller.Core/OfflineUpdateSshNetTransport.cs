@@ -65,8 +65,14 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
 
     /// <summary>
     /// Runs a one-shot command while draining stdout/stderr into bounded tails.
-    /// SSH.NET's accumulated Result/Error strings are never touched, so a
-    /// chatty command cannot grow memory without limit.
+    /// SSH.NET creates both pipes with the command and keeps those instances
+    /// for its first execution, so they are captured before ExecuteAsync
+    /// starts: a command that finishes immediately has already written its
+    /// raw bytes into them, and the pumps stay the only readers at every
+    /// speed. Completion is taken from the non-draining ExecuteAsync instead
+    /// of EndExecute: EndExecute hands back the command's accumulated Result,
+    /// which makes it compete with the independent stream readers and can take
+    /// the output away from them.
     /// </summary>
     public async Task<OfflineUpdateSshProbeResult> RunAsync(
         string command,
@@ -81,40 +87,76 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
 
         var stdout = new OfflineUpdateBoundedText(maxOutputBytes);
         var stderr = new OfflineUpdateBoundedText(maxOutputBytes);
-        var asyncResult = sshCommand.BeginExecute();
+
+        Stream output;
+        Stream error;
+        try
+        {
+            // Captured before the command runs on purpose: these are the pipe
+            // instances the execution writes into and SSH.NET keeps them for
+            // the command's whole life. Bytes an instant command produced are
+            // therefore still buffered here when the pumps read them.
+            output = sshCommand.OutputStream;
+            error = sshCommand.ExtendedOutputStream;
+        }
+        catch
+        {
+            DisposeQuietly(sshCommand);
+            throw;
+        }
+
         using var ioCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-        var stdoutTask = PumpAsync(sshCommand.OutputStream, stdout, ioCts.Token);
-        var stderrTask = PumpAsync(sshCommand.ExtendedOutputStream, stderr, ioCts.Token);
-        var endTask = Task.Run(() => sshCommand.EndExecute(asyncResult), CancellationToken.None);
+
+        // ExecuteAsync starts the command and completes when it exits; only its
+        // completion is consumed, so the pumps below remain the readers of a
+        // normally streaming command. The command is started exactly once and
+        // never retried.
+        Task execution;
+        try
+        {
+            execution = sshCommand.ExecuteAsync(CancellationToken.None);
+        }
+        catch
+        {
+            DisposeQuietly(sshCommand);
+            throw;
+        }
+
+        // Streaming and fast completion take the same path: the pumps read the
+        // raw bytes from the pipes captured above and copy them into the
+        // bounded tails. Nothing is rebuilt from a decoded Result or Error.
+        var stdoutTask = PumpAsync(output, stdout, ioCts.Token);
+        var stderrTask = PumpAsync(error, stderr, ioCts.Token);
         var completed = false;
 
         try
         {
             try
             {
-                await endTask.WaitAsync(timeout, token).ConfigureAwait(false);
+                await execution.WaitAsync(timeout, token).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
                 Cancel(sshCommand);
-                await WaitQuietlyAsync(endTask).ConfigureAwait(false);
+                await WaitQuietlyAsync(execution).ConfigureAwait(false);
                 throw;
             }
             catch (SshOperationTimeoutException ex)
             {
                 Cancel(sshCommand);
-                await WaitQuietlyAsync(endTask).ConfigureAwait(false);
+                await WaitQuietlyAsync(execution).ConfigureAwait(false);
                 throw new TimeoutException("The SSH command did not finish in time.", ex);
             }
             catch (OperationCanceledException)
             {
                 Cancel(sshCommand);
-                await WaitQuietlyAsync(endTask).ConfigureAwait(false);
+                await WaitQuietlyAsync(execution).ConfigureAwait(false);
                 throw;
             }
 
             await DrainQuietlyAsync(stdoutTask, stderrTask).ConfigureAwait(false);
             completed = true;
+
             return new OfflineUpdateSshProbeResult(
                 TryExitStatus(sshCommand),
                 stdout.Snapshot(),
@@ -126,20 +168,15 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
             if (!completed)
             {
                 Cancel(sshCommand);
-                await WaitQuietlyAsync(endTask).ConfigureAwait(false);
+                await WaitQuietlyAsync(execution).ConfigureAwait(false);
                 await DrainQuietlyAsync(stdoutTask, stderrTask).ConfigureAwait(false);
             }
 
-            if (endTask.IsCompleted && stdoutTask.IsCompleted && stderrTask.IsCompleted)
-            {
-                try
-                {
-                    sshCommand.Dispose();
-                }
-                catch
-                {
-                }
-            }
+            if (!execution.IsCompleted)
+                _ = ObserveAsync(execution);
+
+            if (execution.IsCompleted && stdoutTask.IsCompleted && stderrTask.IsCompleted)
+                DisposeQuietly(sshCommand);
         }
     }
 
@@ -149,40 +186,78 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
         var sshCommand = client.CreateCommand(command);
         sshCommand.CommandTimeout = TimeSpan.FromHours(6);
 
-        // SSH.NET only exposes the command's streams while it is executing:
-        // CreateInputStream() rejects a command whose execution has not begun,
-        // and the output pipes are attached to the opened channel. Execution
-        // therefore has to start before the streams are taken.
-        IAsyncResult asyncResult;
+        // Both pipes exist from construction and are the instances the single
+        // execution writes into, so they are captured before it starts. A short
+        // command (passwordless sudo is the common case) has then already
+        // delivered its raw bytes into these pipes, and the caller reads them
+        // without any decoded-Result reconstruction.
+        Stream output;
+        Stream error;
         try
         {
-            asyncResult = sshCommand.BeginExecute();
+            output = sshCommand.OutputStream;
+            error = sshCommand.ExtendedOutputStream;
         }
         catch
+        {
+            DisposeQuietly(sshCommand);
+            throw;
+        }
+
+        // ExecuteAsync is used for the same reason as in RunAsync: EndExecute
+        // would return (and drain) the accumulated Result, taking output away
+        // from the channel.
+        Task execution;
+        try
+        {
+            execution = sshCommand.ExecuteAsync(CancellationToken.None);
+        }
+        catch
+        {
+            DisposeQuietly(sshCommand);
+            throw;
+        }
+
+        // A command that already failed must report that failure; its pipes are
+        // not a substitute for the connection error.
+        if (execution.IsFaulted)
         {
             try
             {
-                sshCommand.Dispose();
+                execution.GetAwaiter().GetResult();
             }
-            catch
+            finally
             {
+                DisposeQuietly(sshCommand);
             }
 
-            throw;
+            throw new OfflineUpdateSshTransportException(
+                "The SSH command failed before its channel became available.");
         }
 
+        Stream input;
         try
         {
-            var output = sshCommand.OutputStream;
-            var error = sshCommand.ExtendedOutputStream;
-            var input = sshCommand.CreateInputStream();
-            return new SshNetChannel(sshCommand, input, output, error, asyncResult);
+            input = sshCommand.CreateInputStream();
+        }
+        catch (Exception ex) when (IsCompletedStdinLifecycleFailure(ex, execution, () => sshCommand.ExitStatus))
+        {
+            // SSH.NET only exposes stdin while the command is still running. A
+            // command that finished normally before stdin was acquired can no
+            // longer accept input, but its output is already buffered in the
+            // captured pipes: hand out the channel with closed stdin instead
+            // of failing or restarting a command that ran to completion.
+            input = ClosedStandardInput.Instance;
         }
         catch
         {
-            AbandonCommand(sshCommand, asyncResult);
+            // Active or disconnected: the failure is real and must be seen, not
+            // replaced by an empty but "successful" channel.
+            AbandonCommand(sshCommand, execution);
             throw;
         }
+
+        return new SshNetChannel(sshCommand, input, output, error, execution);
     }
 
     public void Dispose()
@@ -395,17 +470,116 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
         }
     }
 
-    private static async Task PumpAsync(Stream stream, OfflineUpdateBoundedText target, CancellationToken token)
+    /// <summary>
+    /// True only for an execution that finished successfully and reported an
+    /// exit status. A running, disconnected or cancelled command is never
+    /// treated as completed: its failure has to reach the caller instead of
+    /// being replaced by a channel built from buffered output. The status
+    /// accessor is guarded because SSH.NET throws from it once the command is
+    /// gone.
+    /// </summary>
+    internal static bool HasCompletedWithStatus(Task execution, Func<int?> exitStatus)
     {
-        var buffer = new byte[4096];
+        ArgumentNullException.ThrowIfNull(execution);
+        ArgumentNullException.ThrowIfNull(exitStatus);
+
+        if (!execution.IsCompletedSuccessfully)
+            return false;
+
+        try
+        {
+            return exitStatus() is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// True only for SSH.NET's "no running command" standard-input failure on a
+    /// command that has already finished normally and reported an exit status.
+    /// A disconnect, a cancellation, a missing status or any other error is
+    /// never suppressed: those failures have to reach the caller.
+    /// </summary>
+    internal static bool IsCompletedStdinLifecycleFailure(
+        Exception failure,
+        Task execution,
+        Func<int?> exitStatus)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+
+        // ObjectDisposedException also derives from InvalidOperationException,
+        // but a disposed command is a real defect rather than a lifecycle race.
+        return failure is InvalidOperationException and not ObjectDisposedException &&
+               HasCompletedWithStatus(execution, exitStatus);
+    }
+
+    private static void DisposeQuietly(IDisposable disposable)
+    {
+        try
+        {
+            disposable.Dispose();
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>
+    /// Observes a command completion task without letting a late disconnect
+    /// become an unobserved task exception. The failure still shows up through
+    /// the channel's exit status, exactly as it did when EndExecute was owned
+    /// by the channel.
+    /// </summary>
+    private static async Task ObserveAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>
+    /// Copies the bytes SSH.NET's output pipes hold into the caller's bounded
+    /// tail. The same reader serves a command that is still streaming and one
+    /// that finished before the pumps started, because the pipes were captured
+    /// with the command: already buffered bytes are read like any other data.
+    /// A pipe read can stop in the middle of a multi-byte character at any
+    /// speed, so the decoder carries that partial sequence into the next read.
+    /// </summary>
+    internal static async Task PumpAsync(Stream stream, OfflineUpdateBoundedText target, CancellationToken token)
+    {
+        var bytes = new byte[4096];
+
+        // The decoder may carry up to three bytes of an unfinished sequence
+        // into the next read, so a full 4096-byte read plus that state can
+        // decode into more UTF-16 code units than the read has bytes: a
+        // completed four-byte character is a surrogate pair, and the carried
+        // prefix can also surface as a replacement character. Sizing the
+        // destination from the encoding's own worst-case promise keeps a
+        // single read from overrunning it and losing the whole output.
+        var chars = new char[Encoding.UTF8.GetMaxCharCount(bytes.Length)];
+        var decoder = Encoding.UTF8.GetDecoder();
         try
         {
             while (true)
             {
-                var read = await stream.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false);
+                var read = await stream.ReadAsync(bytes.AsMemory(), token).ConfigureAwait(false);
                 if (read == 0)
+                {
+                    var tail = decoder.GetChars(bytes, 0, 0, chars, 0, flush: true);
+                    if (tail > 0)
+                        target.Append(new string(chars, 0, tail));
                     return;
-                target.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                }
+
+                var count = decoder.GetChars(bytes, 0, read, chars, 0, flush: false);
+                if (count > 0)
+                    target.Append(new string(chars, 0, count));
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -455,32 +629,31 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
     /// <summary>
     /// Best-effort teardown for a command that started executing but whose
     /// channel could not be handed to the caller: cancel it remotely, wait a
-    /// bounded time for EndExecute so the command is not disposed mid-use, and
-    /// then release it. The caller rethrows the original failure.
+    /// bounded time for ExecuteAsync to finish so the command is not disposed
+    /// mid-use, and then release it. The caller rethrows the original failure
+    /// and the command is never started again.
     /// </summary>
-    private static void AbandonCommand(SshCommand command, IAsyncResult asyncResult)
+    private static void AbandonCommand(SshCommand command, Task execution)
     {
         Cancel(command);
 
-        var endTask = Task.Run(() => command.EndExecute(asyncResult), CancellationToken.None);
         try
         {
-            endTask.Wait(CommandDrainTimeout);
+            execution.Wait(CommandDrainTimeout);
         }
         catch
         {
         }
 
-        if (!endTask.IsCompleted)
+        if (!execution.IsCompleted)
+        {
+            // Keep observing a command that outlived the bounded wait so a
+            // later disconnect cannot surface as an unobserved failure.
+            _ = ObserveAsync(execution);
             return;
+        }
 
-        try
-        {
-            command.Dispose();
-        }
-        catch
-        {
-        }
+        DisposeQuietly(command);
     }
 
     private sealed class SshNetChannel : IOfflineUpdateSshChannel
@@ -489,26 +662,15 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
         private readonly Stream _input;
         private readonly Stream _output;
         private readonly Stream _error;
-        private readonly Task _endTask;
+        private readonly Task _completion;
 
-        internal SshNetChannel(SshCommand command, Stream input, Stream output, Stream error, IAsyncResult asyncResult)
+        internal SshNetChannel(SshCommand command, Stream input, Stream output, Stream error, Task execution)
         {
             _command = command;
             _input = input;
             _output = output;
             _error = error;
-            _endTask = Task.Run(
-                () =>
-                {
-                    try
-                    {
-                        _command.EndExecute(asyncResult);
-                    }
-                    catch
-                    {
-                    }
-                },
-                CancellationToken.None);
+            _completion = ObserveAsync(execution);
         }
 
         public Stream StandardInput => _input;
@@ -549,19 +711,19 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
 
         public bool WaitForExit(TimeSpan timeout)
         {
-            if (!_endTask.Wait(timeout))
+            if (!_completion.Wait(timeout))
             {
                 Cancel();
                 try
                 {
-                    _endTask.Wait(CommandDrainTimeout);
+                    _completion.Wait(CommandDrainTimeout);
                 }
                 catch
                 {
                 }
             }
 
-            return _endTask.IsCompleted && HasExited;
+            return _completion.IsCompleted && HasExited;
         }
 
         public void Cancel()
@@ -580,24 +742,75 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
             Cancel();
             try
             {
-                _endTask.Wait(CommandDrainTimeout);
+                _completion.Wait(CommandDrainTimeout);
             }
             catch
             {
             }
 
-            // Never dispose the command while EndExecute is still using it.
-            if (!_endTask.IsCompleted)
+            // Never dispose the command while ExecuteAsync is still using it.
+            if (!_completion.IsCompleted)
                 return;
 
-            try
-            {
-                _command.Dispose();
-            }
-            catch
-            {
-            }
+            DisposeQuietly(_command);
         }
+    }
+
+    /// <summary>
+    /// Standard input of a command that already exited. Reads report end of
+    /// stream, flushing is a no-op, and a write fails with IOException so a
+    /// caller that would have sent a sudo password or an upload observes the
+    /// closed channel instead of hanging or crashing the process.
+    /// </summary>
+    internal sealed class ClosedStandardInput : Stream
+    {
+        internal static readonly ClosedStandardInput Instance = new();
+
+        private const string ClosedMessage =
+            "The remote command has already completed; its standard input is closed.";
+
+        private ClosedStandardInput()
+        {
+        }
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => 0;
+
+        public override long Position
+        {
+            get => 0;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public override int Read(byte[] buffer, int offset, int count) => 0;
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(0);
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new IOException(ClosedMessage);
+
+        public override void Write(ReadOnlySpan<byte> buffer) => throw new IOException(ClosedMessage);
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.FromException(new IOException(ClosedMessage));
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromException(new IOException(ClosedMessage));
     }
 }
 

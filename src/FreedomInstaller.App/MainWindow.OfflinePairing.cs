@@ -112,22 +112,6 @@ namespace FreedomInstaller.App
         {
             AppendOfflineLog("Dynamic.OfflineUpdate.LogConnecting", opts.Host, opts.Port);
             var conn = await OfflineUpdateSshConnection.ConnectAsync(opts, null, ct);
-
-            // The authenticated info must prove the installed updater accepts
-            // the preflight session parameter before this connection is ever
-            // presented as usable. A key connection cannot install or repair
-            // the updater (the pairing key may be a forced command that can
-            // neither upload nor run sudo), so a device that does not
-            // advertise the capability is refused here instead of failing
-            // later in preflight or being accepted on its version alone.
-            if (!OfflineUpdateUiState.SupportsPreflightSession(conn.DeviceInfo))
-            {
-                await conn.DisposeAsync();
-                ClearOfflinePairing();
-                ShowOfflineUpdaterInstallPrompt();
-                return;
-            }
-
             await FinishOfflineConnectionAsync(conn, ct);
         }
 
@@ -179,8 +163,33 @@ namespace FreedomInstaller.App
             await FinishOfflineConnectionAsync(conn, ct);
         }
 
+        /// <summary>
+        /// The single point where an authenticated transport becomes the
+        /// panel's connection, shared by the key route and the password route.
+        ///
+        /// The authenticated info must prove the installed updater accepts the
+        /// preflight session parameter before this connection is ever
+        /// presented as usable. Neither route may install or repair the
+        /// updater through the key connection (the pairing key may be a forced
+        /// command that can neither upload nor run sudo), so a device that
+        /// does not advertise the capability is refused here instead of
+        /// failing later in preflight or being accepted on its version alone.
+        /// A device that advertises it but not the no-slot-control boot policy
+        /// still connects read-only; that policy only gates prepare, execute
+        /// and restart.
+        /// </summary>
         private async Task FinishOfflineConnectionAsync(IOfflineUpdateConnection conn, CancellationToken ct)
         {
+            if (!OfflineUpdateUiState.SupportsPreflightSession(conn.DeviceInfo))
+            {
+                // This transport was never adopted by the panel, so releasing it
+                // here is the only disposal on this path.
+                await conn.DisposeAsync();
+                ClearOfflinePairing();
+                ShowOfflineUpdaterInstallPrompt();
+                return;
+            }
+
             try
             {
                 string model = GetJsonString(conn.DeviceInfo, "model") ?? string.Empty;

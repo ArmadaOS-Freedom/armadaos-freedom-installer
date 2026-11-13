@@ -657,6 +657,79 @@ public class OfflineUpdateUiStateTests
         Assert.False(OfflineUpdateUiState.CanExportRecovery(receipt, hasSavedRecovery: true));
     }
 
+    // ---------- Read-only export gate (the button) ----------
+
+    [Theory]
+    [InlineData("{\"state\":\"prepared\"}")]
+    [InlineData("{\"state\":\"awaiting_recovery_export\"}")]
+    [InlineData("{\"state\":\"prepared\",\"result\":{\"state\":\"awaiting_recovery_export\"}}")]
+    public void CanExportRecoverySession_DoesNotNeedTheWriteBootPolicy(string json)
+    {
+        // Recovery export is read-only: a helper that never declared
+        // dual-boot-no-slot-control may still export the bundle its prepared
+        // transaction already holds. The gate therefore has no boot-policy
+        // input at all, while a real prepare/execute still needs it.
+        var info = Parse("{\"capabilities\":[\"preflight-session-v1\"],\"bootPolicy\":\"dual-boot-slot-control\"}")!.Value;
+        Assert.False(OfflineUpdateUiState.SupportsNoSlotControlBootPolicy(info));
+
+        Assert.True(OfflineUpdateUiState.CanExportRecoverySession(
+            connected: true, imported: true, preflightPassed: true, hasSelectedSession: true,
+            receipt: Parse(json), hasSavedRecovery: false));
+    }
+
+    [Theory]
+    [InlineData(false, true, true, true, false)]
+    [InlineData(true, false, true, true, false)]
+    [InlineData(true, true, false, true, false)]
+    [InlineData(true, true, true, false, false)]
+    [InlineData(true, true, true, true, true)]
+    public void CanExportRecoverySession_RequiresEveryLiveGateAndNoHeldBundle(
+        bool connected, bool imported, bool preflightPassed, bool hasSelectedSession, bool hasSavedRecovery)
+    {
+        Assert.False(OfflineUpdateUiState.CanExportRecoverySession(
+            connected, imported, preflightPassed, hasSelectedSession,
+            receipt: Receipt("prepared"), hasSavedRecovery: hasSavedRecovery));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("uploading")]
+    [InlineData("preparing")]
+    [InlineData("execute_queued")]
+    [InlineData("executing")]
+    [InlineData("awaiting_reboot")]
+    [InlineData("failed")]
+    [InlineData("unknown_custom_state")]
+    public void CanExportRecoverySession_NeverOpensTheMutatingStates(string? state)
+    {
+        Assert.False(OfflineUpdateUiState.CanExportRecoverySession(
+            connected: true, imported: true, preflightPassed: true, hasSelectedSession: true,
+            receipt: state is null ? null : Receipt(state), hasSavedRecovery: false));
+    }
+
+    // ---------- Read-only preflight refresh ----------
+
+    [Theory]
+    [InlineData("uploading", true)]
+    [InlineData("uploaded", true)]
+    [InlineData("prepare_queued", true)]
+    [InlineData("preparing", true)]
+    [InlineData("prepared", true)]
+    // The export phase may be the top-level state, exactly as it appears
+    // nested in a prepared receipt's result.
+    [InlineData("awaiting_recovery_export", true)]
+    [InlineData("up_to_date", true)]
+    [InlineData("execute_queued", false)]
+    [InlineData("executing", false)]
+    [InlineData("awaiting_reboot", false)]
+    [InlineData("failed", false)]
+    [InlineData("unknown_custom_state", false)]
+    [InlineData(null, false)]
+    public void ShouldRefreshPreflight_CoversTheExportPhaseInBothForms(string? state, bool expected)
+    {
+        Assert.Equal(expected, OfflineUpdateUiState.ShouldRefreshPreflight(state));
+    }
+
     // ---------- Recovery metadata precedence (must match Core) ----------
 
     private const string TxId = "123e4567-e89b-12d3-a456-426614174000";

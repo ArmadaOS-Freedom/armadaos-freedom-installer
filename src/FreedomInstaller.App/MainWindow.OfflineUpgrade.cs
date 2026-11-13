@@ -170,12 +170,13 @@ namespace FreedomInstaller.App
                 OfflineUpdateUiState.CanPrepareSession(connected, imported, _offlinePreflightPassed,
                 _offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null);
             // A session the tablet already prepared reaches the recovery
-            // export through the same Plan action. It is enabled only with the
-            // same live evidence a prepare needs (package, selection,
-            // preflight) and only while no verified local bundle is held.
-            bool canExportRecovery = !busy && bootPolicySupported && imported &&
-                _offlinePreflightPassed && _offlineSelectedSession != null &&
-                OfflineUpdateUiState.CanExportRecovery(_offlineLastReceipt, _offlineSavedRecovery != null);
+            // export through the same Plan action. Export is read-only, so it
+            // is enabled with the same live evidence a prepare needs (package,
+            // selection, preflight) and only while no verified local bundle is
+            // held; the boot policy is not part of this gate.
+            bool canExportRecovery = !busy && OfflineUpdateUiState.CanExportRecoverySession(
+                connected, imported, _offlinePreflightPassed, _offlineSelectedSession != null,
+                _offlineLastReceipt, _offlineSavedRecovery != null);
             OfflineUpgradePanel.PrepareButton.IsEnabled = canPrepare || canExportRecovery;
             OfflineUpgradePanel.RefreshButton.IsEnabled = !busy &&
                 OfflineUpdateUiState.CanRefreshStatus(connected, _offlineSelectedSession != null);
@@ -850,17 +851,20 @@ namespace FreedomInstaller.App
             await RunOfflineUpgradeAsync(async (gen, ct) =>
             {
                 EnsureReadyForSessionWork(requireSelectedSession: _offlineSessions.Count > 0);
-                if (!_offlineBootPolicySupported)
+                // A session the tablet already prepared reaches the export step
+                // instead of failing the prepare gate; it is never prepared a
+                // second time. Export is read-only, so it is the only branch
+                // that does not need the write-side boot policy.
+                bool exportRecoveryOnly =
+                    OfflineUpdateUiState.CanExportRecovery(_offlineLastReceipt, _offlineSavedRecovery != null);
+                if (exportRecoveryOnly && _offlineSelectedSession == null)
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                if (!exportRecoveryOnly && !_offlineBootPolicySupported)
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
                 if (!_offlinePreflightPassed)
                     throw new InvalidOperationException(string.IsNullOrEmpty(_offlinePreflightError)
                         ? T("Dynamic.OfflineUpdate.ErrorPreflightRequired")
                         : _offlinePreflightError!);
-                // A session the tablet already prepared reaches the export step
-                // instead of failing the prepare gate; it is never prepared a
-                // second time.
-                bool exportRecoveryOnly =
-                    OfflineUpdateUiState.CanExportRecovery(_offlineLastReceipt, _offlineSavedRecovery != null);
                 if (!exportRecoveryOnly &&
                     !OfflineUpdateUiState.CanPrepare(_offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorStateNotActionable", _uiText.Format(LocalizePhase(GetReceiptState(_offlineLastReceipt)))));
@@ -954,15 +958,10 @@ namespace FreedomInstaller.App
             SavedOfflineUpdateRecovery? existing = null;
             if (context != null)
             {
-                try
-                {
-                    existing = await Task.Run(
-                        () => TryLoadExistingRecoveryOrThrow(sessionRoot, context, _offlineDescriptorSha256!, ct), ct);
-                }
-                catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
-                {
-                    AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoveryIgnored", ex.Message);
-                }
+                var scan = await Task.Run(
+                    () => OfflineUpdateRecoveryCatalog.Scan(sessionRoot, context, _offlineDescriptorSha256!, ct), ct);
+                ReportSkippedOfflineRecoveryBundles(scan.Skipped);
+                existing = scan.Recovery;
             }
 
             if (existing == null)
@@ -1038,8 +1037,7 @@ namespace FreedomInstaller.App
                 // already holds the payload is not charged for it twice.
                 // Executing/terminal receipts keep their own status message.
                 string? refreshed = GetReceiptState(_offlineLastReceipt);
-                bool preflightable = refreshed is "uploading" or "uploaded" or
-                    "prepare_queued" or "preparing" or "prepared" or "up_to_date";
+                bool preflightable = OfflineUpdateUiState.ShouldRefreshPreflight(refreshed);
                 if (hasPackage && preflightable)
                     await RefreshOfflinePreflightAsync(ct);
             });
@@ -1198,11 +1196,13 @@ namespace FreedomInstaller.App
                         var ctx = TryExtractRecoveryContext(receipt, _offlineConnectedModel!);
                         if (ctx != null)
                         {
-                            var loaded = await Task.Run(() => TryLoadExistingRecoveryOrThrow(sessionRoot, ctx, _offlineDescriptorSha256!, ct), ct);
-                            if (loaded != null)
+                            var scan = await Task.Run(
+                                () => OfflineUpdateRecoveryCatalog.Scan(sessionRoot, ctx, _offlineDescriptorSha256!, ct), ct);
+                            ReportSkippedOfflineRecoveryBundles(scan.Skipped);
+                            if (scan.Recovery != null)
                             {
-                                _offlineSavedRecovery = loaded;
-                                SetText(OfflineUpgradePanel.RecoveryPathText, "Dynamic.OfflineUpdate.Value", loaded.DirectoryPath);
+                                _offlineSavedRecovery = scan.Recovery;
+                                SetText(OfflineUpgradePanel.RecoveryPathText, "Dynamic.OfflineUpdate.Value", scan.Recovery.DirectoryPath);
                             }
                         }
                         else
@@ -1213,8 +1213,19 @@ namespace FreedomInstaller.App
                     }
                     if (_offlineSavedRecovery != null)
                     {
-                        SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StatePreparedReady");
-                        AppendOfflineLog("Dynamic.OfflineUpdate.LogPreparedReady");
+                        if (_offlineBootPolicySupported)
+                        {
+                            SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StatePreparedReady");
+                            AppendOfflineLog("Dynamic.OfflineUpdate.LogPreparedReady");
+                        }
+                        else
+                        {
+                            // The read-only export produced the bundle, but this
+                            // helper never declared the no-slot-control policy:
+                            // execution stays blocked, so the panel keeps
+                            // reporting the read-only connection.
+                            SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateBootPolicyReadOnly");
+                        }
                     }
                     else if (string.IsNullOrEmpty(_offlineDescriptorSha256))
                     {
@@ -1589,20 +1600,15 @@ namespace FreedomInstaller.App
             AppendOfflineLog("Dynamic.OfflineUpdate.LogDisconnected");
         }
 
-        private SavedOfflineUpdateRecovery? TryLoadExistingRecoveryOrThrow(string sessionRoot, OfflineUpdateRecoveryContext context, string descriptorSha, CancellationToken ct)
+        /// <summary>
+        /// Report every bundle the scan refused, on the thread that owns the
+        /// panel. A refused bundle stays on disk untouched: it may belong to
+        /// another session or package and is never rewritten or deleted.
+        /// </summary>
+        private void ReportSkippedOfflineRecoveryBundles(IReadOnlyList<OfflineSkippedRecoveryBundle> skipped)
         {
-            if (!Directory.Exists(sessionRoot))
-                return null;
-
-            foreach (string dir in Directory.GetDirectories(sessionRoot))
-            {
-                string ackPath = Path.Combine(dir, "recovery-ack.json");
-                if (!File.Exists(ackPath))
-                    continue;
-
-                return PackageImporter.LoadOfflineUpdateRecovery(dir, context, descriptorSha, ct);
-            }
-            return null;
+            foreach (var bundle in skipped)
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoveryIgnored", bundle.Reason);
         }
 
         /// <summary>

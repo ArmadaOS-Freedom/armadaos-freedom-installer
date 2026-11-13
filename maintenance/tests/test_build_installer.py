@@ -103,7 +103,11 @@ def _offline_bundle_bytes(capabilities=("preflight-session-v1",),
                           **overrides):
     document = _offline_manifest(**overrides)
     if capabilities is not None:
-        document["capabilities"] = list(capabilities)
+        # Keep the caller's exact JSON type.  Coercing to list() would turn a
+        # malformed string such as "preflight-session-v1" into a list of
+        # characters and the negative test would stop exercising the
+        # "capabilities must be a list" branch.
+        document["capabilities"] = capabilities
     members = [("manifest.json", json.dumps(document).encode("utf-8"))]
     if entry_bytes is not None:
         members.append((OFFLINE_ENTRY, entry_bytes, entry_mode))
@@ -400,6 +404,7 @@ class PrepareTests(unittest.TestCase):
         for prop in build_installer._OFFLINE_PROPERTY_NAMES:
             self.assertNotIn(f"<{prop}>", props_xml)
         self.assertEqual(record["offlineBootstrap"], {})
+        self.assertIsNone(record["offlineUpdaterVersion"])
 
         # fresh tool pins on disk match record.tools
         pins_json = json.loads(Path(record["toolPinsJson"]).read_text(encoding="utf-8"))
@@ -511,6 +516,63 @@ class PrepareTests(unittest.TestCase):
         for prop in build_installer._OFFLINE_PROPERTY_NAMES:
             self.assertNotIn(prop, build_installer._PROPERTY_NAMES)
         self.assertIn("<BundledToolPinsSource>", props_xml)
+        # The version is taken from the validated manifest, not a constant.
+        self.assertIn(
+            f"<{build_installer._OFFLINE_VERSION_PROPERTY}>0.8.0"
+            f"</{build_installer._OFFLINE_VERSION_PROPERTY}>",
+            props_xml,
+        )
+        self.assertEqual(record["offlineUpdaterVersion"], "0.8.0")
+
+    def test_offline_assets_use_the_validated_manifest_version(self):
+        offline = self.work_parent / "offline & inputs"
+        script = _write(offline / "armada-offline-bootstrap", b"#!/bin/sh\n")
+        bundle = _write(
+            offline / "armada-offline-updater.tar.gz",
+            _offline_bundle_bytes(version="0.8.1"),
+        )
+        record, _, _, _ = self._run_prepare(
+            offline_bootstrap_script=str(script),
+            offline_updater_bundle=str(bundle),
+        )
+
+        props_xml = Path(record["propsPath"]).read_text(encoding="utf-8")
+        self.assertIn(
+            f"<{build_installer._OFFLINE_VERSION_PROPERTY}>0.8.1"
+            f"</{build_installer._OFFLINE_VERSION_PROPERTY}>",
+            props_xml,
+        )
+        self.assertEqual(record["offlineUpdaterVersion"], "0.8.1")
+
+    def test_offline_bundle_over_the_transport_limit_fails_before_build(self):
+        # The managed SSH session refuses uploads above 256 MiB; accepting a
+        # larger bundle here would only fail later on the tablet.
+        self.assertEqual(
+            build_installer._OFFLINE_MAX_BUNDLE_BYTES, 256 * 1024 * 1024
+        )
+        offline = self.work_parent / "offline & inputs"
+        script = _write(offline / "armada-offline-bootstrap", b"#!/bin/sh\n")
+        bundle = offline / "too-big.tar.gz"
+        # Sparse file: only the logical size matters, the manifest is never read.
+        with open(bundle, "wb") as handle:
+            handle.truncate(build_installer._OFFLINE_MAX_BUNDLE_BYTES + 1)
+
+        with mock.patch.object(
+            fetch_build_inputs, "fetch_all"
+        ) as fetch_mock, mock.patch.object(build_installer, "_run") as run_mock:
+            with self.assertRaises(SystemExit) as caught:
+                build_installer.prepare(
+                    self.repo_root,
+                    self.work_dir,
+                    manifest_path=(
+                        self.repo_root / "maintenance" / "build-inputs.json"
+                    ),
+                    offline_bootstrap_script=str(script),
+                    offline_updater_bundle=str(bundle),
+                )
+        fetch_mock.assert_not_called()
+        run_mock.assert_not_called()
+        self.assertIn("bundle size is out of bounds", str(caught.exception))
 
     def test_offline_assets_must_be_supplied_together(self):
         script, bundle = self._offline_assets()
@@ -597,6 +659,7 @@ class PrepareTests(unittest.TestCase):
     def test_offline_bundle_with_malformed_capabilities_fails_before_build(self):
         cases = (
             "preflight-session-v1",
+            {"preflight-session-v1": True},
             [],
             [1],
             ["Preflight Session"],
@@ -610,6 +673,20 @@ class PrepareTests(unittest.TestCase):
                 message = self._prepare_with_bundle(
                     _offline_bundle_bytes(capabilities=value))
                 self.assertIn("offline bundle error", message)
+
+    def test_offline_bundle_fixture_preserves_malformed_capability_types(self):
+        # Regression: the fixture must serialize the caller's exact type so the
+        # malformed-capabilities cases really exercise the validator instead of
+        # a list() coercion of a string into characters.
+        for value in ("preflight-session-v1", {"preflight-session-v1": True}, 7):
+            with self.subTest(capabilities=value):
+                data = _offline_bundle_bytes(capabilities=value)
+                with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+                    document = json.loads(
+                        archive.extractfile("manifest.json").read().decode("utf-8")
+                    )
+                self.assertEqual(document["capabilities"], value)
+                self.assertIs(type(document["capabilities"]), type(value))
 
     def test_offline_bundle_identity_and_version_are_validated(self):
         cases = (

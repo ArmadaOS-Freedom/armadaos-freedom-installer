@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -13,9 +14,10 @@ public enum OfflineUpdateBootstrapFailure
     SudoUnavailable = 5,
 
     /// <summary>
-    /// The tablet runs a newer updater that reports itself incapable. Deploying
-    /// the bundled runtime would silently downgrade it, so the coordinator
-    /// fails instead.
+    /// The tablet runs a newer updater that is incapable or incomplete.
+    /// Deploying the bundled runtime would silently downgrade it, and reusing
+    /// it would silently accept a broken runtime, so the coordinator fails
+    /// instead.
     /// </summary>
     UpdaterIncompatible = 6,
 }
@@ -69,11 +71,14 @@ public sealed record OfflineUpdateBootstrapProbeResult(
 {
     /// <summary>
     /// The device can host the bootstrap install. The updater itself may be
-    /// absent or incomplete; that is what deployment is for.
+    /// absent or incomplete; that is what deployment is for. Upgrade
+    /// eligibility is deliberately not part of this: an already installed,
+    /// capable and complete updater is still usable for a read-only
+    /// connection on a device that must not be upgraded. Eligibility gates
+    /// deployment only.
     /// </summary>
     public bool Ready =>
         Connection.Ready &&
-        Upgrade.Eligible &&
         MissingDependencies.Count == 0;
 }
 
@@ -85,7 +90,10 @@ public sealed record OfflineUpdateBootstrapResult(bool Deployed, OfflineUpdateBo
 /// updater bundle in a task-created, user-owned /tmp directory, probes the
 /// device, and lets the bootstrap install the root-owned sysext after checking
 /// a locally computed bundle hash. It never prepares, executes or restarts an
-/// upgrade and never removes an already installed service extension.
+/// upgrade and never removes an already installed service extension. An
+/// already installed, capable and complete updater that is at least the
+/// bundled version is used as-is on a device that is not upgrade-eligible, so
+/// read-only connections keep working; deployment itself is refused there.
 /// </summary>
 public sealed class OfflineUpdateBootstrapCoordinator
 {
@@ -99,7 +107,6 @@ public sealed class OfflineUpdateBootstrapCoordinator
     private const string BundleId = "armada-offline-updater";
     private const string ExtensionName = "zzzzzz-armada-offline-updater";
     private const string UpdaterEntryPath = "/usr/libexec/armada/armada-offline-update";
-    private const string RequiredBundleVersion = "0.8.0";
     private const int SupportedSchemaVersion = 1;
 
     // mktemp -d /tmp/armada-offline-bootstrap.XXXXXXXXXX creates exactly the
@@ -119,13 +126,21 @@ public sealed class OfflineUpdateBootstrapCoordinator
     private readonly Func<Stream> _openScript;
     private readonly Func<Stream> _openBundle;
     private readonly string _expectedBundleSha256;
+    private readonly string _expectedBundleVersion;
     private readonly bool _useSudoForInstall;
     private readonly IProgress<OfflineUpdateBootstrapProgress>? _progress;
 
+    /// <param name="expectedBundleVersion">
+    /// The <c>version</c> of the embedded updater bundle manifest, supplied
+    /// from validated build metadata. It is the only accepted install-receipt
+    /// version and the only accepted post-install probe version, so a new
+    /// bundle never has to change this class.
+    /// </param>
     public OfflineUpdateBootstrapCoordinator(
         Func<Stream> openScript,
         Func<Stream> openBundle,
         string expectedBundleSha256,
+        string expectedBundleVersion,
         IProgress<OfflineUpdateBootstrapProgress>? progress = null,
         bool useSudoForInstall = true)
     {
@@ -140,9 +155,18 @@ public sealed class OfflineUpdateBootstrapCoordinator
                 nameof(expectedBundleSha256));
         }
 
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedBundleVersion);
+        if (!TryParseVersionParts(expectedBundleVersion, out _))
+        {
+            throw new ArgumentException(
+                "The expected updater bundle version must be a dotted decimal version from the validated bundle manifest.",
+                nameof(expectedBundleVersion));
+        }
+
         _openScript = openScript;
         _openBundle = openBundle;
         _expectedBundleSha256 = expectedBundleSha256;
+        _expectedBundleVersion = expectedBundleVersion;
         _useSudoForInstall = useSudoForInstall;
         _progress = progress;
     }
@@ -178,6 +202,25 @@ public sealed class OfflineUpdateBootstrapCoordinator
             {
                 Report(ReadyPhase, probe.Updater.Version);
                 return new OfflineUpdateBootstrapResult(false, probe);
+            }
+
+            // The installed updater is missing, incomplete or older, so the
+            // bundled runtime has to be deployed. That writes to the device
+            // and therefore requires an upgrade-eligible, known-model, safe
+            // boot state. An ineligible device is still allowed to use an
+            // already installed runtime read-only, which the branch above
+            // handled.
+            var deployBlockers = new List<string>();
+            if (!probe.Upgrade.Eligible)
+                deployBlockers.Add("upgrade is not eligible" + DescribeReasons(probe.Upgrade.Reasons));
+            if (IsUnknownModel(probe.System.Model))
+                deployBlockers.Add("the device model is unknown");
+            if (deployBlockers.Count > 0)
+            {
+                throw new OfflineUpdateBootstrapException(
+                    OfflineUpdateBootstrapFailure.ProbeFailed,
+                    "The bundled offline updater cannot be deployed: " +
+                    string.Join("; ", deployBlockers) + ".");
             }
 
             Report(DeployingPhase, probe.Updater.Version);
@@ -380,7 +423,7 @@ public sealed class OfflineUpdateBootstrapCoordinator
         // update service is independent of the offline runtime, and only the
         // updater entry, its capability and its files decide readiness.
 
-        var detail = DescribeBlockers(connection, upgrade, dependencies);
+        var detail = DescribeBlockers(connection, dependencies);
         return new OfflineUpdateBootstrapProbeResult(
             connection,
             upgrade,
@@ -487,14 +530,11 @@ public sealed class OfflineUpdateBootstrapCoordinator
 
     private static string? DescribeBlockers(
         OfflineUpdateBootstrapConnectionState connection,
-        OfflineUpdateBootstrapUpgradeState upgrade,
         IReadOnlyList<string> missingDependencies)
     {
         var parts = new List<string>();
         if (!connection.Ready)
             parts.Add("connection is not root-capable" + DescribeReasons(connection.Reasons));
-        if (!upgrade.Eligible)
-            parts.Add("upgrade is not eligible" + DescribeReasons(upgrade.Reasons));
         if (missingDependencies.Count > 0)
             parts.Add("missing device dependencies: " + string.Join(", ", missingDependencies));
         return parts.Count == 0 ? null : string.Join("; ", parts);
@@ -503,7 +543,7 @@ public sealed class OfflineUpdateBootstrapCoordinator
     private static string DescribeReasons(IReadOnlyList<string> reasons) =>
         reasons.Count == 0 ? string.Empty : " (" + string.Join(", ", reasons) + ")";
 
-    private static void EnsureVerified(OfflineUpdateBootstrapProbeResult probe)
+    private void EnsureVerified(OfflineUpdateBootstrapProbeResult probe)
     {
         var problems = new List<string>();
         if (!probe.Ready)
@@ -514,11 +554,11 @@ public sealed class OfflineUpdateBootstrapCoordinator
             problems.Add("the updater does not report the required capability");
         if (probe.Updater.Missing.Count > 0)
             problems.Add("missing updater files: " + string.Join(", ", probe.Updater.Missing));
-        if (!IsAtLeast(probe.Updater.Version, RequiredBundleVersion))
+        if (!string.Equals(probe.Updater.Version, _expectedBundleVersion, StringComparison.Ordinal))
         {
             problems.Add(
                 "the reported updater version '" + (probe.Updater.Version ?? "<none>") +
-                "' is below " + RequiredBundleVersion);
+                "' is not the deployed bundle version " + _expectedBundleVersion);
         }
 
         if (problems.Count == 0)
@@ -588,7 +628,7 @@ public sealed class OfflineUpdateBootstrapCoordinator
         EnsureReceiptField(root, "extension", ExtensionName);
         EnsureReceiptField(root, "entry", UpdaterEntryPath);
         EnsureReceiptField(root, "sha256", _expectedBundleSha256);
-        EnsureReceiptField(root, "version", RequiredBundleVersion);
+        EnsureReceiptField(root, "version", _expectedBundleVersion);
 
         if (string.Equals(state, "installed", StringComparison.Ordinal))
         {
@@ -639,15 +679,28 @@ public sealed class OfflineUpdateBootstrapCoordinator
         }
     }
 
-    private static bool NeedsDeployment(OfflineUpdateBootstrapProbeResult probe)
+    private bool NeedsDeployment(OfflineUpdateBootstrapProbeResult probe)
     {
         var updater = probe.Updater;
+
+        // On a device that must not be upgraded, a capable and complete
+        // updater that is at least the bundled version is used read-only as it
+        // is. Nothing is written, so the hash-verified reinstall that an
+        // upgrade-eligible device performs for an equal version is skipped.
+        if (!probe.Upgrade.Eligible && CanRunReadOnly(probe))
+            return false;
+
         if (!updater.EntryPresent)
             return true;
 
-        if (!updater.Capable)
+        if (IsNewer(updater.Version, _expectedBundleVersion))
         {
-            if (IsNewer(updater.Version, RequiredBundleVersion))
+            // A newer runtime is never replaced by the bundled one. That would
+            // be a rollback of a runtime this installer cannot validate. But
+            // reusing it is only safe when it is a complete, capable runtime;
+            // an incomplete newer updater must be rejected instead of silently
+            // staying broken.
+            if (!updater.Capable)
             {
                 throw new OfflineUpdateBootstrapException(
                     OfflineUpdateBootstrapFailure.UpdaterIncompatible,
@@ -656,25 +709,87 @@ public sealed class OfflineUpdateBootstrapCoordinator
                     "update the tablet runtime manually or use the matching installer.");
             }
 
-            return true;
+            if (updater.Missing.Count > 0)
+            {
+                throw new OfflineUpdateBootstrapException(
+                    OfflineUpdateBootstrapFailure.UpdaterIncompatible,
+                    "The tablet has a newer offline updater (" + updater.Version +
+                    ") that is missing required files: " + string.Join(", ", updater.Missing) +
+                    ". This installer never downgrades a newer runtime; repair the tablet runtime manually or use the matching installer.");
+            }
+
+            return false;
         }
 
         // A same-version entry is not proof that the runtime contains the
         // current fixes. The helper install verifies every bundled file hash
         // and reuses only exact matches, so an equal or older version goes
         // through that verification path.
-        return !IsNewer(updater.Version, RequiredBundleVersion);
+        return true;
     }
 
-    private static bool IsNewer(string? version, string baseline) =>
-        Version.TryParse(version, out var parsed) &&
-        Version.TryParse(baseline, out var reference) &&
-        parsed > reference;
+    private bool CanRunReadOnly(OfflineUpdateBootstrapProbeResult probe) =>
+        probe.Updater.EntryPresent &&
+        probe.Updater.Capable &&
+        probe.Updater.Missing.Count == 0 &&
+        !IsOlder(probe.Updater.Version, _expectedBundleVersion);
 
-    private static bool IsAtLeast(string? version, string minimum) =>
-        Version.TryParse(version, out var parsed) &&
-        Version.TryParse(minimum, out var required) &&
-        parsed >= required;
+    private static bool IsUnknownModel(string model) =>
+        string.Equals(model, "unknown", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsOlder(string? version, string baseline) =>
+        TryParseVersionParts(version, out var parsed) &&
+        TryParseVersionParts(baseline, out var reference) &&
+        CompareVersionParts(parsed, reference) < 0;
+
+    private static bool IsNewer(string? version, string baseline) =>
+        TryParseVersionParts(version, out var parsed) &&
+        TryParseVersionParts(baseline, out var reference) &&
+        CompareVersionParts(parsed, reference) > 0;
+
+    /// <summary>
+    /// Dotted decimal version parts, compared numerically. Using the helper's
+    /// reported string as a rounded <see cref="Version"/> would either reject
+    /// valid manifests or mis-order values such as 0.8.10 against 0.8.9.
+    /// </summary>
+    private static bool TryParseVersionParts(string? value, out int[] parts)
+    {
+        parts = Array.Empty<int>();
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var segments = value.Split('.');
+        var parsed = new int[segments.Length];
+        for (var index = 0; index < segments.Length; index++)
+        {
+            if (segments[index].Length == 0 ||
+                !int.TryParse(
+                    segments[index],
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out parsed[index]))
+            {
+                return false;
+            }
+        }
+
+        parts = parsed;
+        return true;
+    }
+
+    private static int CompareVersionParts(int[] left, int[] right)
+    {
+        var length = Math.Max(left.Length, right.Length);
+        for (var index = 0; index < length; index++)
+        {
+            var l = index < left.Length ? left[index] : 0;
+            var r = index < right.Length ? right[index] : 0;
+            if (l != r)
+                return l.CompareTo(r);
+        }
+
+        return 0;
+    }
 
     private void Report(string phase, string? detail) =>
         _progress?.Report(new OfflineUpdateBootstrapProgress(phase, detail));

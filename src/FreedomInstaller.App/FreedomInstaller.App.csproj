@@ -60,6 +60,14 @@
                       WithCulture="false" />
   </ItemGroup>
 
+  <!-- Version of the embedded updater bundle manifest. maintenance/build_installer.py
+       reads it from the validated manifest and passes it through the generated
+       props, so the coordinator never hardcodes a bundle version. -->
+  <ItemGroup Condition="'$(BundledOfflineUpdaterVersion)' != ''">
+    <AssemblyMetadata Include="BundledOfflineUpdaterVersion"
+                      Value="$(BundledOfflineUpdaterVersion)" />
+  </ItemGroup>
+
   <!-- Bundled platform-tools: only embedded when the build supplies an existing archive.
        The archive must be the official platform-tools-windows.zip; it is never downloaded here. -->
   <ItemGroup Condition="'$(BundledPlatformToolsArchive)' != '' and Exists('$(BundledPlatformToolsArchive)')">
@@ -217,6 +225,9 @@
     <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineUpdaterBundle)' != '' and !Exists('$(BundledOfflineUpdaterBundle)')"
            Code="FRDM1030"
            Text="BundledOfflineUpdaterBundle '$(BundledOfflineUpdaterBundle)' does not exist. Point it at the existing armada-offline-updater.tar.gz bundle; the build never downloads it." />
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineUpdaterBundle)' != '' and '$(BundledOfflineUpdaterVersion)' == ''"
+           Code="FRDM1031"
+           Text="BundledOfflineUpdaterVersion is not set. It must come from the validated updater bundle manifest via maintenance/build_installer.py; the install receipt and post-install check are never validated against a hardcoded version." />
   </Target>
 
 </Project>

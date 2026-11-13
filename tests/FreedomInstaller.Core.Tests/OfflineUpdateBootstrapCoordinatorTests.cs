@@ -170,7 +170,8 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
     private static OfflineUpdateBootstrapCoordinator Coordinator(
         string? expectedSha = null,
         byte[]? bundle = null,
-        List<string>? phases = null)
+        List<string>? phases = null,
+        string expectedVersion = BundleVersion)
     {
         var bytes = bundle ?? Bundle;
         var progress = phases is null
@@ -180,6 +181,7 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
             () => new MemoryStream(Encoding.UTF8.GetBytes("#!/usr/bin/env python3\n")),
             () => new MemoryStream(bytes),
             expectedSha ?? Convert.ToHexStringLower(SHA256.HashData(bytes)),
+            expectedVersion,
             progress);
     }
 
@@ -241,7 +243,8 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
             () => new MemoryStream(Encoding.UTF8.GetBytes("#!/usr/bin/env python3\n")),
             () => new MemoryStream(Bundle),
             BundleSha256(),
-            useSudoForInstall: false);
+            useSudoForInstall: false,
+            expectedBundleVersion: BundleVersion);
 
         await coordinator.EnsureAsync(session);
 
@@ -287,6 +290,149 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
     }
 
     [Fact]
+    public async Task Ensure_ReusableRuntimeOnIneligibleDeviceAllowsReadOnlyConnection()
+    {
+        // A device that must not be upgraded still has a complete, capable
+        // updater at the bundled version. Nothing is deployed, but the
+        // connection is usable read-only. On an eligible device the same
+        // probe would go through the hash-verified install path instead.
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(
+                    upgradeEligible: false,
+                    upgradeReasons: new[] { "unsafe-boot-state" },
+                    entryPresent: true,
+                    version: BundleVersion,
+                    capable: true),
+            }),
+        };
+
+        var result = await Coordinator().EnsureAsync(session);
+
+        Assert.False(result.Deployed);
+        Assert.True(result.Probe.Ready);
+        Assert.False(result.Probe.Upgrade.Eligible);
+        Assert.Contains("unsafe-boot-state", result.Probe.Upgrade.Reasons);
+        Assert.Single(session.ProbesExecuted());
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.DoesNotContain(session.Uploads, u => u.Path.EndsWith(".tar.gz", StringComparison.Ordinal));
+        Assert.Single(CleanupCommands(session));
+    }
+
+    [Fact]
+    public async Task Ensure_IneligibleDeviceNeverDeploysTheUpdater()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(
+                    upgradeEligible: false,
+                    upgradeReasons: new[] { "unsafe-boot-state" }),
+            }),
+        };
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(() =>
+            Coordinator().EnsureAsync(session));
+
+        Assert.Equal(OfflineUpdateBootstrapFailure.ProbeFailed, error.Reason);
+        Assert.Contains("not eligible", error.Message, StringComparison.Ordinal);
+        Assert.Contains("unsafe-boot-state", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.DoesNotContain(session.Uploads, u => u.Path.EndsWith(".tar.gz", StringComparison.Ordinal));
+        Assert.Single(CleanupCommands(session));
+    }
+
+    [Fact]
+    public async Task Ensure_IneligibleDeviceWithOlderRuntimeIsNotUsedReadOnly()
+    {
+        // A complete but older runtime lacks the required read-only contract,
+        // and the device must not be upgraded to replace it.
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(
+                    upgradeEligible: false,
+                    upgradeReasons: new[] { "unsafe-boot-state" },
+                    entryPresent: true,
+                    version: "0.7.0",
+                    capable: true),
+            }),
+        };
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(() =>
+            Coordinator().EnsureAsync(session));
+
+        Assert.Equal(OfflineUpdateBootstrapFailure.ProbeFailed, error.Reason);
+        Assert.Contains("cannot be deployed", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.Single(CleanupCommands(session));
+    }
+
+    [Fact]
+    public async Task Ensure_UnknownModelNeverDeploysTheUpdater()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[] { Probe(model: "unknown") }),
+        };
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(() =>
+            Coordinator().EnsureAsync(session));
+
+        Assert.Equal(OfflineUpdateBootstrapFailure.ProbeFailed, error.Reason);
+        Assert.Contains("model is unknown", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.DoesNotContain(session.Uploads, u => u.Path.EndsWith(".tar.gz", StringComparison.Ordinal));
+        Assert.Single(CleanupCommands(session));
+    }
+
+    [Fact]
+    public async Task Ensure_NewerCapableRuntimeWithMissingFilesIsRejectedWithoutDowngrade()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(
+                    entryPresent: true,
+                    version: "0.9.0",
+                    capable: true,
+                    updaterMissing: new[] { "usr/libexec/armada/armada-offline-update" }),
+            }),
+        };
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(() =>
+            Coordinator().EnsureAsync(session));
+
+        Assert.Equal(OfflineUpdateBootstrapFailure.UpdaterIncompatible, error.Reason);
+        Assert.Contains("0.9.0", error.Message, StringComparison.Ordinal);
+        Assert.Contains("missing required files", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.Single(CleanupCommands(session));
+    }
+
+    [Fact]
+    public async Task Ensure_NewerRuntimeComparisonIsNumericNotLexical()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(entryPresent: true, version: "0.8.10", capable: true),
+            }),
+        };
+
+        var result = await Coordinator(expectedVersion: "0.8.9").EnsureAsync(session);
+
+        Assert.False(result.Deployed);
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+    }
+
+    [Fact]
     public async Task Ensure_SameVersionCapableRuntimeUsesHashVerifiedInstall()
     {
         var session = new FakeSession
@@ -320,6 +466,79 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
 
         Assert.True(result.Deployed);
         Assert.Single(session.Commands, c => c.Arguments.Contains("install"));
+    }
+
+    [Fact]
+    public async Task Ensure_UsesTheBundleManifestVersionForReceiptAndVerification()
+    {
+        // 0.8.1 has no fixed constant in the coordinator: the version comes
+        // from the validated manifest metadata and is what the receipt and the
+        // post-install probe must both report.
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(version: "0.8.0"),
+                Probe(entryPresent: true, version: "0.8.1", capable: true),
+            }),
+            InstallResult = new OfflineUpdateSshCommandResult(
+                0,
+                InstallReceipt(version: "0.8.1"),
+                string.Empty),
+        };
+
+        var result = await Coordinator(expectedVersion: "0.8.1").EnsureAsync(session);
+
+        Assert.True(result.Deployed);
+        Assert.Equal("0.8.1", result.Probe.Updater.Version);
+        var install = Assert.Single(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.True(install.UseSudo);
+    }
+
+    [Fact]
+    public async Task Ensure_InstallReceiptWithWrongBundleVersionIsRejected()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[] { Probe() }),
+            InstallResult = new OfflineUpdateSshCommandResult(
+                0,
+                InstallReceipt(version: "0.8.0"),
+                string.Empty),
+        };
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(() =>
+            Coordinator(expectedVersion: "0.8.1").EnsureAsync(session));
+
+        Assert.Equal(OfflineUpdateBootstrapFailure.DeployFailed, error.Reason);
+        Assert.Contains("version", error.Message, StringComparison.Ordinal);
+        Assert.Contains("0.8.0", error.Message, StringComparison.Ordinal);
+        Assert.Contains("0.8.1", error.Message, StringComparison.Ordinal);
+        Assert.Single(CleanupCommands(session));
+    }
+
+    [Fact]
+    public async Task Ensure_PostInstallVersionMismatchIsRejected()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(version: "0.8.0"),
+                Probe(entryPresent: true, version: "0.8.0", capable: true),
+            }),
+            InstallResult = new OfflineUpdateSshCommandResult(
+                0,
+                InstallReceipt(version: "0.8.1"),
+                string.Empty),
+        };
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(() =>
+            Coordinator(expectedVersion: "0.8.1").EnsureAsync(session));
+
+        Assert.Equal(OfflineUpdateBootstrapFailure.VerifyFailed, error.Reason);
+        Assert.Contains("deployed bundle version 0.8.1", error.Message, StringComparison.Ordinal);
+        Assert.Single(CleanupCommands(session));
     }
 
     [Fact]

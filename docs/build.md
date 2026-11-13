@@ -32,7 +32,7 @@ python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /w
 - `armada-offline-bootstrap`：独立部署脚本，供安装器在平板上部署更新服务。
 - `armada-offline-updater.tar.gz`：压缩后的 ARM64 更新器包；运行时由嵌入字节计算其哈希。
 
-部署脚本取自系统仓库的 `system_files/usr/libexec/armada/armada-offline-bootstrap`；更新器包由同一版本系统仓库的 `build_files/build-offline-updater-bundle.py` 从完整 ARM64 系统镜像根目录生成。将这两个文件复制进构建环境。安装器构建只校验它们存在、可读且为普通文件，不下载、不重新生成，也不按文件名猜测版本。
+部署脚本取自系统仓库的 `system_files/usr/libexec/armada/armada-offline-bootstrap`；更新器包由同一版本系统仓库的 `build_files/build-offline-updater-bundle.py` 从完整 ARM64 系统镜像根目录生成。将这两个文件复制进构建环境。安装器构建不下载、不重新生成它们；除存在、可读、普通文件与 256 MiB（与 SSH 上传上限一致）压缩体积校验外，还会读取更新包内的 `manifest.json` 校验身份、入口与必需能力，并把清单里的版本写入 props 与程序集元数据。安装器只按该版本核对安装回执与部署后探测结果，不按文件名猜测版本，也不在代码里写死版本号。
 
 两个参数必须成对给出：只给其中一个时，`build_installer.py` 会在任何下载、工具编译或打包之前报错。脚本与更新包应来自同一次系统构建并保持配对；不匹配的组合会让安装器无法完成部署。`--prepare-only` 可以省略这一对参数，用于只准备工具链、包和固定哈希的流程；此时生成的 props 不含离线更新组件，不能用于单 EXE 发布。
 
@@ -54,7 +54,7 @@ python3 -B maintenance/build_installer_macos.py --work-dir "$PWD/artifacts/build
 4. 从本次工具产物生成编译时固定哈希，分别制作四代、五代与 TB710FU 的 9008 工具包，并从仓库原始驱动文件制作驱动归档。
 5. 生成 MSBuild 输入配置，编译并打包单 EXE。
 
-每次构建会生成 `build/build-record.json`，记录源码文件哈希、上游提交、本次工具哈希和产物路径。提供离线更新组件时，记录还会写入两个文件的绝对路径、字节数、SHA-256 与来源（系统仓库的离线更新包构建脚本）。程序使用编进程序集的本次哈希校验工具，运行时不接受外部配置覆盖。修改工具源码后重新完整构建即可，无需手工替换旧二进制的哈希常量。
+每次构建会生成 `build/build-record.json`，记录源码文件哈希、上游提交、本次工具哈希和产物路径。提供离线更新组件时，记录还会写入两个文件的绝对路径、字节数、SHA-256、来源（系统仓库的离线更新包构建脚本）以及清单版本（`offlineUpdaterVersion`）。程序使用编进程序集的本次哈希校验工具，运行时不接受外部配置覆盖。修改工具源码后重新完整构建即可，无需手工替换旧二进制的哈希常量。
 
 ## 组件与版本关系
 

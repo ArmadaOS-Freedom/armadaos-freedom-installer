@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using FreedomInstaller.App;
 using FreedomInstaller.Core;
 using Xunit;
 
@@ -89,6 +90,129 @@ public sealed class OfflineUpdateRecoveryTests
         Assert.Equal(
             File.ReadAllBytes(Path.Combine(savedDirectories[0], SecondPath)),
             File.ReadAllBytes(Path.Combine(savedDirectories[1], SecondPath)));
+    }
+
+    [Fact]
+    public async Task Catalog_SkipsAForeignCandidateAndStillFindsTheLaterValidBundle()
+    {
+        using var root = new TestRoot();
+        string descriptorSha = new('d', 64);
+        var fixture = CreateBoundFixture(descriptorSha);
+        string validDirectory = await SaveBundleAsync(root.WorkRoot, fixture);
+
+        // A leftover with an acknowledgement but without this transaction's
+        // metadata sorts first; it must be reported, left byte-identical and
+        // must not hide the valid bundle behind it.
+        string foreignDirectory = Path.Combine(root.WorkRoot, "aaa-foreign");
+        Directory.CreateDirectory(foreignDirectory);
+        string foreignAck = Path.Combine(foreignDirectory, AckFileName);
+        File.WriteAllText(foreignAck, "{}");
+        byte[] foreignBytes = File.ReadAllBytes(foreignAck);
+
+        var scan = OfflineUpdateRecoveryCatalog.Scan(root.WorkRoot, fixture.Context, descriptorSha);
+
+        Assert.Equal(validDirectory, scan.Recovery?.DirectoryPath);
+        var skipped = Assert.Single(scan.Skipped);
+        Assert.Equal(foreignDirectory, skipped.DirectoryPath);
+        Assert.False(string.IsNullOrWhiteSpace(skipped.Reason));
+        Assert.Equal(foreignBytes, File.ReadAllBytes(foreignAck));
+        Assert.True(Directory.Exists(foreignDirectory));
+    }
+
+    [Fact]
+    public async Task Catalog_SkipsADamagedBundleAndKeepsItInPlace()
+    {
+        using var root = new TestRoot();
+        string descriptorSha = new('d', 64);
+        var fixture = CreateBoundFixture(descriptorSha);
+        string damagedDirectory = await SaveBundleAsync(root.WorkRoot, fixture);
+
+        // The bundle was acknowledged once, then one payload file changed.
+        string payloadPath = Path.Combine(
+            damagedDirectory, FirstPath.Replace('/', Path.DirectorySeparatorChar));
+        File.WriteAllBytes(payloadPath, MutateFirstByte(File.ReadAllBytes(payloadPath)));
+        byte[] damagedSnapshot = File.ReadAllBytes(payloadPath);
+
+        // Keep the damaged candidate first in ordinal order so the valid
+        // bundle behind it is what proves the scan keeps going.
+        string damagedCandidate = Path.Combine(root.WorkRoot, "aaa-damaged");
+        Directory.Move(damagedDirectory, damagedCandidate);
+        payloadPath = Path.Combine(
+            damagedCandidate, FirstPath.Replace('/', Path.DirectorySeparatorChar));
+
+        string validDirectory = await SaveBundleAsync(root.WorkRoot, fixture);
+
+        var scan = OfflineUpdateRecoveryCatalog.Scan(root.WorkRoot, fixture.Context, descriptorSha);
+
+        Assert.Equal(validDirectory, scan.Recovery?.DirectoryPath);
+        var skipped = Assert.Single(scan.Skipped);
+        Assert.Equal(damagedCandidate, skipped.DirectoryPath);
+        Assert.Equal(damagedSnapshot, File.ReadAllBytes(payloadPath));
+        Assert.True(File.Exists(Path.Combine(damagedCandidate, AckFileName)));
+    }
+
+    [Fact]
+    public void Catalog_AllCandidatesInvalid_ReturnsNullInOrdinalOrderAndLeavesThemAckIntact()
+    {
+        using var root = new TestRoot();
+        var context = new OfflineUpdateRecoveryContext(
+            Guid.NewGuid().ToString("D"), "TB322FC", new string('a', 64), new string('b', 64));
+        string descriptorSha = new('d', 64);
+
+        string foreign = Path.Combine(root.WorkRoot, "a-foreign");
+        Directory.CreateDirectory(foreign);
+        File.WriteAllText(Path.Combine(foreign, AckFileName), "{}");
+
+        // An empty acknowledgement is not evidence: it may never unlock
+        // execution, so the bundle stays unusable and untouched.
+        string emptyAck = Path.Combine(root.WorkRoot, "b-empty-ack");
+        Directory.CreateDirectory(emptyAck);
+        File.WriteAllBytes(Path.Combine(emptyAck, AckFileName), Array.Empty<byte>());
+
+        // A directory without an acknowledgement is not a candidate at all.
+        string noAck = Path.Combine(root.WorkRoot, "c-no-ack");
+        Directory.CreateDirectory(noAck);
+        File.WriteAllText(Path.Combine(noAck, PlanFileName), "{}");
+
+        var scan = OfflineUpdateRecoveryCatalog.Scan(root.WorkRoot, context, descriptorSha);
+
+        Assert.Null(scan.Recovery);
+        Assert.Equal(new[] { foreign, emptyAck }, scan.Skipped.Select(entry => entry.DirectoryPath));
+        Assert.True(File.Exists(Path.Combine(foreign, AckFileName)));
+        Assert.True(File.Exists(Path.Combine(emptyAck, AckFileName)));
+        Assert.True(File.Exists(Path.Combine(noAck, PlanFileName)));
+    }
+
+    [Fact]
+    public void Catalog_MissingRoot_ReturnsNullWithoutReportingACandidate()
+    {
+        using var root = new TestRoot();
+        var context = new OfflineUpdateRecoveryContext(
+            Guid.NewGuid().ToString("D"), "TB322FC", new string('a', 64), new string('b', 64));
+
+        var scan = OfflineUpdateRecoveryCatalog.Scan(
+            Path.Combine(root.Root, "absent"), context, new string('d', 64));
+
+        Assert.Null(scan.Recovery);
+        Assert.Empty(scan.Skipped);
+    }
+
+    [Fact]
+    public void Catalog_CancelledToken_ThrowsAndReportsNothing()
+    {
+        using var root = new TestRoot();
+        var context = new OfflineUpdateRecoveryContext(
+            Guid.NewGuid().ToString("D"), "TB322FC", new string('a', 64), new string('b', 64));
+        string foreign = Path.Combine(root.WorkRoot, "a-foreign");
+        Directory.CreateDirectory(foreign);
+        File.WriteAllText(Path.Combine(foreign, AckFileName), "{}");
+
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => OfflineUpdateRecoveryCatalog.Scan(
+            root.WorkRoot, context, new string('d', 64), cancelled.Token));
+        Assert.True(File.Exists(Path.Combine(foreign, AckFileName)));
     }
 
     [Fact]
@@ -475,6 +599,35 @@ public sealed class OfflineUpdateRecoveryTests
             Assert.Equal(0, sourceCalls);
             Assert.Empty(FindStages(root));
         }
+    }
+
+    /// <summary>
+    /// The existing fixture plan omits the package binding that the strict
+    /// loader re-checks, so add it and rebuild the plan digest exactly as the
+    /// device's exported plan.json carries it.
+    /// </summary>
+    private static RecoveryFixture CreateBoundFixture(string descriptorSha, string model = "TB322FC")
+    {
+        var fixture = CreateFixture(model);
+        SetPlan(fixture, ReplaceRequired(
+            Text(fixture.PlanBytes),
+            "\"recoveryManifestSha256\"",
+            $"\"packageDescriptorSha256\": \"{descriptorSha}\",\n  \"recoveryManifestSha256\""));
+        return fixture;
+    }
+
+    private static async Task<string> SaveBundleAsync(
+        string sessionRoot, RecoveryFixture fixture, CancellationToken token = default)
+    {
+        Task<Stream> OpenSource(string path, CancellationToken ct)
+        {
+            var payload = fixture.Files.Single(file => file.Path == path).Bytes;
+            return Task.FromResult<Stream>(new MemoryStream(payload, writable: false));
+        }
+
+        var saved = await PackageImporter.SaveOfflineUpdateRecoveryAsync(
+            sessionRoot, fixture.Context, fixture.PlanBytes, fixture.ManifestBytes, OpenSource, token: token);
+        return saved.DirectoryPath;
     }
 
     private static RecoveryFixture CreateFixture(

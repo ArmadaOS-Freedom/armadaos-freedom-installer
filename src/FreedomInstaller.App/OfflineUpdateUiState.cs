@@ -258,6 +258,31 @@ namespace FreedomInstaller.App
             !hasSavedRecovery && NeedsRecoveryExport(receipt);
 
         /// <summary>
+        /// The complete export gate used by the Plan action. Recovery export is
+        /// read-only, so the write-side boot policy is deliberately absent: a
+        /// helper that never declared <see cref="OfflineUpdateBootPolicy.NoSlotControl"/>
+        /// still exports the bundle its prepared transaction already holds.
+        /// The connection, the imported package, the read-only preflight pass
+        /// and the selected session stay required, and a verified bundle
+        /// already on disk is never replaced.
+        /// </summary>
+        internal static bool CanExportRecoverySession(bool connected, bool imported, bool preflightPassed,
+            bool hasSelectedSession, JsonElement? receipt, bool hasSavedRecovery) =>
+            connected && imported && preflightPassed && hasSelectedSession &&
+            CanExportRecovery(receipt, hasSavedRecovery);
+
+        /// <summary>
+        /// The receipt states whose read-only preflight is worth refreshing.
+        /// The export phase is reported either as the top-level state or
+        /// nested in a <c>prepared</c> receipt's result, so both forms qualify:
+        /// without the top-level form an export-only session would lose its
+        /// preflight pass on every refresh and could never reach the export.
+        /// </summary>
+        internal static bool ShouldRefreshPreflight(string? state) =>
+            state is "uploading" or "uploaded" or "prepare_queued" or "preparing" or
+                "prepared" or "awaiting_recovery_export" or "up_to_date";
+
+        /// <summary>
         /// The recovery metadata a prepared receipt carries. It follows the
         /// Core precedence exactly: the <c>result</c> block first, then
         /// <c>transaction</c>; a present block must describe an

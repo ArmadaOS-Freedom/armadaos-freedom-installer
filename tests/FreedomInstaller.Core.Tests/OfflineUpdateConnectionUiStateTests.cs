@@ -229,6 +229,50 @@ public sealed class OfflineUpdateConnectionUiStateTests
         Assert.DoesNotContain("OfflineUpdateSshAuthPolicy.EndpointKey(host, port)", codeBehind, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BothConnectRoutes_GoThroughTheOnePreflightSessionFinishHook()
+    {
+        string code = ReadEmbedded("FreedomInstaller.Tests.MainWindow.OfflinePairing.cs");
+
+        int keyRoute = code.IndexOf("private async Task ConnectOfflineOptionsAsync", StringComparison.Ordinal);
+        int passwordRoute = code.IndexOf("private async Task ConnectOfflinePasswordAsync", StringComparison.Ordinal);
+        int hook = code.IndexOf("private async Task FinishOfflineConnectionAsync", StringComparison.Ordinal);
+        Assert.True(keyRoute >= 0 && passwordRoute > keyRoute && hook > passwordRoute);
+
+        // Both routes end at the same hook instead of each deciding for itself.
+        Assert.Contains("await FinishOfflineConnectionAsync(conn, ct);",
+            code[keyRoute..passwordRoute], StringComparison.Ordinal);
+        Assert.Contains("await FinishOfflineConnectionAsync(conn, ct);",
+            code[passwordRoute..hook], StringComparison.Ordinal);
+        Assert.DoesNotContain("SupportsPreflightSession", code[..hook], StringComparison.Ordinal);
+
+        // The hook refuses an incapable helper before adopting it, so the
+        // transport is disposed exactly once on that path.
+        string body = code[hook..];
+        int capability = body.IndexOf("SupportsPreflightSession(conn.DeviceInfo)", StringComparison.Ordinal);
+        int dispose = body.IndexOf("await conn.DisposeAsync();", StringComparison.Ordinal);
+        int adopt = body.IndexOf("_offlineSsh = conn;", StringComparison.Ordinal);
+        Assert.True(capability >= 0 && dispose > capability && adopt > dispose);
+        Assert.Equal(1, CountOccurrences(body, "OfflineUpdateUiState.SupportsPreflightSession(conn.DeviceInfo)"));
+
+        // The boot policy remains a separate gate: such a device still
+        // connects with the supported read-only status.
+        Assert.Contains("StateBootPolicyReadOnly", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecoveryExport_IsReadOnlyAndOnlyRealPrepareRequiresTheWriteBootPolicy()
+    {
+        string code = ReadEmbedded("FreedomInstaller.Tests.MainWindow.OfflineUpgrade.cs");
+
+        // The export button uses the gate that has no boot-policy input.
+        Assert.Contains("OfflineUpdateUiState.CanExportRecoverySession(", code, StringComparison.Ordinal);
+        // The Plan handler refuses an unsupported helper only for the real
+        // prepare, never for the export-only branch.
+        Assert.Contains("if (!exportRecoveryOnly && !_offlineBootPolicySupported)", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("bool canExportRecovery = !busy && bootPolicySupported", code, StringComparison.Ordinal);
+    }
+
     private static void AssertLabeledBy(string xaml, string labelName, string controlName)
     {
         string line = Assert.Single(xaml.Split('\n')

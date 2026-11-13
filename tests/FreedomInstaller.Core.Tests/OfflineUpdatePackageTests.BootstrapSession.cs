@@ -77,7 +77,8 @@ public sealed partial class OfflineUpdatePackageTests
         var coordinator = new OfflineUpdateBootstrapCoordinator(
             () => new MemoryStream(Encoding.UTF8.GetBytes("#!/usr/bin/env python3\n")),
             () => new MemoryStream(bundle),
-            Hash(bundle));
+            Hash(bundle),
+            expectedBundleVersion: "0.8.0");
 
         var bootstrapResult = await coordinator.EnsureAsync(bootstrap);
 

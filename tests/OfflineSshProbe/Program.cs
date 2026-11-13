@@ -7,10 +7,13 @@ using FreedomInstaller.Core;
 namespace OfflineSshProbe;
 
 /// <summary>
-/// Opt-in, non-mutating verification harness. It uses the exact production
-/// managed connection and bootstrap coordinator, but only runs
-/// bootstrap/probe, info and the read-only preflight. It deliberately has no
-/// calls to prepare, execute or restart.
+/// Opt-in verification harness. It uses the exact production managed
+/// connection and bootstrap coordinator. The bootstrap/probe step can install
+/// or replace the updater components on the tablet using the authorized sudo
+/// account, so this harness is not read-only. The info and preflight steps are
+/// read-only: preflight validates the signed document and writes neither an OS
+/// upgrade nor a partition. The harness has no calls to prepare, execute or
+/// restart an upgrade.
 /// </summary>
 internal static class Program
 {
@@ -71,6 +74,7 @@ internal static class Program
             () => File.OpenRead(scriptPath),
             () => File.OpenRead(bundlePath),
             bundleSha256,
+            BundleManifestVersion.Read(bundlePath),
             new HarnessProgress(),
             useSudoForInstall: !string.Equals(options.User, "root", StringComparison.Ordinal));
 
@@ -118,7 +122,9 @@ internal static class Program
             if (bootstrapResult is { } result)
             {
                 // Evidence from the same production coordinator the application
-                // uses. The harness still never prepares, executes or restarts.
+                // uses. The bootstrap may have installed or replaced the updater
+                // components with sudo; the harness still never prepares,
+                // executes or restarts an OS upgrade.
                 var missingDependencies = new JsonArray();
                 foreach (var value in result.Probe.MissingDependencies)
                     missingDependencies.Add(value);
@@ -316,8 +322,9 @@ internal static class Program
             "--fingerprint SHA256:... --trust DIR --script FILE --bundle FILE --output FILE " +
             "[--user NAME --password-stdin] [--descriptor FILE --signature FILE]");
         Console.Error.WriteLine(
-            "This harness only runs service bootstrap/probe, info and read-only preflight. " +
-            "It never prepares, executes or restarts an upgrade.");
+            "This harness runs service bootstrap/probe (which may install or replace the updater components " +
+            "using the authorized sudo account), info and read-only preflight. Preflight writes neither an OS " +
+            "upgrade nor a partition, and the harness never prepares, executes or restarts an upgrade.");
     }
 
     private sealed class HarnessProgress : IProgress<OfflineUpdateBootstrapProgress>

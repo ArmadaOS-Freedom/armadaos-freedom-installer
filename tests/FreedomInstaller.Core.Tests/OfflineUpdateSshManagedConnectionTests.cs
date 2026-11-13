@@ -217,6 +217,38 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     }
 
     [Fact]
+    public async Task SudoWithoutPrompt_OnAnAlreadyCompletedChannel_ReturnsOutputWithoutWriting()
+    {
+        // The concrete transport turns a command that finished before its
+        // stdin could be acquired into a channel with the output retained at
+        // completion and a write-refusing stdin. A mocked channel cannot
+        // reproduce SSH.NET's own pipe lifetime, so this covers the caller-side
+        // contract: passwordless sudo completes and the secret is never sent.
+        var hostKey = HostKey(22);
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = _ => new FakeChannel(
+                "installed",
+                gaiteOutputOnPassword: false,
+                exited: true,
+                inputClosed: true),
+        };
+
+        var result = await OfflineUpdateSshSudo.RunAsync(
+            transport,
+            "/bin/true",
+            password: "topsecret",
+            TimeSpan.FromSeconds(5),
+            4096,
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitStatus);
+        Assert.Equal("installed", result.StandardOutput);
+        Assert.Empty(transport.LastChannel!.InputBytes);
+        Assert.False(transport.LastChannel!.StandardInput.CanWrite);
+    }
+
+    [Fact]
     public async Task SudoPromptWithoutCredential_RejectsWithoutWriting()
     {
         var hostKey = HostKey(5);
@@ -721,7 +753,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
     private sealed class FakeChannel : IOfflineUpdateSshChannel
     {
-        private readonly RecordingInput _input = new();
+        private readonly RecordingInput _input;
         private readonly ScriptedStream _output;
         private readonly ScriptedStream _error;
         private readonly TaskCompletionSource<bool> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -736,10 +768,12 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             string errorTail = "",
             IReadOnlyList<ScriptedStream.Segment>? errorSegments = null,
             bool exitOnFirstLine = false,
-            Task? outputGate = null)
+            Task? outputGate = null,
+            bool inputClosed = false)
         {
             _exitStatus = exitStatus;
             _errorTail = errorTail;
+            _input = new RecordingInput(inputClosed);
             var effectiveGate = outputGate ??
                 (gaiteOutputOnPassword ? _input.FirstLineWritten : Task.CompletedTask);
             _output = new ScriptedStream(new[]
@@ -792,8 +826,14 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
     private sealed class RecordingInput : Stream
     {
+        private const string ClosedMessage =
+            "The remote command has already completed; its standard input is closed.";
+
         private readonly MemoryStream _inner = new();
+        private readonly bool _closed;
         private readonly TaskCompletionSource<bool> _firstLine = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal RecordingInput(bool closed = false) => _closed = closed;
 
         internal Task FirstLineWritten => _firstLine.Task;
 
@@ -801,7 +841,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         public override bool CanSeek => false;
 
-        public override bool CanWrite => true;
+        public override bool CanWrite => !_closed;
 
         public override long Length => _inner.Length;
 
@@ -815,6 +855,9 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         {
+            if (_closed)
+                throw new IOException(ClosedMessage);
+
             await _inner.WriteAsync(buffer, cancellationToken);
             if (buffer.Span.IndexOf((byte)'\n') >= 0)
                 _firstLine.TrySetResult(true);
@@ -822,6 +865,9 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         public override void Write(byte[] buffer, int offset, int count)
         {
+            if (_closed)
+                throw new IOException(ClosedMessage);
+
             _inner.Write(buffer, offset, count);
             if (buffer.AsSpan(offset, count).IndexOf((byte)'\n') >= 0)
                 _firstLine.TrySetResult(true);

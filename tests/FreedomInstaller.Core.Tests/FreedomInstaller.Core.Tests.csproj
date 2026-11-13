@@ -61,6 +61,12 @@
     <!-- Same reason: the per-record session scan is plain BCL + Core calls, so the damaged-record
          reporting can be exercised against real files without a WPF window. -->
     <Compile Include="..\..\src\FreedomInstaller.App\OfflineUpdateSessionCatalog.cs" Link="OfflineUpdateSessionCatalog.cs" />
+    <!-- Same reason: the recovery-bundle scan is plain BCL + Core calls, so skipping a foreign or
+         damaged candidate and keeping it on disk is exercised against real files headlessly. -->
+    <Compile Include="..\..\src\FreedomInstaller.App\OfflineUpdateRecoveryCatalog.cs" Link="OfflineUpdateRecoveryCatalog.cs" />
+    <!-- Same reason: the offline SSH probe's bundle-manifest reader is plain BCL code, so linking it
+         lets the harness parsing that binds the coordinator to the real bundle be tested headlessly. -->
+    <Compile Include="..\OfflineSshProbe\BundleManifestVersion.cs" Link="BundleManifestVersion.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -72,6 +78,9 @@
     <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.OfflineUpgrade.cs"
                       LogicalName="FreedomInstaller.Tests.MainWindow.OfflineUpgrade.cs"
                       Link="MainWindow.OfflineUpgrade.cs" />
+    <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.OfflinePairing.cs"
+                      LogicalName="FreedomInstaller.Tests.MainWindow.OfflinePairing.cs"
+                      Link="MainWindow.OfflinePairing.cs" />
   </ItemGroup>
 
   <ItemGroup>
