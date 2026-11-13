@@ -85,6 +85,94 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
     }
 
     [Fact]
+    public void Automatic_MacOsPrefersLocalAppDataVolumeOverExternalVolumeWithMoreFreeSpace()
+    {
+        string localVolumeRoot = Path.GetPathRoot(_sandboxRoot)!;
+        string expectedPath = Path.Combine(_localAppData, "ArmadaOS Freedom", "Work");
+        var volumes = new[]
+        {
+            new InstallerWorkVolume("/Volumes/External", DriveType.Fixed, true, "apfs"),
+            new InstallerWorkVolume(localVolumeRoot, DriveType.Fixed, true, "apfs")
+        };
+        var probed = new List<string>();
+
+        var result = InstallerWorkDirectory.Resolve(
+            null,
+            _localAppData,
+            volumes,
+            path => path.StartsWith(_sandboxRoot, StringComparison.Ordinal) ? 12 * GiB : 200 * GiB,
+            candidate =>
+            {
+                probed.Add(candidate);
+                if (!candidate.StartsWith(_sandboxRoot, StringComparison.Ordinal))
+                    throw new IOException($"unexpected probe outside the test sandbox: {candidate}");
+                InstallerWorkDirectory.ProbeDirectoryWritability(candidate);
+            },
+            new InstallerWorkDirectoryPlatform(IsMacOS: true));
+
+        Assert.Equal(expectedPath, result.RootPath);
+        Assert.Equal(12 * GiB, result.AvailableFreeBytes);
+        Assert.Equal(new[] { expectedPath }, probed);
+    }
+
+    [Fact]
+    public void Automatic_MacOsFallsBackToExternalVolumeWhenLocalVolumeProbeFails()
+    {
+        string localVolumeRoot = Path.GetPathRoot(_sandboxRoot)!;
+        string localWorkPath = Path.Combine(_localAppData, "ArmadaOS Freedom", "Work");
+        string expectedPath = Path.Combine("/Volumes/External", "ArmadaOS Freedom", "Work");
+        var volumes = new[]
+        {
+            new InstallerWorkVolume(localVolumeRoot, DriveType.Fixed, true, "apfs"),
+            new InstallerWorkVolume("/Volumes/External", DriveType.Fixed, true, "apfs")
+        };
+        var probed = new List<string>();
+
+        var result = InstallerWorkDirectory.Resolve(
+            null,
+            _localAppData,
+            volumes,
+            path => path.StartsWith(_sandboxRoot, StringComparison.Ordinal) ? 50 * GiB : 100 * GiB,
+            candidate =>
+            {
+                probed.Add(candidate);
+                if (candidate.StartsWith(_sandboxRoot, StringComparison.Ordinal))
+                    throw new UnauthorizedAccessException("Local volume is read-only");
+            },
+            new InstallerWorkDirectoryPlatform(IsMacOS: true));
+
+        Assert.Equal(expectedPath, result.RootPath);
+        Assert.Equal(100 * GiB, result.AvailableFreeBytes);
+        Assert.Equal(new[] { localWorkPath, expectedPath }, probed);
+    }
+
+    [Theory]
+    [InlineData("/VolumesXYZ/External")]
+    [InlineData("/private/work-disk")]
+    [InlineData("/System/Volumes/Data")]
+    [InlineData("/Volumes")]
+    public void Automatic_MacOsRejectsVolumeRootsOutsideNormalVolumesMounts(string rejectedRoot)
+    {
+        string localVolumeRoot = Path.GetPathRoot(_sandboxRoot)!;
+        var volumes = new[]
+        {
+            new InstallerWorkVolume(rejectedRoot, DriveType.Fixed, true, "apfs"),
+            new InstallerWorkVolume(localVolumeRoot, DriveType.Fixed, true, "apfs")
+        };
+        bool probed = false;
+
+        Assert.Throws<IOException>(() => InstallerWorkDirectory.Resolve(
+            null,
+            _localAppData,
+            volumes,
+            path => path.StartsWith(_sandboxRoot, StringComparison.Ordinal) ? 256L * 1024 * 1024 : 500 * GiB,
+            _ => probed = true,
+            new InstallerWorkDirectoryPlatform(IsMacOS: true)));
+
+        Assert.False(probed);
+    }
+
+    [Fact]
     public void Automatic_AcceptsExternalHfsVolume()
     {
         var volumes = new[] { new InstallerWorkVolume(_dataRoot, DriveType.Fixed, true, "hfs") };

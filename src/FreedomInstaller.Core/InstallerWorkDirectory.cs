@@ -6,6 +6,13 @@ public sealed record InstallerWorkDirectoryResult(string RootPath, long Availabl
 
 public sealed record InstallerWorkVolume(string RootPath, DriveType Type, bool IsReady, string FileSystem);
 
+// Injectable platform description so the macOS discovery rules can be exercised on
+// any test host without mounting volumes.
+public sealed record InstallerWorkDirectoryPlatform(bool IsMacOS)
+{
+    public static InstallerWorkDirectoryPlatform Current { get; } = new(OperatingSystem.IsMacOS());
+}
+
 public static class InstallerWorkDirectory
 {
     public const long MinimumWorkingReserveBytes = 1024L * 1024 * 1024;
@@ -19,6 +26,9 @@ public static class InstallerWorkDirectory
     // They share the boot container's free space with "/", whose user folders
     // are firmlinked to Data, so only "/" and external disks are candidates.
     private const string MacSystemVolumesRoot = "/System/Volumes";
+
+    // macOS mounts external disks below /Volumes; every such root is "/Volumes/<name>".
+    private const string MacVolumeMountsRoot = "/Volumes";
 
     private static readonly StringComparison PathComparison =
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
@@ -53,16 +63,18 @@ public static class InstallerWorkDirectory
         string localAppData,
         IEnumerable<InstallerWorkVolume> volumes,
         Func<string, long?> readFree,
-        Action<string> verifyWritable)
+        Action<string> verifyWritable,
+        InstallerWorkDirectoryPlatform? platform = null)
     {
         ArgumentNullException.ThrowIfNull(volumes);
         ArgumentNullException.ThrowIfNull(readFree);
         ArgumentNullException.ThrowIfNull(verifyWritable);
+        platform ??= InstallerWorkDirectoryPlatform.Current;
 
         if (!string.IsNullOrWhiteSpace(explicitRoot))
             return ResolveExplicit(explicitRoot.Trim(), readFree, verifyWritable);
 
-        var eligibleVolumes = volumes
+        var supportedVolumes = volumes
             .Where(v => v is not null && !string.IsNullOrWhiteSpace(v.RootPath) && v.IsReady && v.Type == DriveType.Fixed && SupportedFileSystems.Contains(v.FileSystem?.Trim() ?? string.Empty) && !IsMacSystemVolume(v.RootPath))
             .ToList();
 
@@ -70,22 +82,37 @@ public static class InstallerWorkDirectory
         if (!string.IsNullOrWhiteSpace(localAppData) && Path.IsPathFullyQualified(localAppData))
         {
             string fullLocal = Path.GetFullPath(localAppData);
-            matchedLocalVolumeRoot = eligibleVolumes
+            matchedLocalVolumeRoot = supportedVolumes
                 .Select(v => Path.GetFullPath(v.RootPath))
                 .Where(root => IsSameOrDescendant(fullLocal, root))
                 .OrderByDescending(root => root.Length)
                 .FirstOrDefault();
         }
 
-        var candidates = new List<(string WorkPath, long PreFree)>();
+        bool IsMatchedLocalVolume(string rootPath) =>
+            matchedLocalVolumeRoot is not null
+            && string.Equals(Path.GetFullPath(rootPath), matchedLocalVolumeRoot, PathComparison);
+
+        bool isMacOS = platform.IsMacOS;
+        if (isMacOS)
+        {
+            // Only the volume holding LocalApplicationData and external disks mounted
+            // directly below /Volumes are automatic candidates, so system containers
+            // and unrelated host paths are never used.
+            supportedVolumes = supportedVolumes
+                .Where(v => IsNormalMacVolumeMount(v.RootPath) || IsMatchedLocalVolume(v.RootPath))
+                .ToList();
+        }
+
+        var candidates = new List<(string WorkPath, long PreFree, bool IsLocal)>();
         var seenPaths = new HashSet<string>(PathComparer);
 
-        foreach (var vol in eligibleVolumes)
+        foreach (var vol in supportedVolumes)
         {
             try
             {
                 string volRoot = Path.GetFullPath(vol.RootPath);
-                bool isLocalVol = matchedLocalVolumeRoot is not null && string.Equals(volRoot, matchedLocalVolumeRoot, PathComparison);
+                bool isLocalVol = IsMatchedLocalVolume(volRoot);
                 string baseDir = isLocalVol ? Path.GetFullPath(localAppData) : volRoot;
                 string workPath = Path.Combine(baseDir, "ArmadaOS Freedom", "Work");
                 if (!seenPaths.Add(workPath))
@@ -97,15 +124,19 @@ public static class InstallerWorkDirectory
 
                 long? free = readFree(ancestor);
                 if (free is >= MinimumWorkingReserveBytes)
-                    candidates.Add((workPath, free.Value));
+                    candidates.Add((workPath, free.Value, isLocalVol));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException or ArgumentException)
             {
             }
         }
 
+        // macOS prefers the volume that actually holds LocalApplicationData, so the work
+        // directory stays on the boot disk even when an external disk has more free space.
+        // Every other platform keeps ordering by available free space.
         var ordered = candidates
-            .OrderByDescending(c => c.PreFree)
+            .OrderByDescending(c => isMacOS && c.IsLocal)
+            .ThenByDescending(c => c.PreFree)
             .ThenBy(c => c.WorkPath, PathComparer)
             .ToList();
 
@@ -239,6 +270,16 @@ public static class InstallerWorkDirectory
         string root = rootPath.TrimEnd('/');
         return string.Equals(root, MacSystemVolumesRoot, StringComparison.Ordinal)
             || root.StartsWith(MacSystemVolumesRoot + "/", StringComparison.Ordinal);
+    }
+
+    private static bool IsNormalMacVolumeMount(string rootPath)
+    {
+        string root = rootPath.TrimEnd('/');
+        if (!root.StartsWith(MacVolumeMountsRoot + "/", StringComparison.Ordinal))
+            return false;
+
+        string name = root[(MacVolumeMountsRoot.Length + 1)..];
+        return name.Length > 0 && name != "." && name != ".." && name.IndexOf('/') < 0;
     }
 
     private static bool IsSameOrDescendant(string candidatePath, string rootPath)
