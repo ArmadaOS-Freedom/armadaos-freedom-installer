@@ -500,6 +500,25 @@ public class OfflineUpdateUiStateTests
         Assert.False(OfflineUpdateUiState.SupportsPreflightSession(Parse(json)!.Value));
     }
 
+    // ---------- Mutating boot policy gate ----------
+
+    [Theory]
+    [InlineData("{\"bootPolicy\":\"dual-boot-no-slot-control\"}", true)]
+    [InlineData("{\"bootPolicy\":\"dual-boot-slot-control\"}", false)]
+    [InlineData("{\"bootPolicy\":\"Dual-Boot-No-Slot-Control\"}", false)]
+    [InlineData("{\"bootPolicy\":\"dual-boot-no-slot-control \"}", false)]
+    [InlineData("{\"bootPolicy\":\"\"}", false)]
+    [InlineData("{\"bootPolicy\":5}", false)]
+    [InlineData("{\"bootPolicy\":null}", false)]
+    [InlineData("{\"bootPolicy\":[\"dual-boot-no-slot-control\"]}", false)]
+    [InlineData("{\"capabilities\":[\"preflight-session-v1\"]}", false)]
+    [InlineData("{}", false)]
+    [InlineData("[]", false)]
+    public void BootPolicy_RequiresTheExactNoSlotControlString(string json, bool expected)
+    {
+        Assert.Equal(expected, OfflineUpdateUiState.SupportsNoSlotControlBootPolicy(Parse(json)!.Value));
+    }
+
     // ---------- Read-only preflight gate ----------
 
     private const string ExactPreflight =

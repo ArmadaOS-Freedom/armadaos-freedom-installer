@@ -119,6 +119,82 @@ public sealed partial class OfflineUpdatePackageTests
         Assert.Equal(0, server.ExecuteCalls);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("dual-boot-slot-control")]
+    [InlineData("dual-boot-no-slot-control ")]
+    [InlineData("DUAL-BOOT-NO-SLOT-CONTROL")]
+    public async Task Transfer_MutatingSessionCreation_RequiresTheExactNoSlotControlPolicy(string? policy)
+    {
+        var c = new Case(Path.Combine(root, "policy-" + Guid.NewGuid().ToString("N")));
+        var work = Directory.CreateDirectory(Path.Combine(root, "policy-work-" + Guid.NewGuid().ToString("N"))).FullName;
+        using var imported = await Import(c.ArchivePath, Model, "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer(Model, c.DescriptorBytes, c.Entries["images/linux-root.img.gz"], [1], [2])
+        {
+            BootPolicy = policy,
+        };
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask));
+
+        // The refusal happened after the read-only info and before the first
+        // mutating request: no session, upload, prepare or execute is issued.
+        Assert.Equal(["info"], server.Methods);
+        Assert.Equal(0, server.BeginCalls);
+        Assert.Equal(0, server.UploadCalls);
+        Assert.Equal(0, server.PrepareCalls);
+        Assert.Equal(0, server.ExecuteCalls);
+    }
+
+    [Fact]
+    public async Task Transfer_PolicyLostAfterPreparation_BlocksPrepareExecuteRestartButKeepsReadOnlyStatus()
+    {
+        var c = new Case(Path.Combine(root, "policy-lost"));
+        var work = Directory.CreateDirectory(Path.Combine(root, "policy-lost-work")).FullName;
+        var recWork = Directory.CreateDirectory(Path.Combine(root, "policy-lost-rec")).FullName;
+        using var imported = await Import(c.ArchivePath, Model, "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer(Model, c.DescriptorBytes, c.Entries["images/linux-root.img.gz"], [10, 20], [30, 40]);
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+
+        var session = await transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask);
+        _ = await transfer.PrepareAsync(imported, session);
+        var saved = await transfer.SaveRecoveryAsync(imported, session, recWork);
+        Assert.Equal(0, server.ExecuteCalls);
+
+        // The helper no longer advertises the policy: every write action is
+        // refused before its own RPC, while read-only evidence stays usable.
+        server.BootPolicy = null;
+
+        server.Methods.Clear();
+        await Assert.ThrowsAsync<InvalidDataException>(() => transfer.PrepareAsync(imported, session));
+        Assert.Equal(["info"], server.Methods);
+        Assert.Equal(0, server.ExecuteCalls);
+
+        server.Methods.Clear();
+        var status = await transfer.QuerySessionStatusAsync(session);
+        Assert.Equal("prepared", status.GetProperty("state").GetString());
+        Assert.Equal(["info", "status"], server.Methods);
+
+        server.Methods.Clear();
+        var preflight = await transfer.PreflightAsync(imported, session);
+        Assert.Equal("preflight_passed", preflight.GetProperty("phase").GetString());
+        Assert.Equal(["preflight"], server.Methods);
+
+        server.Methods.Clear();
+        await Assert.ThrowsAsync<InvalidDataException>(() => transfer.ExecuteAsync(imported, session, saved));
+        Assert.Equal(["info"], server.Methods);
+        Assert.Equal(0, server.ExecuteCalls);
+
+        server.Methods.Clear();
+        await Assert.ThrowsAsync<InvalidDataException>(() => transfer.RestartToVerifyAsync(session));
+        Assert.Equal(["info"], server.Methods);
+        Assert.Equal(0, server.ExecuteCalls);
+    }
+
     [Fact]
     public async Task Transfer_PersistenceCallbackFails_AbortsBeforeUploadPrepareOrExecute()
     {
@@ -507,6 +583,7 @@ public sealed partial class OfflineUpdatePackageTests
         public List<long> UploadOffsets { get; } = [];
         public List<int> ExportLengths { get; } = [];
         public int UploadCalls { get; private set; }
+        public int BeginCalls { get; private set; }
         public int PrepareCalls { get; private set; }
         public int ExecuteCalls { get; private set; }
         public int PreflightCalls { get; private set; }
@@ -578,6 +655,13 @@ public sealed partial class OfflineUpdatePackageTests
 
         public bool LegacyController { get; set; }
 
+        /// <summary>
+        /// The <c>bootPolicy</c> the device advertises. The default is the
+        /// contract string every mutating step requires; null omits the
+        /// property entirely so an old helper can be exercised.
+        /// </summary>
+        public string? BootPolicy { get; set; } = OfflineUpdateBootPolicy.NoSlotControl;
+
         private JsonObject BuildInfo()
         {
             var info = new JsonObject
@@ -589,6 +673,8 @@ public sealed partial class OfflineUpdatePackageTests
                 ["recoveryPartUuid"] = RecoveryPartUuid,
                 ["channel"] = "testing"
             };
+            if (BootPolicy is not null)
+                info["bootPolicy"] = BootPolicy;
             if (SessionPreflightCapability)
                 info["capabilities"] = new JsonArray(OfflineUpdateUiState.PreflightSessionCapability);
             if (LegacyController)
@@ -639,6 +725,7 @@ public sealed partial class OfflineUpdatePackageTests
 
         private JsonObject HandleBegin(JsonElement p)
         {
+            BeginCalls++;
             ReceivedDescriptor = Convert.FromBase64String(p.GetProperty("document").GetString()!);
             ReceivedSignature = Convert.FromBase64String(p.GetProperty("signature").GetString()!);
             State = "uploading";

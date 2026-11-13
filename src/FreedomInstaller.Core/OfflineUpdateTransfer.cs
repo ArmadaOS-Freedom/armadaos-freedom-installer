@@ -121,8 +121,11 @@ public sealed class OfflineUpdateTransfer
         token.ThrowIfCancellationRequested();
         var spec = ReadDescriptor(package, token);
         var signature = ReadBoundedFile(package.SignaturePath, GetStage(package), MaxSignatureBytes, token);
-        var info = ValidateInfo(await _client.GetInfoAsync(token).ConfigureAwait(false),
-            package.DeviceModel, spec.MinimumUpdaterVersion, null);
+        var infoJson = await _client.GetInfoAsync(token).ConfigureAwait(false);
+        var info = ValidateInfo(infoJson, package.DeviceModel, spec.MinimumUpdaterVersion, null);
+        // Creating a session starts the upload/prepare flow, so it is the
+        // first mutating step and must prove the no-slot-control boot policy.
+        RequireNoSlotControlBootPolicy(infoJson);
         var receipt = await _client.BeginAsync(spec.DescriptorBytes, signature, token).ConfigureAwait(false);
         var sessionId = ValidateReceipt(receipt, null, info.Model, info.RecoveryPartUuid, spec, "begin");
         var state = RequiredString(receipt, "state", "begin");
@@ -141,8 +144,11 @@ public sealed class OfflineUpdateTransfer
         ArgumentNullException.ThrowIfNull(session);
         var normalized = ValidateSession(session, package.DeviceModel);
         var spec = VerifyPackage(package, normalized, token);
-        _ = ValidateInfo(await _client.GetInfoAsync(token).ConfigureAwait(false),
-            normalized.DeviceModel, spec.MinimumUpdaterVersion, normalized.RecoveryPartUuid);
+        var infoJson = await _client.GetInfoAsync(token).ConfigureAwait(false);
+        _ = ValidateInfo(infoJson, normalized.DeviceModel, spec.MinimumUpdaterVersion, normalized.RecoveryPartUuid);
+        // Upload, seal and prepare are mutating: never run them against a
+        // helper that may still control Android's active/selected slot.
+        RequireNoSlotControlBootPolicy(infoJson);
         var receipt = await Status(normalized, spec, token).ConfigureAwait(false);
         var state = RequiredString(receipt, "state", "status");
         if (state == "uploading")
@@ -219,8 +225,11 @@ public sealed class OfflineUpdateTransfer
         ArgumentNullException.ThrowIfNull(recovery);
         var normalized = ValidateSession(session, package.DeviceModel);
         var spec = VerifyPackage(package, normalized, token);
-        _ = ValidateInfo(await _client.GetInfoAsync(token).ConfigureAwait(false),
-            normalized.DeviceModel, spec.MinimumUpdaterVersion, normalized.RecoveryPartUuid);
+        var infoJson = await _client.GetInfoAsync(token).ConfigureAwait(false);
+        _ = ValidateInfo(infoJson, normalized.DeviceModel, spec.MinimumUpdaterVersion, normalized.RecoveryPartUuid);
+        // Execution writes both physical boot candidates; it must never run
+        // under a helper that still controls the Android slot state.
+        RequireNoSlotControlBootPolicy(infoJson);
         var receipt = await Status(normalized, spec, token).ConfigureAwait(false);
         var state = RequiredString(receipt, "state", "status");
         if (state == "prepared")
@@ -272,6 +281,11 @@ public sealed class OfflineUpdateTransfer
         ArgumentNullException.ThrowIfNull(session);
         token.ThrowIfCancellationRequested();
         var normalized = ValidateSession(session, session.DeviceModel);
+        // A restart request is mutating and belongs to the same no-slot-control
+        // contract as execution; its info read is still read-only.
+        var infoJson = await _client.GetInfoAsync(token).ConfigureAwait(false);
+        ValidateInfoIdentity(infoJson, normalized);
+        RequireNoSlotControlBootPolicy(infoJson);
         var result = await _client.RestartToVerifyAsync(normalized.SessionId, token).ConfigureAwait(false);
         Schema(result);
         Require(result, "sessionId", normalized.SessionId);
@@ -453,6 +467,22 @@ public sealed class OfflineUpdateTransfer
         var uuid = GuidD(RequiredString(info, "recoveryPartUuid", "info"));
         if (expectedUuid is not null && uuid != expectedUuid) throw new InvalidDataException("恢复分区 UUID 已变化。");
         return new(model, uuid);
+    }
+
+    /// <summary>
+    /// Every mutating offline upgrade step requires the device to advertise the
+    /// exact no-slot-control boot policy. A helper that omits it or reports
+    /// another value may still write slot metadata or mark a slot successful,
+    /// so it is refused before any begin/upload/seal/prepare/execute/restart
+    /// request is sent. Read-only info, preflight, status and recovery export
+    /// stay available so a saved session remains inspectable.
+    /// </summary>
+    private static void RequireNoSlotControlBootPolicy(JsonElement info)
+    {
+        if (!OfflineUpdateBootPolicy.IsNoSlotControl(info))
+            throw new InvalidDataException(
+                "设备未声明 dual-boot-no-slot-control 启动策略，升级程序可能更改 Android 的活动槽位；" +
+                "已拒绝任何写入操作。请先更新平板上的离线升级组件。");
     }
 
     private static OfflineUpdateSession ValidateSessionIdentity(OfflineUpdateSession session) =>

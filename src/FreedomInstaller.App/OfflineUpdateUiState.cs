@@ -1,4 +1,5 @@
 using System.Text.Json;
+using FreedomInstaller.Core;
 
 namespace FreedomInstaller.App
 {
@@ -136,6 +137,18 @@ namespace FreedomInstaller.App
 
             return advertised;
         }
+
+        /// <summary>
+        /// The mutating upgrade contract: the device must advertise the exact
+        /// <see cref="OfflineUpdateBootPolicy.NoSlotControl"/> string. It means
+        /// both physical A/B candidates boot the same Linux deployment and the
+        /// helper never writes slot metadata, selects a slot or marks one
+        /// successful — Android alone owns the active/selected/successful slot.
+        /// Read-only info, preflight and status do not require it, so an older
+        /// helper stays inspectable while Prepare and Execute stay disabled.
+        /// </summary>
+        internal static bool SupportsNoSlotControlBootPolicy(JsonElement info) =>
+            OfflineUpdateBootPolicy.IsNoSlotControl(info);
 
         /// <summary>
         /// The exact read-only preflight success contract. Only a v1 response

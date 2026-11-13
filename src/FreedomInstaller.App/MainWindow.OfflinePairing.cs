@@ -196,6 +196,12 @@ namespace FreedomInstaller.App
                 // selectedSlot is never presented as a proven actual slot.
                 _offlineActualSlot = legacyController ? null : GetJsonString(conn.DeviceInfo, "actualSlot");
                 _offlineRecoveryPartUuid = GetJsonString(conn.DeviceInfo, "recoveryPartUuid") ?? string.Empty;
+                // A helper that does not declare the no-slot-control boot
+                // policy may still write Android slot metadata. The connection
+                // and every read-only action stay available; prepare, execute
+                // and restart are gated until the policy is advertised.
+                _offlineBootPolicySupported =
+                    OfflineUpdateUiState.SupportsNoSlotControlBootPolicy(conn.DeviceInfo);
                 ClearOfflinePairing();
                 if (legacyController)
                 {
@@ -210,6 +216,11 @@ namespace FreedomInstaller.App
                 }
                 SetText(OfflineUpgradePanel.DetailsText, "Dynamic.OfflineUpdate.Value", FormatJson(conn.DeviceInfo));
                 SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateConnected");
+                if (!_offlineBootPolicySupported)
+                {
+                    AppendOfflineLog("Dynamic.OfflineUpdate.LogBootPolicyMissing");
+                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateBootPolicyReadOnly");
+                }
                 // Sessions saved by an earlier run are bound to this device and
                 // can be queried read-only without importing the package again.
                 LoadSavedOfflineSessionsForDevice();

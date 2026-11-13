@@ -46,6 +46,10 @@ namespace FreedomInstaller.App
         // tablet connection. It is recorded only after the device returns the
         // exact success schema and is cleared by every package/device change.
         private bool _offlinePreflightPassed;
+        // The mutating upgrade contract recorded from the authenticated info:
+        // both physical A/B candidates boot the same Linux deployment and the
+        // helper never controls Android's active/selected/successful slot.
+        private bool _offlineBootPolicySupported;
         private string? _offlinePreflightError;
         private long _offlineOperationGeneration;
         // Set when the panel itself moved the user to the custom account, so the
@@ -107,9 +111,13 @@ namespace FreedomInstaller.App
 
             bool connected = _offlineSsh != null && !string.IsNullOrEmpty(_offlineConnectedModel);
             bool imported = _offlinePackage != null && !string.IsNullOrEmpty(_offlineDescriptorSha256);
+            // Closing or an older helper still gets read-only info/status; only
+            // the mutating prepare/execute/restart actions need the policy.
+            bool bootPolicySupported = connected && _offlineBootPolicySupported;
             // 关闭等待期间同样按忙碌处理：按钮全部禁用，直到清理完成。
             bool busy = _busy || _offlineUpgradeCloseInProgress;
-            bool preparedReady = OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null, _offlinePreflightPassed);
+            bool preparedReady = bootPolicySupported &&
+                OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null, _offlinePreflightPassed);
 
             OfflineUpgradePanel.BackButton.IsEnabled = !busy;
             var transport = SelectedOfflineTransport;
@@ -152,7 +160,8 @@ namespace FreedomInstaller.App
             // one, while executing also needs the selected session.
             OfflineUpgradePanel.SessionCombo.IsEnabled = !busy && connected && _offlineSessions.Count > 0;
 
-            bool canPrepare = !busy && OfflineUpdateUiState.CanPrepareSession(connected, imported, _offlinePreflightPassed,
+            bool canPrepare = !busy && bootPolicySupported &&
+                OfflineUpdateUiState.CanPrepareSession(connected, imported, _offlinePreflightPassed,
                 _offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null);
             OfflineUpgradePanel.PrepareButton.IsEnabled = canPrepare;
             OfflineUpgradePanel.RefreshButton.IsEnabled = !busy &&
@@ -163,8 +172,9 @@ namespace FreedomInstaller.App
             OfflineUpgradePanel.StopWaitingButton.IsEnabled = busy && _offlineUpgradeActive;
             // Only a receipt read live from this tablet in this connection may
             // offer the restart action; a locally saved receipt is informative.
-            OfflineUpgradePanel.RestartToVerifyButton.IsEnabled = !busy && connected && _offlineReceiptLive &&
-                _offlineSelectedSession != null && OfflineUpdateUiState.CanRestartToVerify(_offlineLastReceipt);
+            OfflineUpgradePanel.RestartToVerifyButton.IsEnabled = !busy && connected && bootPolicySupported &&
+                _offlineReceiptLive && _offlineSelectedSession != null &&
+                OfflineUpdateUiState.CanRestartToVerify(_offlineLastReceipt);
         }
 
         private void RerenderOfflineUpgradeLog()
@@ -576,6 +586,7 @@ namespace FreedomInstaller.App
                 _offlineConnectedModel = null;
                 _offlineActualSlot = null;
                 _offlineRecoveryPartUuid = null;
+                _offlineBootPolicySupported = false;
                 ClearOfflinePreflightState();
                 SetText(OfflineUpgradePanel.DeviceText, "Static.OfflineUpdate.DevicePending");
                 SetText(OfflineUpgradePanel.DetailsText, "Static.OfflineUpdate.DetailsPending");
@@ -809,6 +820,8 @@ namespace FreedomInstaller.App
             await RunOfflineUpgradeAsync(async (gen, ct) =>
             {
                 EnsureReadyForSessionWork(requireSelectedSession: _offlineSessions.Count > 0);
+                if (!_offlineBootPolicySupported)
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
                 if (!_offlinePreflightPassed)
                     throw new InvalidOperationException(string.IsNullOrEmpty(_offlinePreflightError)
                         ? T("Dynamic.OfflineUpdate.ErrorPreflightRequired")
@@ -986,6 +999,7 @@ namespace FreedomInstaller.App
         private async void OnExecuteOfflineUpgradeAsync(object? sender, RoutedEventArgs e)
         {
             if (_busy || _offlineSsh == null || _offlinePackage == null || _offlineSelectedSession == null ||
+                !_offlineBootPolicySupported ||
                 !OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null, _offlinePreflightPassed) || OfflineUpgradePanel.ConfirmCheck.IsChecked != true)
                 return;
 
@@ -998,6 +1012,8 @@ namespace FreedomInstaller.App
             await RunOfflineUpgradeAsync(async (gen, ct) =>
             {
                 EnsureReadyForSessionWork(requireSelectedSession: true);
+                if (!_offlineBootPolicySupported)
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
                 if (!_offlinePreflightPassed)
                     throw new InvalidOperationException(string.IsNullOrEmpty(_offlinePreflightError)
                         ? T("Dynamic.OfflineUpdate.ErrorPreflightRequired")
@@ -1359,7 +1375,8 @@ namespace FreedomInstaller.App
         private async void OnRestartToVerifyOfflineUpgradeAsync(object? sender, RoutedEventArgs e)
         {
             if (_busy || _offlineSsh == null || _offlineTransfer == null || _offlineSelectedSession == null ||
-                !_offlineReceiptLive || !OfflineUpdateUiState.CanRestartToVerify(_offlineLastReceipt))
+                !_offlineBootPolicySupported || !_offlineReceiptLive ||
+                !OfflineUpdateUiState.CanRestartToVerify(_offlineLastReceipt))
                 return;
 
             var res = MessageBox.Show(this, T("Dynamic.OfflineUpdate.ConfirmRestartToVerifyPrompt"),
@@ -1376,6 +1393,8 @@ namespace FreedomInstaller.App
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
                 if (_offlineSelectedSession == null)
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                if (!_offlineBootPolicySupported)
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
                 if (!_offlineReceiptLive || !OfflineUpdateUiState.CanRestartToVerify(_offlineLastReceipt))
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorRestartNotEligible"));
 
@@ -1433,6 +1452,7 @@ namespace FreedomInstaller.App
             _offlineConnectedModel = null;
             _offlineActualSlot = null;
             _offlineRecoveryPartUuid = null;
+            _offlineBootPolicySupported = false;
             _offlineReceiptLive = false;
             ClearOfflinePreflightState();
             ClearOfflinePairing();

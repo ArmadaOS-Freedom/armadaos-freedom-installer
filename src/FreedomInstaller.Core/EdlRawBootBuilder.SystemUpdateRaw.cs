@@ -102,6 +102,10 @@ namespace FreedomInstaller.Core
                 var kernelLease = Hold("Kernel", request.Kernel);
                 var initramfsLease = Hold("Initramfs", request.Initramfs);
                 var runtimeLease = Hold("Runtime", request.Runtime);
+                // Only the new-system mirrored policy models require the marker;
+                // refuse an older runtime before any native packing or output.
+                LinuxRuntimeContract.RequireMirrorMarker(
+                    runtimeLease.Stream, request.Model, "Runtime", ct);
                 var dtbNormalLease = Hold("DtbNormal", request.DtbNormal);
                 var dtbDiagnosticLease = Hold("DtbDiagnostic", request.DtbDiagnostic);
                 var packerLease = Hold("Packer", request.Packer);
