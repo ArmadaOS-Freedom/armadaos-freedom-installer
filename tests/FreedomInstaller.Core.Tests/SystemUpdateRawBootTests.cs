@@ -113,6 +113,41 @@ public sealed class SystemUpdateRawBootTests : IClassFixture<EdlRawGblEnvelopeTe
         // Successful file signing makes no assertion about physical hardware authorization.
     }
 
+    [Theory]
+    [InlineData("TB322FC", "lenovo,elden", "qcom,sm8750")]
+    [InlineData("TB323FU", "lenovo,baldur", "qcom,kaanapali")]
+    public async Task RawBuilder_UnmarkedRuntimeForMirrorPolicy_FailsBeforeNativeExecution(
+        string model, string required, string soc)
+    {
+        var tools = ToolClaims.Create();
+        var input = CreateInput(CaseDirectory(), model, new[] { required, soc }, tools);
+        string runtime = Unmarked(input.Request.Runtime.Path);
+        SystemUpdateRawRequest request = input.Request with { Runtime = Claim(runtime) };
+        var runner = new RecordingRunner(new ProcessRunner());
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EdlRawBootBuilder.BuildSystemUpdateRawAsync(request, runner));
+
+        Assert.Contains("ARMADA_LINUX_MIRROR_V1", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(runner.Commands);
+        Assert.False(Directory.Exists(input.Output));
+    }
+
+    [Fact]
+    public async Task RawBuilder_Tb710fuUnmarkedRuntime_RemainsOutsideMirrorPolicy()
+    {
+        var tools = ToolClaims.Create();
+        var input = CreateInput(
+            CaseDirectory(), "TB710FU", new[] { "lenovo,tb710fu", "qcom,sm8650" }, tools);
+        string runtime = Unmarked(input.Request.Runtime.Path);
+        SystemUpdateRawRequest request = input.Request with { Runtime = Claim(runtime) };
+
+        SystemUpdateRawBoot built = await EdlRawBootBuilder.BuildSystemUpdateRawAsync(
+            request, new ProcessRunner());
+
+        Assert.Equal("TB710FU", built.Model);
+    }
+
     [Fact]
     public async Task RawBuilder_InvalidClaimsAndHeaders_FailBeforeNativeExecution()
     {
@@ -240,6 +275,19 @@ public sealed class SystemUpdateRawBootTests : IClassFixture<EdlRawGblEnvelopeTe
     private static VerifiedEdlFile Claim(string path) => new(path, new FileInfo(path).Length, Sha(path));
     private static string Sha(string path) => Sha(File.ReadAllBytes(path));
     private static string Sha(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    /// <summary>Copies the file without the policy marker and returns the new path.</summary>
+    private static string Unmarked(string path)
+    {
+        byte[] bytes = File.ReadAllBytes(path);
+        byte[] marker = Encoding.ASCII.GetBytes("ARMADA_LINUX_MIRROR_V1");
+        int offset = bytes.AsSpan().IndexOf(marker);
+        Assert.True(offset >= 0);
+        bytes.AsSpan(offset, marker.Length).Clear();
+        string output = path + ".unmarked";
+        File.WriteAllBytes(output, bytes);
+        return output;
+    }
     private static void AssertBytes(string expected, string actual) => Assert.Equal(File.ReadAllBytes(expected), File.ReadAllBytes(actual));
 
     private static byte[] DecompressCandidateKernel(string path)

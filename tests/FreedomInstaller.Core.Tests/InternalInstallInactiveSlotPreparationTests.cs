@@ -15,7 +15,9 @@ namespace FreedomInstaller.Core.Tests;
 /// <summary>
 /// The direct EDL raw preparation when exactly one target slot is factory-uninitialized: the built target
 /// takes the trusted current slot's real material while the original all-zero target claims stay preserved
-/// as evidence. The two negative cases refuse a partially corrupted zero target and a zero current slot.
+/// as evidence. Both physical candidates embed the same Linux deployment payload, and Android keeps the
+/// slot facts: the empty target receives only the project boot and is never made a bootable Android system.
+/// The two negative cases refuse a partially corrupted zero target and a zero current slot.
 /// </summary>
 public sealed class InternalInstallInactiveSlotPreparationTests
     : IClassFixture<EdlClientToolchainFixture>, IClassFixture<EdlRawSharedInput>
@@ -74,6 +76,25 @@ public sealed class InternalInstallInactiveSlotPreparationTests
             }
         }
 
+        // The two physical candidates carry one Linux deployment: the empty
+        // target has only A's material to build from, so every shared package
+        // payload and the resulting raw length are those of A's own candidate.
+        Assert.Equal(2, prepared.RawUpperBoundBytes.Count);
+        Assert.True(prepared.RawUpperBoundBytes["a"] > 0);
+        Assert.Equal(prepared.RawUpperBoundBytes["a"], prepared.RawUpperBoundBytes["b"]);
+        Assert.Equal(
+            prepared.SlotMaterials["a"].BaseImageSha256,
+            prepared.SlotMaterials["b"].BaseImageSha256,
+            ignoreCase: true);
+
+        // Android keeps the slot facts: current A keeps its own system, while
+        // the factory-empty target B receives only the project boot candidate.
+        Assert.Equal(2, prepared.AvbSlots.Count);
+        Assert.Equal("a", prepared.AvbSlots["a"].SourceSlot);
+        Assert.False(prepared.AvbSlots["a"].NonbootableSystem);
+        Assert.Equal("a", prepared.AvbSlots["b"].SourceSlot);
+        Assert.True(prepared.AvbSlots["b"].NonbootableSystem);
+
         // The device capture of the zero target is the real original B backup, not A's boot bytes.
         Assert.Equal(2, prepared.CurrentBootSha256.Count);
         Assert.Equal(
@@ -123,6 +144,31 @@ public sealed class InternalInstallInactiveSlotPreparationTests
             Assert.Equal("a", slots[1].GetProperty("slot").GetString());
             Assert.Equal("a", slots[1].GetProperty("sourceSlot").GetString());
             Assert.False(slots[1].GetProperty("inactiveTargetUninitialized").GetBoolean());
+
+            // Both candidates embed the same Linux deployment payload. The
+            // Android base is A's recovered material for both, because the
+            // factory-empty B has no Android payload of its own.
+            string[] sharedRoles =
+            {
+                "linux-padded",
+                "runtime",
+                "dtb-normal",
+                "dtb-diagnostic",
+                "initramfs",
+            };
+
+            foreach (string role in sharedRoles)
+            {
+                Assert.Equal(
+                    slots[1].GetProperty("payloadSha256").GetProperty(role).GetString(),
+                    slots[0].GetProperty("payloadSha256").GetProperty(role).GetString(),
+                    ignoreCase: true);
+            }
+
+            Assert.Equal(
+                slots[1].GetProperty("payloadSha256").GetProperty("base").GetString(),
+                slots[0].GetProperty("payloadSha256").GetProperty("base").GetString(),
+                ignoreCase: true);
 
             JsonElement materials = root.GetProperty("slotMaterials");
             Assert.Equal(2, materials.GetArrayLength());

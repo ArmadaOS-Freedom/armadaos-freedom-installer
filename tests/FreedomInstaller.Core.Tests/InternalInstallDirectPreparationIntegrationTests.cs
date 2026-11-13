@@ -253,6 +253,20 @@ public sealed class InternalInstallDirectPreparationIntegrationTests
             slots[1].GetProperty("candidateBoot").GetProperty("sha256").GetString(),
             StringComparer.OrdinalIgnoreCase);
 
+        // Each physical candidate keeps its own Android base and source, but
+        // both embed the one Linux deployment payload from the package.
+        Assert.NotEqual(
+            slots[0].GetProperty("payloadSha256").GetProperty("base").GetString(),
+            slots[1].GetProperty("payloadSha256").GetProperty("base").GetString(),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (string role in new[] { "linux-padded", "runtime", "dtb-normal", "dtb-diagnostic", "initramfs" })
+        {
+            Assert.Equal(
+                slots[0].GetProperty("payloadSha256").GetProperty(role).GetString(),
+                slots[1].GetProperty("payloadSha256").GetProperty(role).GetString(),
+                ignoreCase: true);
+        }
+
         Assert.Equal(2, root.GetProperty("slotMaterials").GetArrayLength());
         Assert.Equal(51, root.GetProperty("backup").GetProperty("files").GetArrayLength());
     }
