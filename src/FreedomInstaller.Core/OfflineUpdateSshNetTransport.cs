@@ -198,8 +198,15 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
         var client = _clientLease.Current as SshClient
             ?? throw new ObjectDisposedException(nameof(OfflineUpdateSshNetTransport));
         var sshCommand = client.CreateCommand(command);
-        sshCommand.CommandTimeout = TimeSpan.FromHours(6);
 
+        // SSH.NET's command timeout stays at its infinite default on purpose.
+        // This channel carries the long-lived updater RPC and the preparation
+        // commands, whose real work can outlast any fixed ceiling -- a session
+        // that is still exchanging frames must not be killed at a wall-clock
+        // mark. Liveness is bounded per request instead: the caller's own
+        // timeout and cancellation token cover each exchange, and disposing the
+        // channel cancels the command.
+        //
         // Both pipes exist from construction and are the instances the single
         // execution writes into, so they are captured before it starts. A short
         // command (passwordless sudo is the common case) has then already

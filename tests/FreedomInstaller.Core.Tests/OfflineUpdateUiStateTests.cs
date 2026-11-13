@@ -341,6 +341,20 @@ public class OfflineUpdateUiStateTests
     }
 
     [Fact]
+    public void CanRestartToVerify_RejectedRequestWithABlockingFlag_StaysBlocked()
+    {
+        // An explicit rejection alone may be retried after a fresh status read,
+        // but a receipt that also reports an interrupted job must not: the
+        // rejected-restart path shows the device message and drops its receipt,
+        // so this gate must never offer the action from the same receipt.
+        Assert.True(OfflineUpdateUiState.CanRestartToVerify(
+            CompletionReceipt("awaiting_reboot", restartEligible: true, restartState: "failed")));
+
+        Assert.False(OfflineUpdateUiState.CanRestartToVerify(
+            CompletionReceipt("awaiting_reboot", restartEligible: true, restartState: "failed", jobInterrupted: true)));
+    }
+
+    [Fact]
     public void CanRestartToVerify_AbsentOrNullRestartStateIsRetryable()
     {
         // The tablet omits restartState until it records a dispatch; an

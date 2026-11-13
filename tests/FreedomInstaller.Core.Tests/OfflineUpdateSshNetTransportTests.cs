@@ -497,6 +497,20 @@ public sealed class OfflineUpdateSshNetTransportTests
     }
 
     [Fact]
+    public async Task ATruncatedFinalSequenceIsReplacedAtEndOfStream()
+    {
+        // The pump flushes its decoder when the stream ends, so a final
+        // character cut in half is reported instead of silently dropped.
+        var payload = new byte[] { (byte)'t', (byte)'a', (byte)'i', (byte)'l', 0xE2 };
+        var tail = new OfflineUpdateBoundedText(1024);
+
+        await OfflineUpdateSshNetTransport.PumpAsync(
+            new ChunkedStream(payload, 4096), tail, CancellationToken.None);
+
+        Assert.Equal("tail\uFFFD", tail.Snapshot());
+    }
+
+    [Fact]
     public async Task ClosedStandardInputEndsReadsAndRefusesWrites()
     {
         var input = OfflineUpdateSshNetTransport.ClosedStandardInput.Instance;

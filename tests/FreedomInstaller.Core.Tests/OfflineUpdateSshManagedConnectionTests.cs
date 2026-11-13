@@ -277,20 +277,37 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     public async Task Connect_CancelledWhileWaitingForSudoPrompt_WritesNothing()
     {
         var hostKey = HostKey(6);
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        // The fake stderr pump signals its first read, so the cancel below is
+        // issued exactly when the connection is waiting for a prompt instead of
+        // after an arbitrary delay.
+        var promptWaitStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var transport = new FakeTransport(hostKey)
         {
-            ChannelFactory = _ => new FakeChannel(
-                ReadyOutput(),
-                gaiteOutputOnPassword: true,
-                errorSegments: Array.Empty<ScriptedStream.Segment>(),
-                exited: false),
+            ChannelFactory = command =>
+            {
+                var marker = PromptMarker(command);
+                return new FakeChannel(
+                    ReadyOutput(),
+                    gaiteOutputOnPassword: true,
+                    errorSegments: new[]
+                    {
+                        // Held open by a gate that never completes: the prompt is
+                        // never delivered and the handshake stays waiting.
+                        new ScriptedStream.Segment(Encoding.UTF8.GetBytes(marker), Never),
+                    },
+                    exited: false,
+                    errorReadStarted: promptWaitStarted);
+            },
         };
+        using var cts = new CancellationTokenSource();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            OfflineUpdateSshManagedConnection.ConnectCoreAsync(
-                Options(hostKey), TimeSpan.FromSeconds(5), cts.Token, Factory(transport)));
+        var connect = OfflineUpdateSshManagedConnection.ConnectCoreAsync(
+            Options(hostKey), TimeSpan.FromSeconds(5), cts.Token, Factory(transport));
 
+        await promptWaitStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
         Assert.Empty(transport.LastChannel!.InputBytes);
     }
 
@@ -524,6 +541,153 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         Assert.Contains("sudo", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("password", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("bootstrap", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Connect_SudoRefusalOnStderrAfterStdoutEof_KeepsDeviceDiagnostic()
+    {
+        // A command can close stdout before its refusal bytes leave stderr. The
+        // failure detail must wait for the bounded stderr pump instead of
+        // reporting an empty device message; the fake releases stderr only once
+        // the reader has observed stdout EOF, so the ordering is deterministic.
+        var hostKey = HostKey(27);
+        var stdoutEnded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = new FakeChannel(
+            string.Empty,
+            gaiteOutputOnPassword: false,
+            exited: true,
+            exitStatus: 1,
+            errorSegments: new[]
+            {
+                new ScriptedStream.Segment(
+                    Encoding.UTF8.GetBytes("sudo: a password is required\n"),
+                    Task.CompletedTask),
+            },
+            stdoutEnded: stdoutEnded);
+        var transport = new FakeTransport(hostKey) { ChannelFactory = _ => channel };
+
+        var error = await ConnectFailsAsync(Options(hostKey), transport);
+
+        Assert.Equal(OfflineUpdateSshManagedFailure.SudoUnavailable, error.Reason);
+        Assert.Contains("sudo: a password is required", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Connect_SudoRefusalSplitAcrossStderrChunks_IsDecodedAsOneStream()
+    {
+        // A diagnostic character can straddle a pipe read. The stderr pump keeps
+        // one decoder for the whole stream, so the two bytes of 'é' must not
+        // become replacement characters.
+        var hostKey = HostKey(28);
+        var refusal = Encoding.UTF8.GetBytes("sudo: a password is required (café \u2192 denied)\n");
+        var split = Array.IndexOf(refusal, (byte)0xC3) + 1;
+        Assert.InRange(split, 1, refusal.Length - 1);
+
+        var stdoutEnded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = new FakeChannel(
+            string.Empty,
+            gaiteOutputOnPassword: false,
+            exited: true,
+            exitStatus: 1,
+            errorSegments: new[]
+            {
+                new ScriptedStream.Segment(refusal[..split], Task.CompletedTask),
+                new ScriptedStream.Segment(refusal[split..], Task.CompletedTask),
+            },
+            stdoutEnded: stdoutEnded);
+        var transport = new FakeTransport(hostKey) { ChannelFactory = _ => channel };
+
+        var error = await ConnectFailsAsync(Options(hostKey), transport);
+
+        Assert.Equal(OfflineUpdateSshManagedFailure.SudoUnavailable, error.Reason);
+        Assert.Contains("café \u2192 denied", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\uFFFD", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SudoRun_PreCancelled_NeverStartsTheChannel()
+    {
+        var transport = new FakeTransport(HostKey(29));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            OfflineUpdateSshSudo.RunAsync(
+                transport, "/bin/true", "topsecret", TimeSpan.FromSeconds(5), 4096, cts.Token));
+
+        Assert.Equal(0, transport.StartCount);
+    }
+
+    [Fact]
+    public async Task StartUpdater_PreCancelled_NeverStartsTheChannel()
+    {
+        var transport = new FakeTransport(HostKey(30));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            OfflineUpdateSshSudo.StartUpdaterAsync(
+                transport,
+                "/bin/sh -c 'true'",
+                useSudo: true,
+                OfflineUpdateSshManagedConnection.ReadyMarker,
+                "topsecret",
+                TimeSpan.FromSeconds(5),
+                4096,
+                cts.Token));
+
+        Assert.Equal(0, transport.StartCount);
+    }
+
+    [Fact]
+    public async Task SudoRun_MultiByteOutputSplitAcrossReads_IsDecodedAsOneStream()
+    {
+        // The stdout pump shares the same one-decoder rule as the stderr pump.
+        var output = Encoding.UTF8.GetBytes("installé \u2192 done\n");
+        var split = Array.IndexOf(output, (byte)0xC3) + 1;
+        Assert.InRange(split, 1, output.Length - 1);
+
+        var transport = new FakeTransport(HostKey(31))
+        {
+            ChannelFactory = _ => new FakeChannel(
+                string.Empty,
+                gaiteOutputOnPassword: false,
+                exited: true,
+                outputSegments: new[]
+                {
+                    new ScriptedStream.Segment(output[..split], Task.CompletedTask),
+                    new ScriptedStream.Segment(output[split..], Task.CompletedTask),
+                }),
+        };
+
+        var result = await OfflineUpdateSshSudo.RunAsync(
+            transport, "/bin/true", "topsecret", TimeSpan.FromSeconds(5), 4096, CancellationToken.None);
+
+        Assert.Equal("installé \u2192 done\n", result.StandardOutput);
+    }
+
+    [Fact]
+    public async Task SudoRun_TruncatedFinalCharacter_IsReplacedAtEndOfStream()
+    {
+        // The decoder is flushed at end of stream, so a truncated final sequence
+        // is reported instead of silently dropped.
+        var payload = Encoding.ASCII.GetBytes("done").Concat(new byte[] { 0xC3 }).ToArray();
+        var transport = new FakeTransport(HostKey(32))
+        {
+            ChannelFactory = _ => new FakeChannel(
+                string.Empty,
+                gaiteOutputOnPassword: false,
+                exited: true,
+                outputSegments: new[]
+                {
+                    new ScriptedStream.Segment(payload, Task.CompletedTask),
+                }),
+        };
+
+        var result = await OfflineUpdateSshSudo.RunAsync(
+            transport, "/bin/true", "topsecret", TimeSpan.FromSeconds(5), 4096, CancellationToken.None);
+
+        Assert.Equal("done\uFFFD", result.StandardOutput);
     }
 
     [Fact]
@@ -791,20 +955,37 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
             IReadOnlyList<ScriptedStream.Segment>? errorSegments = null,
             bool exitOnFirstLine = false,
             Task? outputGate = null,
-            bool inputClosed = false)
+            bool inputClosed = false,
+            TaskCompletionSource<bool>? errorReadStarted = null,
+            TaskCompletionSource<bool>? stdoutEnded = null,
+            IReadOnlyList<ScriptedStream.Segment>? outputSegments = null)
         {
             _exitStatus = exitStatus;
             _errorTail = errorTail;
             _input = new RecordingInput(inputClosed);
             var effectiveGate = outputGate ??
                 (gaiteOutputOnPassword ? _input.FirstLineWritten : Task.CompletedTask);
-            _output = new ScriptedStream(new[]
+            _output = new ScriptedStream(
+                outputSegments ?? new[]
+                {
+                    new ScriptedStream.Segment(Encoding.UTF8.GetBytes(output), effectiveGate),
+                },
+                endOfStream: stdoutEnded);
+
+            var segments = errorSegments ?? Array.Empty<ScriptedStream.Segment>();
+            if (stdoutEnded is not null)
             {
-                new ScriptedStream.Segment(Encoding.UTF8.GetBytes(output), effectiveGate),
-            });
-            _error = new ScriptedStream(
-                errorSegments ?? Array.Empty<ScriptedStream.Segment>(),
-                _input.FirstLineWritten);
+                // Deliver every stderr segment only after stdout reached end of
+                // stream: the ordering a real command produces when it closes
+                // the output pipe before its last diagnostic bytes are copied.
+                segments = segments
+                    .Select(segment => new ScriptedStream.Segment(
+                        segment.Data,
+                        segment.Gate is null ? stdoutEnded.Task : Task.WhenAll(segment.Gate, stdoutEnded.Task)))
+                    .ToArray();
+            }
+
+            _error = new ScriptedStream(segments, _input.FirstLineWritten, errorReadStarted);
             if (exited)
                 _exit.TrySetResult(true);
             if (exitOnFirstLine)
@@ -912,12 +1093,20 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         private readonly Queue<Segment> _segments;
         private readonly Task _defaultGate;
+        private readonly TaskCompletionSource<bool>? _readStarted;
+        private readonly TaskCompletionSource<bool>? _endOfStream;
         private MemoryStream? _current;
 
-        internal ScriptedStream(IEnumerable<Segment> segments, Task? defaultGate = null)
+        internal ScriptedStream(
+            IEnumerable<Segment> segments,
+            Task? defaultGate = null,
+            TaskCompletionSource<bool>? readStarted = null,
+            TaskCompletionSource<bool>? endOfStream = null)
         {
             _segments = new Queue<Segment>(segments);
             _defaultGate = defaultGate ?? Task.CompletedTask;
+            _readStarted = readStarted;
+            _endOfStream = endOfStream;
         }
 
         public override bool CanRead => true;
@@ -936,6 +1125,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
+            _readStarted?.TrySetResult(true);
             while (true)
             {
                 if (_current is not null)
@@ -947,7 +1137,10 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
                 }
 
                 if (_segments.Count == 0)
+                {
+                    _endOfStream?.TrySetResult(true);
                     return 0;
+                }
 
                 var segment = _segments.Dequeue();
                 await (segment.Gate ?? _defaultGate).WaitAsync(cancellationToken);

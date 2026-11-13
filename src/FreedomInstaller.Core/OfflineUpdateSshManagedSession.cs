@@ -301,14 +301,28 @@ internal sealed class OfflineUpdateSshManagedSession : IOfflineUpdateManagedSess
     private static async Task DrainAsync(Stream stream, OfflineUpdateBoundedText target, CancellationToken token)
     {
         var buffer = new byte[4096];
+
+        // One decoder for the whole stream, flushed at end of stream: a read can
+        // stop inside a multi-byte character, and a per-chunk decode would emit
+        // replacement characters instead of the bytes the remote command wrote.
+        var chars = new char[Encoding.UTF8.GetMaxCharCount(buffer.Length)];
+        var decoder = Encoding.UTF8.GetDecoder();
         try
         {
             while (true)
             {
                 var read = await stream.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false);
                 if (read == 0)
+                {
+                    var tail = decoder.GetChars(buffer, 0, 0, chars, 0, flush: true);
+                    if (tail > 0)
+                        target.Append(new string(chars, 0, tail));
                     return;
-                target.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                }
+
+                var count = decoder.GetChars(buffer, 0, read, chars, 0, flush: false);
+                if (count > 0)
+                    target.Append(new string(chars, 0, count));
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)

@@ -224,16 +224,35 @@ internal sealed class OfflineUpdateSshElevatedProcess : IAsyncDisposable
         CancellationToken token)
     {
         var buffer = new byte[1024];
+
+        // One decoder for the whole stream: a read can end in the middle of a
+        // multi-byte character, and decoding each chunk on its own would turn
+        // both halves into replacement characters. The destination is sized
+        // from the decoder's own worst-case promise so a carried prefix plus a
+        // full read cannot overrun it. The tracker still sees raw bytes, so the
+        // ASCII prompt marker is matched exactly as before.
+        var chars = new char[Encoding.UTF8.GetMaxCharCount(buffer.Length)];
+        var decoder = Encoding.UTF8.GetDecoder();
         try
         {
             while (true)
             {
                 var read = await stream.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false);
                 if (read == 0)
+                {
+                    // Flush the decoder at end of stream: a truncated final
+                    // sequence becomes a replacement character instead of
+                    // disappearing from the diagnostic tail.
+                    var tail = decoder.GetChars(buffer, 0, 0, chars, 0, flush: true);
+                    if (tail > 0)
+                        target.Append(new string(chars, 0, tail));
                     return;
+                }
 
                 tracker.Feed(buffer.AsSpan(0, read));
-                target.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                var count = decoder.GetChars(buffer, 0, read, chars, 0, flush: false);
+                if (count > 0)
+                    target.Append(new string(chars, 0, count));
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -249,6 +268,14 @@ internal sealed class OfflineUpdateSshElevatedProcess : IAsyncDisposable
 internal static class OfflineUpdateSshSudo
 {
     internal const string PromptPrefix = "ARMADA-SUDO-PROMPT-";
+
+    /// <summary>
+    /// How long a startup failure waits for the stderr pump to finish before it
+    /// quotes the tail. The command has already closed stdout, so its last
+    /// diagnostics are typically a pipe read away; the bound keeps a stderr that
+    /// never closes from delaying the failure indefinitely.
+    /// </summary>
+    private static readonly TimeSpan ErrorTailSettleTimeout = TimeSpan.FromSeconds(2);
 
     internal static string NewPromptMarker() => PromptPrefix + Guid.NewGuid().ToString("N");
 
@@ -270,6 +297,11 @@ internal static class OfflineUpdateSshSudo
         CancellationToken token)
     {
         var marker = NewPromptMarker();
+
+        // Start opens the channel synchronously and accepts no token, so a
+        // cancelled attempt must be rejected before any privileged command
+        // exists on the device.
+        token.ThrowIfCancellationRequested();
         var channel = transport.Start(BuildSudoCommand(innerCommand, marker));
         var elevated = new OfflineUpdateSshElevatedProcess(channel, marker, maxOutputBytes);
         var stdout = new OfflineUpdateBoundedText(maxOutputBytes);
@@ -355,6 +387,10 @@ internal static class OfflineUpdateSshSudo
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(readyMarker);
         var marker = NewPromptMarker();
+
+        // Same rule as RunAsync: the channel is created synchronously and takes
+        // no token, so cancellation has to be observed before it starts.
+        token.ThrowIfCancellationRequested();
         var channel = transport.Start(useSudo ? BuildSudoCommand(innerCommand, marker) : innerCommand);
         var elevated = new OfflineUpdateSshElevatedProcess(channel, marker, maxDiagnosticsBytes);
         var lineCts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -412,9 +448,14 @@ internal static class OfflineUpdateSshSudo
                         return new OfflineUpdateSshStartedUpdater(elevated);
                     }
 
+                    // stdout can reach EOF before the device's last stderr
+                    // bytes are pumped. Settle the bounded stderr pump first so
+                    // a refusal written on stderr still reaches the failure
+                    // message instead of an empty tail.
+                    var errorTail = await SettleErrorTailAsync(elevated, token).ConfigureAwait(false);
                     var detail = string.Join(
                         " ",
-                        new[] { line, elevated.ErrorTail }.Where(value => !string.IsNullOrWhiteSpace(value)));
+                        new[] { line, errorTail }.Where(value => !string.IsNullOrWhiteSpace(value)));
                     // The reason and the message must come from the same
                     // classification: a sudo startup failure must not be
                     // reported as missing updater components.
@@ -517,14 +558,28 @@ internal static class OfflineUpdateSshSudo
     private static async Task PumpStdoutAsync(Stream stream, OfflineUpdateBoundedText target, CancellationToken token)
     {
         var buffer = new byte[4096];
+
+        // One decoder per stream with an explicit end-of-stream flush, exactly
+        // as in the stderr pump: characters split across reads are carried into
+        // the next read instead of being decoded per chunk.
+        var chars = new char[Encoding.UTF8.GetMaxCharCount(buffer.Length)];
+        var decoder = Encoding.UTF8.GetDecoder();
         try
         {
             while (true)
             {
                 var read = await stream.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false);
                 if (read == 0)
+                {
+                    var tail = decoder.GetChars(buffer, 0, 0, chars, 0, flush: true);
+                    if (tail > 0)
+                        target.Append(new string(chars, 0, tail));
                     return;
-                target.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                }
+
+                var count = decoder.GetChars(buffer, 0, read, chars, 0, flush: false);
+                if (count > 0)
+                    target.Append(new string(chars, 0, count));
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -550,6 +605,29 @@ internal static class OfflineUpdateSshSudo
                 throw new IOException("The updater startup line exceeded the allowed length.");
             line.Add(buffer[0]);
         }
+    }
+
+    /// <summary>
+    /// Waits a bounded time for the stderr pump to reach end of stream, then
+    /// returns the diagnostic tail. Cancellation of the caller's token
+    /// propagates; a pump that is merely slow is bounded by the settle timeout.
+    /// </summary>
+    private static async Task<string> SettleErrorTailAsync(
+        OfflineUpdateSshElevatedProcess elevated,
+        CancellationToken token)
+    {
+        try
+        {
+            await elevated.StderrDrained.WaitAsync(ErrorTailSettleTimeout, token).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+        }
+
+        return elevated.ErrorTail;
     }
 
     private static async Task DrainAsync(Task task)

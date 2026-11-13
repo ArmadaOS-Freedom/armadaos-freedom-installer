@@ -1,6 +1,8 @@
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using SharpCompress.Archives;
 using SharpCompress.Common;
 using SharpCompress.Readers;
@@ -17,6 +19,20 @@ public static partial class PackageImporter
     private const int UnixRegularFile = 0x8000;
     private const int WindowsInvalidEntryAttributes =
         (int)(FileAttributes.Directory | FileAttributes.ReparsePoint);
+
+    private const int NativeNoEntry = 2;
+
+    // Linux open(2) flags per UAPI: the generic x86/x64 headers put O_NOFOLLOW at 1<<17, the
+    // arm/arm64 headers at 1<<15 (where x86 has O_LARGEFILE); O_NONBLOCK and O_CLOEXEC agree.
+    private const int LinuxNonBlock = 0x800;
+    private const int LinuxNoFollowGeneric = 0x20000;
+    private const int LinuxNoFollowArm = 0x8000;
+    private const int LinuxCloseOnExec = 0x80000;
+
+    private const int MacOpenFlags =
+        0x4 /* O_NONBLOCK */ | 0x100 /* O_NOFOLLOW */ | 0x1000000 /* O_CLOEXEC */;
+    private const int FreeBsdOpenFlags =
+        0x4 /* O_NONBLOCK */ | 0x100 /* O_NOFOLLOW */ | 0x100000 /* O_CLOEXEC */;
 
     public static Task<UpdatePackageDescriptor> InspectUpdatePackageAsync(
         string sourcePath,
@@ -684,33 +700,188 @@ public static partial class PackageImporter
         return (Convert.ToHexStringLower(sha256.GetHashAndReset()), total);
     }
 
-    private static byte[] ReadBoundedRegularFile(string path, int maxBytes, CancellationToken token)
+    /// <summary>
+    /// Reads one signed sidecar (the descriptor or its signature) with the descriptor that was actually
+    /// checked: on Unix the path is opened with no-follow and nonblocking and the regular-file decision
+    /// comes from <c>fstat</c> on that same descriptor, so the file that is read cannot be a link, a FIFO
+    /// or a device and cannot be swapped between the check and the read. Windows keeps the existing
+    /// share-mode open and attribute gate.
+    /// </summary>
+    internal static byte[] ReadBoundedRegularFile(string path, int maxBytes, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        EnsureRegularFile(path);
 
-        using var fs = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            4096,
-            FileOptions.SequentialScan);
+        if (OperatingSystem.IsWindows())
+        {
+            // FileInfo.Exists is false for a directory, so the sidecar path is checked for one first to
+            // keep the refusal a data error instead of a misleading "file not found".
+            if (Directory.Exists(path))
+            {
+                throw new InvalidDataException($"拒绝读取符号链接、重解析点或目录：{path}。");
+            }
 
-        if (fs.Length <= 0 || fs.Length > maxBytes)
+            EnsureRegularFile(path);
+
+            using var windowsStream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                4096,
+                FileOptions.SequentialScan);
+
+            return ReadBoundedStream(windowsStream, path, maxBytes, token);
+        }
+
+        return ReadBoundedRegularFileUnix(path, maxBytes, token);
+    }
+
+    private static byte[] ReadBoundedRegularFileUnix(string path, int maxBytes, CancellationToken token)
+    {
+        if (!TryGetUnixOpenFlags(out var openFlags))
+        {
+            // Without the per-OS flags the descriptor could be opened under weaker semantics, so the
+            // platform fails closed instead of reading a file whose type was not established.
+            throw new InvalidDataException($"无法在当前平台安全校验签名文件：{path}。");
+        }
+
+        var descriptor = NativeOpen(path, openFlags);
+        if (descriptor < 0)
+        {
+            var errno = Marshal.GetLastPInvokeError();
+            if (errno == NativeNoEntry)
+            {
+                throw new FileNotFoundException($"找不到文件：{path}。", path);
+            }
+
+            throw new InvalidDataException($"无法安全打开文件：{path}（errno {errno}）。");
+        }
+
+        var handle = new SafeFileHandle(new IntPtr(descriptor), ownsHandle: true);
+        FileStream stream;
+        try
+        {
+            if (!TryReadNativeFileStatus(handle, out var status))
+            {
+                throw new InvalidDataException($"无法读取文件状态：{path}。");
+            }
+
+            if (!IsRegularFileMode(status.Mode))
+            {
+                throw new InvalidDataException($"拒绝读取符号链接、重解析点或目录：{path}。");
+            }
+
+            // The size comes from the same descriptor as the type check, so an oversized sidecar is
+            // refused before a single byte is read or a managed stream is created.
+            if (status.Size <= 0 || status.Size > maxBytes)
+            {
+                throw new InvalidDataException($"文件大小超出允许范围：{path}。");
+            }
+
+            stream = new FileStream(handle, FileAccess.Read, 4096);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+
+        // The FileStream owns the descriptor from here on and closes it exactly once.
+        using (stream)
+        {
+            return ReadBoundedStream(stream, path, maxBytes, token);
+        }
+    }
+
+    /// <summary>
+    /// True when POSIX mode bits describe a regular file. Exposed so the focused media tests can cover
+    /// FIFO, socket, device, directory and link modes without creating such files.
+    /// </summary>
+    internal static bool IsRegularFileMode(int mode) =>
+        (mode & UnixFileTypeMask) == UnixRegularFile;
+
+    /// <summary>
+    /// O_NONBLOCK (no parking on a writerless FIFO), O_NOFOLLOW (the kernel rejects a final link) and
+    /// O_CLOEXEC; O_RDONLY is zero on every Unix.
+    /// </summary>
+    private static bool TryGetUnixOpenFlags(out int flags)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            return TryGetLinuxOpenFlags(RuntimeInformation.ProcessArchitecture, out flags);
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            flags = MacOpenFlags;
+            return true;
+        }
+
+        if (OperatingSystem.IsFreeBSD())
+        {
+            flags = FreeBsdOpenFlags;
+            return true;
+        }
+
+        flags = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Linux open(2) flags for one process architecture. Only the ABIs checked against the kernel UAPI
+    /// headers are accepted; any other architecture fails closed instead of opening with a wrong bit.
+    /// </summary>
+    internal static bool TryGetLinuxOpenFlags(Architecture architecture, out int flags)
+    {
+        int? noFollow = architecture switch
+        {
+            Architecture.X86 or Architecture.X64 => LinuxNoFollowGeneric,
+            Architecture.Arm or Architecture.Arm64 => LinuxNoFollowArm,
+            _ => null
+        };
+
+        flags = noFollow is { } value ? LinuxNonBlock | value | LinuxCloseOnExec : 0;
+        return noFollow is not null;
+    }
+
+    private static bool TryReadNativeFileStatus(SafeFileHandle handle, out FileStatus status)
+    {
+        try
+        {
+            return NativeFStat(handle.DangerousGetHandle(), out status) == 0;
+        }
+        catch (DllNotFoundException)
+        {
+            status = default;
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            status = default;
+            return false;
+        }
+    }
+
+    private static byte[] ReadBoundedStream(
+        FileStream stream,
+        string path,
+        int maxBytes,
+        CancellationToken token)
+    {
+        if (stream.Length <= 0 || stream.Length > maxBytes)
         {
             throw new InvalidDataException($"文件大小超出允许范围：{path}。");
         }
 
         var limit = maxBytes + 1;
-        using var ms = new MemoryStream((int)fs.Length);
+        using var ms = new MemoryStream((int)stream.Length);
         var buffer = new byte[Math.Min(16384, maxBytes + 1)];
         var total = 0;
 
         while (total < limit)
         {
             token.ThrowIfCancellationRequested();
-            var read = fs.Read(buffer, 0, Math.Min(buffer.Length, limit - total));
+            var read = stream.Read(buffer, 0, Math.Min(buffer.Length, limit - total));
             if (read <= 0)
             {
                 break;
@@ -1011,4 +1182,41 @@ public static partial class PackageImporter
         long ExpandedBytes,
         string ExpandedSha256,
         string Compression);
+
+    /// <summary>
+    /// stat result exactly as the runtime's own System.Native shim lays it out for this process
+    /// (pal_io.h FileStatus). The order and widths are the native ABI and must not be rearranged.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileStatus
+    {
+        public int Flags;
+        public int Mode;
+        public uint Uid;
+        public uint Gid;
+        public long Size;
+        public long ATime;
+        public long ATimeNsec;
+        public long MTime;
+        public long MTimeNsec;
+        public long CTime;
+        public long CTimeNsec;
+        public long BirthTime;
+        public long BirthTimeNsec;
+        public long Dev;
+        public long RDev;
+        public long Ino;
+        public uint UserFlags;
+    }
+
+    /// <summary>
+    /// fstat(2) through the System.Native library the shared framework already loads, so the call uses
+    /// this process's ABI and the regular-file decision needs no additional package or helper.
+    /// </summary>
+    [DllImport("libSystem.Native", EntryPoint = "SystemNative_FStat")]
+    private static extern int NativeFStat(nint descriptor, out FileStatus status);
+
+    /// <summary>open(2) from the C library, with the per-OS flag set chosen above.</summary>
+    [DllImport("libc", EntryPoint = "open", SetLastError = true, ExactSpelling = true)]
+    private static extern int NativeOpen([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
 }

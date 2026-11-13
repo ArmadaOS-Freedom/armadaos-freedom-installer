@@ -42,6 +42,11 @@ namespace FreedomInstaller.App
         // imported package, and they are never rewritten.
         private IReadOnlyList<OfflineDamagedSessionRecord> _offlineDamagedSessionRecords =
             Array.Empty<OfflineDamagedSessionRecord>();
+        // The records location itself could not be resolved or read (for
+        // example its saved drive is gone). It is kept apart from an empty
+        // device and from damaged records so an unreachable location is never
+        // presented as "no saved session".
+        private string? _offlineSavedSessionsUnavailableReason;
         private OfflineUpdateSession? _offlineSelectedSession;
         private SavedOfflineUpdateRecovery? _offlineSavedRecovery;
         private JsonElement? _offlineLastReceipt;
@@ -719,9 +724,12 @@ namespace FreedomInstaller.App
                     // Sessions are matched one record at a time. An unrelated
                     // damaged record is reported and skipped, and the validated
                     // package stays imported so it can still be inspected and
-                    // used with the intact sessions.
+                    // used with the intact sessions. This runs after the
+                    // selector was rebuilt, so an unavailable location replaces
+                    // the "start a new session" wording instead of being
+                    // suppressed by it.
                     ApplyFilteredOfflineSessions(LoadSavedOfflineSessions());
-                    ReportDamagedOfflineSessionRecords();
+                    ReportSavedOfflineSessionIssues();
 
                     // Read-only preflight. It never creates a session, prepares
                     // a candidate or writes a slot. Only the exact success
@@ -1422,9 +1430,9 @@ namespace FreedomInstaller.App
             _suppressOfflineSessionSelectionChanged = false;
             if (_offlineSessions.Count == 0)
             {
-                // No readable session is left, so the damaged record is the
-                // only thing worth showing.
-                ReportDamagedOfflineSessionRecords();
+                // No readable session is left, so the damaged record or the
+                // unavailable location is the only thing worth showing.
+                ReportSavedOfflineSessionIssues();
                 return;
             }
 
@@ -1451,8 +1459,10 @@ namespace FreedomInstaller.App
         /// <summary>
         /// The saved sessions of this exact device, read one record at a time.
         /// A damaged record is remembered with its name for
-        /// <see cref="ReportDamagedOfflineSessionRecords"/> instead of hiding
-        /// the intact sessions, and it is never rewritten.
+        /// <see cref="ReportSavedOfflineSessionIssues"/> instead of hiding
+        /// the intact sessions, and it is never rewritten. A location that
+        /// cannot be resolved at all is remembered separately, because it is
+        /// an unavailable store rather than a device without sessions.
         /// </summary>
         private IReadOnlyList<OfflineUpdateSession> LoadSavedOfflineSessions()
         {
@@ -1460,14 +1470,42 @@ namespace FreedomInstaller.App
             {
                 OfflineSessionRecordScan scan = OfflineUpdateSessionCatalog.Load(
                     GetPersistentRecordsRoot(), _offlineConnectedModel, _offlineRecoveryPartUuid, _offlineDescriptorSha256);
+                _offlineSavedSessionsUnavailableReason = null;
                 _offlineDamagedSessionRecords = scan.Damaged;
                 return scan.Sessions;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                // The store is unavailable, not empty. Resolve already names the
+                // saved drive/path in its failure message, so that text is what
+                // the panel shows. Nothing on disk is touched.
+                _offlineSavedSessionsUnavailableReason = ex.Message;
                 _offlineDamagedSessionRecords = Array.Empty<OfflineDamagedSessionRecord>();
                 return Array.Empty<OfflineUpdateSession>();
             }
+        }
+
+        /// <summary>
+        /// Report why no session could be listed, after the caller has cleared
+        /// the selection. An unavailable records location takes precedence over
+        /// per-record damage: no record was read, so nothing can be blamed
+        /// individually, and the location itself is named. A genuine empty
+        /// device reaches neither message.
+        /// </summary>
+        private void ReportSavedOfflineSessionIssues()
+        {
+            if (_offlineSavedSessionsUnavailableReason != null)
+            {
+                if (OfflineUpgradePanel == null)
+                    return;
+
+                SetText(OfflineUpgradePanel.StateText,
+                    "Dynamic.OfflineUpdate.StateSavedSessionsUnavailable", _offlineSavedSessionsUnavailableReason);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogSavedSessionsUnavailable", _offlineSavedSessionsUnavailableReason);
+                return;
+            }
+
+            ReportDamagedOfflineSessionRecords();
         }
 
         /// <summary>
@@ -1521,6 +1559,24 @@ namespace FreedomInstaller.App
                 {
                     result = await _offlineTransfer!.RestartToVerifyAsync(session, ct);
                 }
+                catch (OfflineUpdateRemoteException ex)
+                {
+                    // The tablet answered this request and refused it, so the
+                    // exchange completed and the transport stays healthy. The
+                    // receipt that made the action eligible is dropped first:
+                    // whatever happens below, no stale restart affordance is
+                    // left behind. The rejection is shown and logged with the
+                    // device's own code and message, and no restart is retried
+                    // automatically: only a fresh read-only status can qualify
+                    // one again.
+                    _offlineLastReceipt = null;
+                    _offlineReceiptLive = false;
+                    AppendOfflineLog("Dynamic.OfflineUpdate.LogRestartRejected", ex.Code, ex.Message);
+                    await TryRefreshOfflineStatusAfterRestartRejectionAsync(session, ct);
+                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateRestartRejected",
+                        ex.Code, ex.Message);
+                    return;
+                }
                 catch (Exception ex) when (ex is IOException or TimeoutException or ObjectDisposedException)
                 {
                     // The request may have reached the tablet. This is pending or
@@ -1557,6 +1613,41 @@ namespace FreedomInstaller.App
                 _offlineReceiptLive = false;
                 await DropOfflineConnectionKeepPackageAsync();
             });
+        }
+
+        /// <summary>
+        /// Read-only follow-up after the tablet explicitly refused a restart.
+        /// It runs on the same connection that answered the request, so the
+        /// refusal is never mistaken for a lost transport, and it never sends
+        /// the restart again. Only what the tablet reports now is recorded: a
+        /// read that cannot complete leaves no receipt and no live flag, and
+        /// the withdrawn details are replaced, so the restart action is never
+        /// offered from evidence the device has already refused.
+        /// </summary>
+        private async Task TryRefreshOfflineStatusAfterRestartRejectionAsync(
+            OfflineUpdateSession session, CancellationToken ct)
+        {
+            var transfer = _offlineTransfer;
+            if (transfer == null)
+                return;
+
+            try
+            {
+                var receipt = await transfer.QuerySessionStatusAsync(session, ct);
+                _offlineLastReceipt = receipt.Clone();
+                _offlineReceiptLive = true;
+                await TryPersistReceiptAsync(session, _offlineLastReceipt.Value);
+                UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or ObjectDisposedException or OfflineUpdateTransferException)
+            {
+                // The device message of the rejection stays in the status text;
+                // this read only failed to replace the evidence behind it.
+                _offlineLastReceipt = null;
+                _offlineReceiptLive = false;
+                SetText(OfflineUpgradePanel.DetailsText, "Dynamic.OfflineUpdate.Value", ex.Message);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogRestartStatusRefreshFailed", ex.Message);
+            }
         }
 
         /// <summary>

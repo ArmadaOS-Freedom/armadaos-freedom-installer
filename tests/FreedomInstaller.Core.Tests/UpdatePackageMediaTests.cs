@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -429,6 +430,121 @@ public sealed class UpdatePackageMediaTests : IDisposable
         await Assert.ThrowsAnyAsync<InvalidDataException>(() => PackageImporter.InspectUpdatePackageAsync(
             c.Path, Model, "install", "1.0.0"));
         Assert.Equal(before, Directory.EnumerateFiles(c.Directory).Order().ToArray());
+    }
+
+    [Fact]
+    public void SignedSidecarReadAcceptsRegularFileWithinTheCap()
+    {
+        var path = Path.Combine(root, "update.zip.update.json");
+        var payload = new byte[2048];
+        for (var index = 0; index < payload.Length; index++)
+        {
+            payload[index] = (byte)index;
+        }
+
+        File.WriteAllBytes(path, payload);
+
+        // The cap itself is inclusive, one byte more stays accepted and the bytes come back unchanged.
+        Assert.Equal(payload, PackageImporter.ReadBoundedRegularFile(path, payload.Length, default));
+        Assert.Equal(payload, PackageImporter.ReadBoundedRegularFile(path, payload.Length + 1, default));
+    }
+
+    [Fact]
+    public void SignedSidecarReadKeepsExistingCapsCancellationAndMissingFileBehaviour()
+    {
+        var path = Path.Combine(root, "capped.update.json");
+        File.WriteAllBytes(path, new byte[64]);
+
+        AssertMediaInvalid(() => PackageImporter.ReadBoundedRegularFile(path, 63, default));
+
+        var empty = Path.Combine(root, "empty.update.json");
+        File.WriteAllBytes(empty, []);
+        AssertMediaInvalid(() => PackageImporter.ReadBoundedRegularFile(empty, 64, default));
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            PackageImporter.ReadBoundedRegularFile(path, 64, cancellation.Token));
+
+        Assert.Throws<FileNotFoundException>(() =>
+            PackageImporter.ReadBoundedRegularFile(Path.Combine(root, "absent.update.json"), 64, default));
+    }
+
+    [Fact]
+    public void SignedSidecarReadRejectsDirectoryFixture()
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(root, "sidecar-directory")).FullName;
+
+        // A directory is a benign stand-in for every non-regular file: on Unix the descriptor check
+        // rejects it, on Windows the existing attribute gate does.
+        AssertMediaInvalid(() => PackageImporter.ReadBoundedRegularFile(directory, 4096, default));
+    }
+
+    [Fact]
+    public void SignedSidecarReadRejectsSymbolicLinkOnUnix()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // Creating a link needs a privilege the test host may not hold; the Windows path keeps its
+            // attribute and reparse-point gate instead.
+            return;
+        }
+
+        var target = Path.Combine(root, "link-target.update.json");
+        File.WriteAllBytes(target, [1, 2, 3]);
+        var link = Path.Combine(root, "link.update.json");
+        File.CreateSymbolicLink(link, target);
+
+        AssertMediaInvalid(() => PackageImporter.ReadBoundedRegularFile(link, 4096, default));
+    }
+
+    [Theory]
+    [InlineData(0x81A4, true)]  // regular file, 0644
+    [InlineData(0x8000, true)]  // regular file type without permission bits
+    [InlineData(0x41ED, false)] // directory, 0755
+    [InlineData(0x11A4, false)] // FIFO, 0644
+    [InlineData(0xA1FF, false)] // symbolic link, 0777
+    [InlineData(0xC1FF, false)] // socket, 0777
+    [InlineData(0x21B6, false)] // character device, 0666
+    [InlineData(0x61B6, false)] // block device, 0666
+    public void OnlyRegularFileModeBitsFromTheHandleAreAccepted(int mode, bool regular) =>
+        Assert.Equal(regular, PackageImporter.IsRegularFileMode(mode));
+
+    // Arm and Arm64 use the generic Linux UAPI values O_NONBLOCK = 0x800, O_NOFOLLOW = 0x8000 and
+    // O_CLOEXEC = 0x80000, so the combined flags are 0x88800 (559104).
+    [Theory]
+    [InlineData(Architecture.X86, 0xA0800)]
+    [InlineData(Architecture.X64, 0xA0800)]
+    [InlineData(Architecture.Arm, 0x800 | 0x8000 | 0x80000)]
+    [InlineData(Architecture.Arm64, 0x800 | 0x8000 | 0x80000)]
+    public void LinuxOpenFlagsFollowTheVerifiedPerArchitectureAbi(Architecture architecture, int expected)
+    {
+        Assert.True(PackageImporter.TryGetLinuxOpenFlags(architecture, out var flags));
+        Assert.Equal(expected, flags);
+    }
+
+    [Theory]
+    [InlineData(Architecture.S390x)]
+    [InlineData(Architecture.LoongArch64)]
+    [InlineData(Architecture.Ppc64le)]
+    [InlineData(Architecture.RiscV64)]
+    [InlineData(Architecture.Wasm)]
+    public void UnverifiedLinuxArchitecturesFailClosed(Architecture architecture)
+    {
+        Assert.False(PackageImporter.TryGetLinuxOpenFlags(architecture, out var flags));
+        Assert.Equal(0, flags);
+    }
+
+    [Fact]
+    public async Task DirectorySidecarFailsInspectionClosed()
+    {
+        var c = CreateCase("directory-sidecar");
+        var sidecar = Path.Combine(c.Directory, c.BaseName + ".update.json");
+        Directory.CreateDirectory(sidecar);
+        await File.WriteAllTextAsync(sidecar + ".sig", Convert.ToBase64String(new byte[64]));
+
+        await Assert.ThrowsAnyAsync<InvalidDataException>(() => PackageImporter.InspectUpdatePackageAsync(
+            c.Path, Model, "install", "1.0.0"));
     }
 
     private static void Verify(string path, Case c, CancellationToken token = default)
