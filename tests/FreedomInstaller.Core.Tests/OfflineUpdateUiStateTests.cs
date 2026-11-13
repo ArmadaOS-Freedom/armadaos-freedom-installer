@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FreedomInstaller.App;
+using FreedomInstaller.Core;
 using Xunit;
 
 namespace FreedomInstaller.Core.Tests;
@@ -543,6 +544,13 @@ public class OfflineUpdateUiStateTests
         Assert.True(OfflineUpdateUiState.PreflightPassed(preflight));
         Assert.Equal("deployment-2026.11", OfflineUpdateUiState.PreflightDeployment(preflight));
         Assert.Equal("preflight_passed", OfflineUpdateUiState.PreflightPhase(preflight));
+
+        // The UI and the opt-in probe read one shared Core contract, so the
+        // forwarding method can never drift into a looser check.
+        Assert.True(OfflineUpdatePreflight.Passed(preflight));
+        Assert.Equal(OfflineUpdatePreflight.Deployment(preflight), OfflineUpdateUiState.PreflightDeployment(preflight));
+        Assert.Equal(OfflineUpdatePreflight.Phase(preflight), OfflineUpdateUiState.PreflightPhase(preflight));
+        Assert.Equal("not_started", OfflineUpdatePreflight.BootWriteState(preflight));
     }
 
     [Theory]
@@ -563,6 +571,9 @@ public class OfflineUpdateUiStateTests
     public void PreflightPassed_MalformedOrForeignShapes_AreNotAPass(string? json)
     {
         Assert.False(OfflineUpdateUiState.PreflightPassed(Parse(json)));
+        // The probe asks the same Core predicate; a device-side rejection is
+        // never reported as ok.
+        Assert.False(OfflineUpdatePreflight.Passed(Parse(json)));
     }
 
     [Fact]
@@ -604,19 +615,19 @@ public class OfflineUpdateUiStateTests
 
     // ---------- Recovery export routing (the Plan action) ----------
 
-    [Theory]
-    [InlineData("prepared")]
-    [InlineData("awaiting_recovery_export")]
-    public void CanExportRecovery_AlreadyPreparedSessionNeedsOnlyTheLocalBundle(string state)
+    [Fact]
+    public void CanExportRecovery_PreparedReceiptWithMatchingMetadata_NeedsOnlyTheLocalBundle()
     {
-        // The tablet finished preparing, so the Plan action must reach the
-        // recovery export without another PrepareAsync.
-        Assert.True(OfflineUpdateUiState.NeedsRecoveryExport(Receipt(state)));
-        Assert.True(OfflineUpdateUiState.CanExportRecovery(Receipt(state), hasSavedRecovery: false));
+        // The tablet finished preparing and the receipt carries the nested
+        // export metadata Core SaveRecoveryAsync reads, so the Plan action must
+        // reach the recovery export without another PrepareAsync.
+        var receipt = PreparedExportReceipt();
+        Assert.True(OfflineUpdateUiState.NeedsRecoveryExport(receipt));
+        Assert.True(OfflineUpdateUiState.CanExportRecovery(receipt, hasSavedRecovery: false));
 
         // A verified acknowledgement is already held: exporting again is not
         // the remaining step, executing is.
-        Assert.False(OfflineUpdateUiState.CanExportRecovery(Receipt(state), hasSavedRecovery: true));
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(receipt, hasSavedRecovery: true));
     }
 
     [Theory]
@@ -630,6 +641,9 @@ public class OfflineUpdateUiStateTests
     [InlineData("up_to_date")]
     [InlineData("failed")]
     [InlineData("unknown_custom_state")]
+    // The device maps its nested export phase into top-level prepared, so the
+    // raw worker state is never a session receipt.
+    [InlineData("awaiting_recovery_export")]
     public void CanExportRecovery_NeverForOtherStates(string state)
     {
         Assert.False(OfflineUpdateUiState.NeedsRecoveryExport(Receipt(state)));
@@ -648,22 +662,44 @@ public class OfflineUpdateUiStateTests
     }
 
     [Fact]
-    public void CanExportRecovery_TopPreparedWithNestedExport_StillExports()
+    public void CanExportRecovery_PreparedWithoutValidMetadata_IsRefused()
     {
-        // The export phase lives in the nested result while the top-level
-        // state is already prepared; both must route to the export.
-        var receipt = Parse("{\"state\":\"prepared\",\"result\":{\"state\":\"awaiting_recovery_export\"}}");
-        Assert.True(OfflineUpdateUiState.CanExportRecovery(receipt, hasSavedRecovery: false));
-        Assert.False(OfflineUpdateUiState.CanExportRecovery(receipt, hasSavedRecovery: true));
+        // Core would reject these before writing any bundle, so the Plan action
+        // must not claim the export is available.
+        var bare = Parse("{\"state\":\"prepared\"}");
+        Assert.True(OfflineUpdateUiState.NeedsRecoveryExport(bare));
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(bare, hasSavedRecovery: false));
+
+        var partial = Parse("{\"state\":\"prepared\",\"result\":{" +
+            "\"state\":\"awaiting_recovery_export\",\"transactionId\":\"" + TxId + "\"}}");
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(partial, hasSavedRecovery: false));
+
+        var conflict = Parse("{\"state\":\"prepared\",\"result\":" + ExportBlock() +
+            ",\"transaction\":" + ExportBlock(manifest: OtherManifestSha) + "}");
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(conflict, hasSavedRecovery: false));
+
+        // The button gate shares the rule and still has no boot-policy input.
+        Assert.False(OfflineUpdateUiState.CanExportRecoverySession(
+            connected: true, imported: true, preflightPassed: true, hasSelectedSession: true,
+            receipt: conflict, hasSavedRecovery: false));
+    }
+
+    [Fact]
+    public void CanExportRecovery_NakedTopLevelExportPhase_IsRefused()
+    {
+        // The canonical wire keeps the export phase inside result/transaction
+        // under a prepared top-level state. A receipt that reports it at the
+        // top level is not what the tablet emits and must not route to export.
+        var naked = NakedExportReceipt();
+        Assert.False(OfflineUpdateUiState.NeedsRecoveryExport(naked));
+        Assert.False(OfflineUpdateUiState.CanExportRecovery(naked, hasSavedRecovery: false));
+        Assert.False(OfflineUpdateUiState.TryGetRecoveryMetadata(naked, out _, out _, out _));
     }
 
     // ---------- Read-only export gate (the button) ----------
 
-    [Theory]
-    [InlineData("{\"state\":\"prepared\"}")]
-    [InlineData("{\"state\":\"awaiting_recovery_export\"}")]
-    [InlineData("{\"state\":\"prepared\",\"result\":{\"state\":\"awaiting_recovery_export\"}}")]
-    public void CanExportRecoverySession_DoesNotNeedTheWriteBootPolicy(string json)
+    [Fact]
+    public void CanExportRecoverySession_DoesNotNeedTheWriteBootPolicy()
     {
         // Recovery export is read-only: a helper that never declared
         // dual-boot-no-slot-control may still export the bundle its prepared
@@ -674,7 +710,15 @@ public class OfflineUpdateUiStateTests
 
         Assert.True(OfflineUpdateUiState.CanExportRecoverySession(
             connected: true, imported: true, preflightPassed: true, hasSelectedSession: true,
-            receipt: Parse(json), hasSavedRecovery: false));
+            receipt: PreparedExportReceipt(), hasSavedRecovery: false));
+
+        // A single nested block is the canonical shape too: the device stores
+        // the same triple under result and transaction, but only present
+        // blocks are compared.
+        var resultOnly = Parse("{\"state\":\"prepared\",\"result\":" + ExportBlock() + "}");
+        Assert.True(OfflineUpdateUiState.CanExportRecoverySession(
+            connected: true, imported: true, preflightPassed: true, hasSelectedSession: true,
+            receipt: resultOnly, hasSavedRecovery: false));
     }
 
     [Theory]
@@ -688,13 +732,14 @@ public class OfflineUpdateUiStateTests
     {
         Assert.False(OfflineUpdateUiState.CanExportRecoverySession(
             connected, imported, preflightPassed, hasSelectedSession,
-            receipt: Receipt("prepared"), hasSavedRecovery: hasSavedRecovery));
+            receipt: PreparedExportReceipt(), hasSavedRecovery: hasSavedRecovery));
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("uploading")]
     [InlineData("preparing")]
+    [InlineData("awaiting_recovery_export")]
     [InlineData("execute_queued")]
     [InlineData("executing")]
     [InlineData("awaiting_reboot")]
@@ -715,9 +760,9 @@ public class OfflineUpdateUiStateTests
     [InlineData("prepare_queued", true)]
     [InlineData("preparing", true)]
     [InlineData("prepared", true)]
-    // The export phase may be the top-level state, exactly as it appears
-    // nested in a prepared receipt's result.
-    [InlineData("awaiting_recovery_export", true)]
+    // The export phase is nested inside a prepared receipt, never a top-level
+    // session state, so only prepared keeps the pass for an export-only session.
+    [InlineData("awaiting_recovery_export", false)]
     [InlineData("up_to_date", true)]
     [InlineData("execute_queued", false)]
     [InlineData("executing", false)]
@@ -725,7 +770,7 @@ public class OfflineUpdateUiStateTests
     [InlineData("failed", false)]
     [InlineData("unknown_custom_state", false)]
     [InlineData(null, false)]
-    public void ShouldRefreshPreflight_CoversTheExportPhaseInBothForms(string? state, bool expected)
+    public void ShouldRefreshPreflight_CoversThePreparedExportState(string? state, bool expected)
     {
         Assert.Equal(expected, OfflineUpdateUiState.ShouldRefreshPreflight(state));
     }
@@ -742,6 +787,14 @@ public class OfflineUpdateUiStateTests
         $"\"transactionId\":\"{tx}\"," +
         $"\"planSha256\":\"{plan ?? PlanSha}\"," +
         $"\"recoveryManifestSha256\":\"{manifest ?? ManifestSha}\"}}";
+
+    private static JsonElement? PreparedExportReceipt() =>
+        Parse("{\"state\":\"prepared\",\"result\":" + ExportBlock() +
+              ",\"transaction\":" + ExportBlock() + "}");
+
+    private static JsonElement? NakedExportReceipt() =>
+        Parse("{\"state\":\"awaiting_recovery_export\",\"result\":" + ExportBlock() +
+              ",\"transaction\":" + ExportBlock() + "}");
 
     [Fact]
     public void RecoveryMetadata_ResultAndTransactionAreBothRequiredAndMustAgree()
@@ -774,6 +827,30 @@ public class OfflineUpdateUiStateTests
             $"{{\"state\":\"prepared\",\"transactionId\":\"{TxId}\"," +
             $"\"planSha256\":\"{PlanSha}\",\"recoveryManifestSha256\":\"{ManifestSha}\"}}");
         Assert.False(OfflineUpdateUiState.TryGetRecoveryMetadata(topLevelOnly, out _, out _, out _));
+    }
+
+    [Fact]
+    public void RecoveryMetadata_RequiresAPreparedReceiptAndCanonicalValues()
+    {
+        // Only a prepared receipt binds the nested export transaction to a
+        // session the tablet actually prepared; the raw worker state is not a
+        // session receipt at all.
+        Assert.False(OfflineUpdateUiState.TryGetRecoveryMetadata(
+            NakedExportReceipt(), out _, out _, out _));
+
+        var resultOnly = Parse("{\"state\":\"prepared\",\"result\":" + ExportBlock() + "}");
+        Assert.True(OfflineUpdateUiState.TryGetRecoveryMetadata(resultOnly, out string? tx, out _, out _));
+        Assert.Equal(TxId, tx);
+
+        // Core rejects a non-canonical transaction id or hash, so the UI must
+        // not accept the same receipt and then fail inside SaveRecoveryAsync.
+        var upperCaseId = Parse("{\"state\":\"prepared\",\"result\":" +
+            ExportBlock(tx: TxId.ToUpperInvariant()) + "}");
+        Assert.False(OfflineUpdateUiState.TryGetRecoveryMetadata(upperCaseId, out _, out _, out _));
+
+        var upperCaseHash = Parse("{\"state\":\"prepared\",\"result\":" +
+            ExportBlock(manifest: new string('B', 64)) + "}");
+        Assert.False(OfflineUpdateUiState.TryGetRecoveryMetadata(upperCaseHash, out _, out _, out _));
     }
 
     [Theory]

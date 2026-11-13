@@ -16,6 +16,36 @@ public sealed class OfflineUpdateRecoveryTests
     private const string FirstPath = "trust/slots/a/boot.img";
     private const string SecondPath = "recovery-header.bin";
 
+    /// <summary>
+    /// The UI export gate accepts exactly the receipt the Core exporter fills
+    /// from the same fixture: a prepared top-level state with the nested
+    /// awaiting_recovery_export triple. Pinning the two contracts together
+    /// keeps a stricter UI check from silently disabling a real export.
+    /// </summary>
+    [Fact]
+    public void UiRecoveryMetadata_AcceptsTheReceiptShapeProducedByTheCoreFixture()
+    {
+        var fixture = CreateFixture();
+        var receipt = JsonSerializer.SerializeToElement(new
+        {
+            schemaVersion = 1,
+            state = "prepared",
+            result = new
+            {
+                state = "awaiting_recovery_export",
+                transactionId = fixture.TransactionId,
+                planSha256 = fixture.PlanSha256,
+                recoveryManifestSha256 = fixture.RecoveryManifestSha256
+            }
+        });
+
+        Assert.True(OfflineUpdateUiState.TryGetRecoveryMetadata(
+            receipt,
+            out string? transactionId, out string? planSha256, out string? manifestSha256));
+        Assert.Equal(fixture.Context,
+            new OfflineUpdateRecoveryContext(transactionId!, fixture.Model, planSha256!, manifestSha256!));
+    }
+
     [Theory]
     [InlineData("TB322FC")]
     [InlineData("TB323FU")]

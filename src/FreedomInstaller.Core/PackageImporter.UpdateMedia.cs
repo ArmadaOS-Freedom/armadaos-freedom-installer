@@ -152,7 +152,8 @@ public static partial class PackageImporter
         ArchiveSource source,
         Stream stream,
         UpdatePackageDescriptor descriptor,
-        CancellationToken token)
+        CancellationToken token,
+        VerifiedArchiveSnapshot? snapshot = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(stream);
@@ -169,7 +170,12 @@ public static partial class PackageImporter
             throw new InvalidDataException("升级包数据流不支持随机读取与校验。");
         }
 
-        EnsureRegularSourceFiles(source);
+        if (snapshot is null)
+        {
+            // The parts are read directly here, so links and reparse points are rejected right before
+            // the read. A snapshot was captured from handles that were already checked.
+            EnsureRegularSourceFiles(source);
+        }
 
         var root = descriptor.Root;
         var archiveNode = root.GetProperty("archive");
@@ -179,7 +185,7 @@ public static partial class PackageImporter
         var expectedArchiveSha256 = archiveNode.GetProperty("sha256").GetString()
             ?? throw new InvalidDataException("升级包哈希缺失。");
 
-        var actualBaseName = GetArchiveBaseFileName(source.Parts[0]);
+        var actualBaseName = snapshot?.ArchiveBaseName ?? GetArchiveBaseFileName(source.Parts[0]);
         if (!string.Equals(actualBaseName, expectedArchiveName, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
@@ -194,7 +200,8 @@ public static partial class PackageImporter
                 root,
                 expectedArchiveBytes,
                 expectedArchiveSha256,
-                token);
+                token,
+                snapshot);
 
             var expectedEntries = ReadExpectedEntries(root);
             VerifyZipMetadataWithSharpCompress(stream, expectedEntries, token);
@@ -215,9 +222,14 @@ public static partial class PackageImporter
         JsonElement root,
         long expectedArchiveBytes,
         string expectedArchiveSha256,
-        CancellationToken token)
+        CancellationToken token,
+        VerifiedArchiveSnapshot? snapshot = null)
     {
-        var isSplitSource = IsSplitVolumeFileName(Path.GetFileName(source.Parts[0]));
+        var parts = snapshot?.Parts;
+        var isSplitSource = snapshot is not null
+            ? snapshot.IsSplitSource
+            : IsSplitVolumeFileName(Path.GetFileName(source.Parts[0]));
+
         stream.Position = 0;
 
         if (stream.Length != expectedArchiveBytes)
@@ -230,15 +242,28 @@ public static partial class PackageImporter
 
         if (!isSplitSource)
         {
-            if (source.Parts.Count != 1)
+            var actualCount = parts?.Count ?? source.Parts.Count;
+            if (actualCount != 1)
             {
                 throw new InvalidDataException("单文件升级包包含多个输入源。");
             }
 
-            using var singlePartStream = OpenPart(source.Parts[0]);
-            if (singlePartStream.Length != expectedArchiveBytes)
+            if (parts is not null)
             {
-                throw new InvalidDataException("升级包文件大小与受保护流不一致。");
+                // The snapshot recorded the length of the part it copied, so the original file is not
+                // reopened to repeat the size check.
+                if (parts[0].Bytes != expectedArchiveBytes)
+                {
+                    throw new InvalidDataException("升级包文件大小与受保护流不一致。");
+                }
+            }
+            else
+            {
+                using var singlePartStream = OpenPart(source.Parts[0]);
+                if (singlePartStream.Length != expectedArchiveBytes)
+                {
+                    throw new InvalidDataException("升级包文件大小与受保护流不一致。");
+                }
             }
 
             var archiveHashLimit = expectedArchiveBytes == long.MaxValue
@@ -262,10 +287,11 @@ public static partial class PackageImporter
         }
 
         var declaredCount = partsElement.GetArrayLength();
-        if (source.Parts.Count != declaredCount)
+        var availableParts = parts?.Count ?? source.Parts.Count;
+        if (availableParts != declaredCount)
         {
             throw new InvalidDataException(
-                $"分卷数量不匹配：实际为 {source.Parts.Count}，描述文件要求 {declaredCount}。");
+                $"分卷数量不匹配：实际为 {availableParts}，描述文件要求 {declaredCount}。");
         }
 
         using var wholeHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -282,17 +308,30 @@ public static partial class PackageImporter
             var expectedPartSha256 = partNode.GetProperty("sha256").GetString()
                 ?? throw new InvalidDataException("分卷哈希缺失。");
 
-            var actualPartPath = source.Parts[index];
-            var actualPartName = Path.GetFileName(actualPartPath);
+            // With a snapshot the original names and byte counts captured while copying stand in for
+            // the originals, so nothing is reopened and the digest below is taken from the snapshot.
+            var actualPartName = parts is not null
+                ? parts[index].Name
+                : Path.GetFileName(source.Parts[index]);
             if (!string.Equals(actualPartName, expectedPartName, StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
                     $"第 {index + 1} 卷文件名不匹配：实际为 {actualPartName}，期望 {expectedPartName}。");
             }
 
-            EnsureRegularFile(actualPartPath);
-            using (var partFile = OpenPart(actualPartPath))
+            if (parts is not null)
             {
+                if (parts[index].Bytes != expectedPartBytes)
+                {
+                    throw new InvalidDataException(
+                        $"分卷 {actualPartName} 大小不匹配：实际为 {parts[index].Bytes}，期望 {expectedPartBytes}。");
+                }
+            }
+            else
+            {
+                var actualPartPath = source.Parts[index];
+                EnsureRegularFile(actualPartPath);
+                using var partFile = OpenPart(actualPartPath);
                 if (partFile.Length != expectedPartBytes)
                 {
                     throw new InvalidDataException(
@@ -337,6 +376,79 @@ public static partial class PackageImporter
         {
             throw new InvalidDataException("分卷合并后的整体 SHA-256 或字节数校验失败。");
         }
+    }
+
+    /// <summary>
+    /// Reads the archive byte count the signature declares. It is the exact size of the private
+    /// snapshot, so a part set that grew past it is abandoned before a single byte is copied.
+    /// </summary>
+    private static long ReadExpectedArchiveBytes(UpdatePackageDescriptor descriptor)
+    {
+        if (!descriptor.Root.TryGetProperty("archive", out var archive)
+            || !archive.TryGetProperty("bytes", out var bytesElement)
+            || !bytesElement.TryGetInt64(out var bytes)
+            || bytes <= 0)
+        {
+            throw new InvalidDataException("升级包描述文件的归档大小无效。");
+        }
+
+        return bytes;
+    }
+
+    /// <summary>
+    /// Copies the complete logical archive of <paramref name="partPaths"/> once into a private,
+    /// seekable snapshot below <paramref name="root"/>. Volumes are opened in order, the length is taken
+    /// from the opened handle and exactly that many bytes are copied, so the copy can neither grow past
+    /// the signed size nor follow a rename that happens afterwards.
+    /// </summary>
+    internal static VerifiedArchiveSnapshot CaptureArchiveSnapshot(
+        IReadOnlyList<string> partPaths,
+        long expectedBytes,
+        string root,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(partPaths);
+        ArgumentNullException.ThrowIfNull(root);
+
+        if (partPaths.Count == 0)
+        {
+            throw new InvalidDataException("升级包源文件列表无效。");
+        }
+
+        using var logical = partPaths.Count == 1
+            ? OpenPart(partPaths[0])
+            : (Stream)new ConcatenatedArchiveStream(partPaths);
+
+        IReadOnlyList<long> lengths = logical is ConcatenatedArchiveStream concatenated
+            ? concatenated.PartLengths
+            : new[] { logical.Length };
+
+        var names = new string[partPaths.Count];
+        for (var index = 0; index < names.Length; index++)
+        {
+            names[index] = Path.GetFileName(partPaths[index]);
+        }
+
+        return VerifiedArchiveSnapshot.Copy(logical, names, lengths, expectedBytes, root, token);
+    }
+
+    /// <summary>
+    /// Verifies the signed media of a captured snapshot exactly as a signed import does, without
+    /// reopening the original parts. Used by the focused media tests to exercise the snapshot path on
+    /// every platform.
+    /// </summary>
+    internal static void VerifyCapturedSnapshot(
+        VerifiedArchiveSnapshot snapshot,
+        IReadOnlyList<string> originalPartPaths,
+        UpdatePackageDescriptor descriptor,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(originalPartPaths);
+        ArgumentNullException.ThrowIfNull(descriptor);
+
+        var source = new ArchiveSource(originalPartPaths, nativeRar: false);
+        VerifyUpdateMedia(source, snapshot.Stream, descriptor, token, snapshot);
     }
 
     private static void VerifyZipMetadataWithSharpCompress(
@@ -667,6 +779,231 @@ public static partial class PackageImporter
 
     private static bool HashesEqual(string actualHex, string expectedHex) =>
         string.Equals(actualHex, expectedHex, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// One private, bounded copy of the complete logical archive of a signed import. The file is
+    /// created exclusively below the import work root, carries user-only permissions from the moment
+    /// it exists on Unix and is deleted when the snapshot is disposed, so verification and extraction
+    /// read exactly the bytes that were checked and never the caller's files.
+    /// </summary>
+    internal sealed class VerifiedArchiveSnapshot : IDisposable
+    {
+        /// <summary>Largest signed archive size accepted for a private snapshot.</summary>
+        internal const long MaxBytes = 1L << 40;
+
+        private const string FileNamePrefix = ".update-snapshot-";
+
+        /// <summary>
+        /// Mode passed as <see cref="FileStreamOptions.UnixCreateMode"/> so the kernel applies it while
+        /// the file is being created instead of after it already exists.
+        /// </summary>
+        private const UnixFileMode PrivateUnixMode =
+            UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+        private readonly FileStream _file;
+
+        private int _disposed;
+
+        private VerifiedArchiveSnapshot(
+            FileStream file,
+            IReadOnlyList<SnapshotPart> parts,
+            bool isSplitSource,
+            string archiveBaseName,
+            UnixFileMode unixPermissions)
+        {
+            _file = file;
+            Parts = parts;
+            IsSplitSource = isSplitSource;
+            ArchiveBaseName = archiveBaseName;
+            UnixPermissions = unixPermissions;
+        }
+
+        /// <summary>Seekable view of the snapshot, positioned at the start of the archive.</summary>
+        internal Stream Stream => _file;
+
+        /// <summary>Original volume names and byte counts in archive order, recorded while copying.</summary>
+        internal IReadOnlyList<SnapshotPart> Parts { get; }
+
+        /// <summary>True when the copied source was a split volume group.</summary>
+        internal bool IsSplitSource { get; }
+
+        /// <summary>Archive base name, derived from the first original part name.</summary>
+        internal string ArchiveBaseName { get; }
+
+        /// <summary>
+        /// Permission bits the kernel applied when the snapshot was created, read back from the open
+        /// handle, or zero on Windows.
+        /// </summary>
+        internal UnixFileMode UnixPermissions { get; }
+
+        /// <summary>Byte length of the snapshot, always the signed archive size.</summary>
+        internal long Length => _file.Length;
+
+        /// <summary>
+        /// Copies <paramref name="partLengths"/> bytes per logical part in order into a new private file.
+        /// The signed size is checked before the file is created, the copy stops exactly at each part
+        /// length and the file is removed again if anything fails, including cancellation.
+        /// </summary>
+        internal static VerifiedArchiveSnapshot Copy(
+            Stream logical,
+            IReadOnlyList<string> partNames,
+            IReadOnlyList<long> partLengths,
+            long expectedBytes,
+            string root,
+            CancellationToken token)
+        {
+            ArgumentNullException.ThrowIfNull(logical);
+            ArgumentNullException.ThrowIfNull(partNames);
+            ArgumentNullException.ThrowIfNull(partLengths);
+            ArgumentNullException.ThrowIfNull(root);
+
+            token.ThrowIfCancellationRequested();
+
+            if (partNames.Count == 0 || partNames.Count != partLengths.Count)
+            {
+                throw new InvalidDataException("分卷元数据不一致，无法建立私有快照。");
+            }
+
+            if (expectedBytes <= 0 || expectedBytes > MaxBytes)
+            {
+                throw new InvalidDataException(
+                    $"升级包声明的归档大小 {expectedBytes} 字节超出允许范围。");
+            }
+
+            var declaredTotal = 0L;
+            foreach (var partBytes in partLengths)
+            {
+                if (partBytes < 0 || partBytes > expectedBytes - declaredTotal)
+                {
+                    throw new InvalidDataException(
+                        $"升级包实际大小超出签名声明的 {expectedBytes} 字节，拒绝使用。");
+                }
+
+                declaredTotal += partBytes;
+            }
+
+            if (declaredTotal != expectedBytes)
+            {
+                throw new InvalidDataException(
+                    $"升级包总大小不匹配：实际为 {declaredTotal} 字节，期望 {expectedBytes} 字节。");
+            }
+
+            var path = Path.Combine(root, FileNamePrefix + Path.GetRandomFileName());
+            var permissions = default(UnixFileMode);
+            FileStream? file = null;
+
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.ReadWrite,
+                Share = FileShare.Read | FileShare.Delete,
+                BufferSize = CopyBufferSize,
+                Options = FileOptions.DeleteOnClose,
+            };
+
+            if (!OperatingSystem.IsWindows())
+            {
+                // The mode is applied by the create call itself, so the file never exists under the
+                // process umask with group or other bits that a later SetUnixFileMode would have to undo.
+                options.UnixCreateMode = PrivateUnixMode;
+            }
+
+            try
+            {
+                file = new FileStream(path, options);
+
+                if (!OperatingSystem.IsWindows())
+                {
+                    // Read back what the kernel actually applied; setting it again is not needed.
+                    permissions = File.GetUnixFileMode(file.SafeFileHandle);
+                }
+
+                var recorded = new SnapshotPart[partNames.Count];
+                var buffer = new byte[CopyBufferSize];
+
+                for (var index = 0; index < recorded.Length; index++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    CopyExactly(logical, file, partLengths[index], buffer, partNames[index], token);
+                    recorded[index] = new SnapshotPart(partNames[index], partLengths[index]);
+                }
+
+                if (file.Length != expectedBytes)
+                {
+                    throw new InvalidDataException("私有快照大小与签名声明不一致，拒绝使用。");
+                }
+
+                file.Flush();
+                file.Position = 0;
+
+                return new VerifiedArchiveSnapshot(
+                    file,
+                    recorded,
+                    IsSplitVolumeFileName(partNames[0]),
+                    GetArchiveBaseFileName(partNames[0]),
+                    permissions);
+            }
+            catch
+            {
+                file?.Dispose();
+                TryDeleteSnapshot(path);
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                _file.Dispose();
+            }
+        }
+
+        private static void CopyExactly(
+            Stream input,
+            Stream output,
+            long bytes,
+            byte[] buffer,
+            string partName,
+            CancellationToken token)
+        {
+            var remaining = bytes;
+            while (remaining > 0)
+            {
+                token.ThrowIfCancellationRequested();
+
+                var read = input.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                if (read <= 0)
+                {
+                    throw new InvalidDataException($"升级包 {partName} 在复制完成前被截断，拒绝使用。");
+                }
+
+                output.Write(buffer, 0, read);
+                remaining -= read;
+            }
+        }
+
+        /// <summary>Best-effort removal after a failed copy; the DeleteOnClose flag is the backstop.</summary>
+        private static void TryDeleteSnapshot(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        /// <summary>One original volume: the name it was selected under and the bytes it supplied.</summary>
+        internal readonly record struct SnapshotPart(string Name, long Bytes);
+    }
 
     private readonly record struct DescriptorFileEntry(
         long Bytes,

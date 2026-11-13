@@ -151,40 +151,25 @@ namespace FreedomInstaller.App
             OfflineUpdateBootPolicy.IsNoSlotControl(info);
 
         /// <summary>
-        /// The exact read-only preflight success contract. Only a v1 response
-        /// that explicitly reports the passed phase with no boot write started
-        /// unlocks Prepare. A legacy or malformed response, a device-side
-        /// <c>operation_failed</c>, or an older updater that cannot preflight
-        /// is never treated as a silent pass.
+        /// The exact read-only preflight success contract, read through the
+        /// same <see cref="OfflineUpdatePreflight"/> type the opt-in probe
+        /// uses. Only a v1 response that explicitly reports the passed phase
+        /// with no boot write started unlocks Prepare. A legacy or malformed
+        /// response, a device-side <c>operation_failed</c>, or an older updater
+        /// that cannot preflight is never treated as a silent pass.
         /// </summary>
-        internal static bool PreflightPassed(JsonElement? preflight)
-        {
-            if (!preflight.HasValue || preflight.Value.ValueKind != JsonValueKind.Object)
-                return false;
-
-            JsonElement value = preflight.Value;
-            return GetInt32(value, "schemaVersion") == 1 &&
-                   string.Equals(GetString(value, "phase"), "preflight_passed", StringComparison.Ordinal) &&
-                   string.Equals(GetString(value, "bootWriteState"), "not_started", StringComparison.Ordinal);
-        }
+        internal static bool PreflightPassed(JsonElement? preflight) =>
+            OfflineUpdatePreflight.Passed(preflight);
 
         /// <summary>
         /// The deployment reported by a successful preflight. The legacy
         /// <c>deployment</c> field never existed and must not be read.
         /// </summary>
         internal static string? PreflightDeployment(JsonElement? preflight) =>
-            preflight.HasValue ? GetString(preflight.Value, "currentDeployment") : null;
+            OfflineUpdatePreflight.Deployment(preflight);
 
         internal static string? PreflightPhase(JsonElement? preflight) =>
-            preflight.HasValue ? GetString(preflight.Value, "phase") : null;
-
-        private static int? GetInt32(JsonElement info, string name) =>
-            info.ValueKind == JsonValueKind.Object &&
-            info.TryGetProperty(name, out var value) &&
-            value.ValueKind == JsonValueKind.Number &&
-            value.TryGetInt32(out int number)
-                ? number
-                : null;
+            OfflineUpdatePreflight.Phase(preflight);
 
         private static string? GetString(JsonElement info, string name) =>
             info.ValueKind == JsonValueKind.Object &&
@@ -242,23 +227,30 @@ namespace FreedomInstaller.App
 
         /// <summary>
         /// The tablet already finished preparing this session, so the only
-        /// remaining local step is exporting the recovery bundle. Both the
-        /// final <c>prepared</c> state and a receipt still reporting the
-        /// export phase qualify; nothing here is allowed to prepare again.
+        /// remaining local step is exporting the recovery bundle. Only the
+        /// canonical top-level <c>prepared</c> state qualifies: the device maps
+        /// its nested <c>awaiting_recovery_export</c> worker result into that
+        /// state, so a receipt that reports the export phase at the top level
+        /// is not a session receipt and is refused.
         /// </summary>
         internal static bool NeedsRecoveryExport(JsonElement? receipt) =>
-            !HasBlockingFlags(receipt) && State(receipt) is ("prepared" or "awaiting_recovery_export");
+            !HasBlockingFlags(receipt) && State(receipt) == "prepared";
 
         /// <summary>
-        /// The Plan action may export recovery only while no verified local
-        /// bundle is held. Once a bundle exists, executing is what consumes
-        /// its acknowledgement; a second export would replace nothing.
+        /// The receipt gate for offering recovery export: the tablet prepared
+        /// this session, no verified local bundle is held, and the receipt
+        /// carries the metadata Core
+        /// <see cref="OfflineUpdateTransfer.SaveRecoveryAsync"/> will read. A
+        /// prepared receipt whose export metadata is missing, partial,
+        /// contradictory or unbound is refused here instead of failing later
+        /// in Core.
         /// </summary>
         internal static bool CanExportRecovery(JsonElement? receipt, bool hasSavedRecovery) =>
-            !hasSavedRecovery && NeedsRecoveryExport(receipt);
+            !hasSavedRecovery && NeedsRecoveryExport(receipt) &&
+            TryGetRecoveryMetadata(receipt, out _, out _, out _);
 
         /// <summary>
-        /// The complete export gate used by the Plan action. Recovery export is
+        /// The complete export gate behind the Plan button. Recovery export is
         /// read-only, so the write-side boot policy is deliberately absent: a
         /// helper that never declared <see cref="OfflineUpdateBootPolicy.NoSlotControl"/>
         /// still exports the bundle its prepared transaction already holds.
@@ -273,23 +265,26 @@ namespace FreedomInstaller.App
 
         /// <summary>
         /// The receipt states whose read-only preflight is worth refreshing.
-        /// The export phase is reported either as the top-level state or
-        /// nested in a <c>prepared</c> receipt's result, so both forms qualify:
-        /// without the top-level form an export-only session would lose its
-        /// preflight pass on every refresh and could never reach the export.
+        /// The export phase is not a top-level state: the device maps the
+        /// nested <c>awaiting_recovery_export</c> worker result into a
+        /// <c>prepared</c> receipt, so <c>prepared</c> alone keeps the pass for
+        /// a session that still only needs the export.
         /// </summary>
         internal static bool ShouldRefreshPreflight(string? state) =>
             state is "uploading" or "uploaded" or "prepare_queued" or "preparing" or
-                "prepared" or "awaiting_recovery_export" or "up_to_date";
+                "prepared" or "up_to_date";
 
         /// <summary>
         /// The recovery metadata a prepared receipt carries. It follows the
-        /// Core precedence exactly: the <c>result</c> block first, then
-        /// <c>transaction</c>; a present block must describe an
-        /// <c>awaiting_recovery_export</c> transaction, and every present block
-        /// must agree. A partial, foreign or contradictory receipt yields no
-        /// context, so callers never build a recovery bundle from weak
-        /// evidence.
+        /// canonical wire and the Core precedence exactly: the receipt itself
+        /// must be <c>prepared</c> and the IDs/hash live only inside the
+        /// nested <c>result</c> and <c>transaction</c> blocks; a present block
+        /// must describe an <c>awaiting_recovery_export</c> transaction, and
+        /// every present block must agree. The triple must also be canonical,
+        /// as <see cref="OfflineUpdateTransfer.SaveRecoveryAsync"/> requires,
+        /// and root-level export fields are unbound and never read. A partial,
+        /// foreign, contradictory or naked receipt yields no context, so
+        /// callers never build a recovery bundle from weak evidence.
         /// </summary>
         internal static bool TryGetRecoveryMetadata(JsonElement? receipt,
             out string? transactionId, out string? planSha256, out string? recoveryManifestSha256)
@@ -297,7 +292,8 @@ namespace FreedomInstaller.App
             transactionId = null;
             planSha256 = null;
             recoveryManifestSha256 = null;
-            if (!receipt.HasValue || receipt.Value.ValueKind != JsonValueKind.Object)
+            if (!receipt.HasValue || receipt.Value.ValueKind != JsonValueKind.Object ||
+                State(receipt) != "prepared")
                 return false;
 
             bool found = false;
@@ -312,7 +308,7 @@ namespace FreedomInstaller.App
                 string? tx = GetString(block, "transactionId");
                 string? plan = GetString(block, "planSha256");
                 string? manifest = GetString(block, "recoveryManifestSha256");
-                if (string.IsNullOrWhiteSpace(tx) || string.IsNullOrWhiteSpace(plan) || string.IsNullOrWhiteSpace(manifest))
+                if (!IsCanonicalTransactionId(tx) || !IsSha256(plan) || !IsSha256(manifest))
                     return false;
 
                 if (found &&
@@ -329,6 +325,19 @@ namespace FreedomInstaller.App
 
             return found;
         }
+
+        // The Core receipt validators accept only a non-zero lowercase canonical
+        // GUID and 64 lowercase hex characters; the UI gate must not admit
+        // metadata that SaveRecoveryAsync would then reject.
+        private static bool IsCanonicalTransactionId(string? value) =>
+            value is not null &&
+            Guid.TryParseExact(value, "D", out Guid parsed) &&
+            parsed != Guid.Empty &&
+            string.Equals(value, parsed.ToString("D"), StringComparison.Ordinal);
+
+        private static bool IsSha256(string? value) =>
+            value is { Length: 64 } &&
+            value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
         private static bool GetBool(JsonElement receipt, string property) =>
             receipt.TryGetProperty(property, out JsonElement value) &&

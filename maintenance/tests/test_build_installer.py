@@ -488,27 +488,36 @@ class PrepareTests(unittest.TestCase):
 
     def test_offline_assets_bind_props_and_record(self):
         script, bundle = self._offline_assets()
+        originals = {script: script.read_bytes(), bundle: bundle.read_bytes()}
         record, _, _, _ = self._run_prepare(
             offline_bootstrap_script=str(script),
             offline_updater_bundle=str(bundle),
         )
 
         props_xml = Path(record["propsPath"]).read_text(encoding="utf-8")
+        run_dir = Path(record["runDirectory"]).resolve()
         for prop, provided in (
             ("BundledOfflineBootstrapScript", script),
             ("BundledOfflineUpdaterBundle", bundle),
         ):
-            resolved = str(provided.resolve())
+            entry = record["offlineBootstrap"][prop]
+            staged = Path(entry["path"]).resolve()
+            # Props and record name the validated snapshot, not the original.
+            self.assertNotEqual(staged, provided.resolve())
+            self.assertEqual(staged.parent, run_dir / "offline")
+            self.assertEqual(record["inputs"][prop], str(staged))
             self.assertIn(
-                f"<{prop}>{build_installer._xml_escape(resolved)}</{prop}>",
+                f"<{prop}>{build_installer._xml_escape(str(staged))}</{prop}>",
                 props_xml,
             )
-            self.assertEqual(record["inputs"][prop], resolved)
-            entry = record["offlineBootstrap"][prop]
-            self.assertEqual(Path(entry["path"]).resolve(), Path(resolved))
-            self.assertEqual(entry["bytes"], provided.stat().st_size)
-            self.assertEqual(entry["sha256"], _sha(provided.read_bytes()))
+            # The snapshot carries the exact bytes of the original and the
+            # record digests describe that snapshot.
+            self.assertEqual(staged.read_bytes(), originals[provided])
+            self.assertEqual(entry["bytes"], len(originals[provided]))
+            self.assertEqual(entry["sha256"], _sha(originals[provided]))
             self.assertEqual(entry["source"], build_installer._OFFLINE_ASSET_SOURCE)
+            # The original input itself is left intact.
+            self.assertEqual(provided.read_bytes(), originals[provided])
 
         # the original eleven properties are unaffected by the optional pair
         for prop in build_installer._PROPERTY_NAMES:
@@ -543,6 +552,103 @@ class PrepareTests(unittest.TestCase):
             props_xml,
         )
         self.assertEqual(record["offlineUpdaterVersion"], "0.8.1")
+
+    def test_offline_snapshot_ignores_source_mutation_before_publication(self):
+        # Regression: Phase 0 validates the pair, but props and the record are
+        # published after the whole build.  Mutating the originals in between
+        # must not change the embedded bytes or the embedded version.
+        script, bundle = self._offline_assets()
+        snapshot_script = script.read_bytes()
+        snapshot_bundle = bundle.read_bytes()
+        mutated_script = b"#!/bin/sh\necho mutated\n"
+        mutated_entry = b"#!/usr/bin/python3 -I\n# mutated updater\n"
+        # A fully valid replacement bundle (new version, new entry bytes), so
+        # a re-read of the original would really change what gets published.
+        mutated_bundle = _offline_bundle_bytes(
+            version="9.9.9",
+            entry_bytes=mutated_entry,
+            files=[
+                {
+                    "path": OFFLINE_ENTRY,
+                    "bytes": len(mutated_entry),
+                    "sha256": _sha(mutated_entry),
+                    "mode": "0755",
+                }
+            ],
+        )
+        self.assertNotEqual(mutated_script, snapshot_script)
+        self.assertNotEqual(mutated_bundle, snapshot_bundle)
+        mutations = []
+
+        def fake_package(ns):
+            out = Path(ns.output)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            BuildInstallerTestHelpers.write_valid_zip(out, ns.profile)
+            if not mutations:
+                # Deterministic, single-threaded edit after the pair has been
+                # validated and before anything is published: no race.
+                script.write_bytes(mutated_script)
+                bundle.write_bytes(mutated_bundle)
+                mutations.append(True)
+            return {"profile": ns.profile, "output": ns.output}
+
+        with mock.patch.object(
+            fetch_build_inputs, "fetch_all", side_effect=_fake_fetch_side_effect
+        ), mock.patch.object(
+            build_installer, "_run", side_effect=_fake_compile(self.repo_root, None)
+        ), mock.patch.object(
+            build_installer.package_edl, "package", side_effect=fake_package
+        ):
+            record = build_installer.prepare(
+                self.repo_root,
+                self.work_dir,
+                manifest_path=self.repo_root / "maintenance" / "build-inputs.json",
+                offline_bootstrap_script=str(script),
+                offline_updater_bundle=str(bundle),
+            )
+
+        # The mutation really happened.
+        self.assertTrue(mutations)
+        self.assertEqual(script.read_bytes(), mutated_script)
+        self.assertEqual(bundle.read_bytes(), mutated_bundle)
+
+        # The published version is the one validated from the snapshot.
+        self.assertEqual(record["offlineUpdaterVersion"], "0.8.0")
+        props_xml = Path(record["propsPath"]).read_text(encoding="utf-8")
+        self.assertIn(
+            f"<{build_installer._OFFLINE_VERSION_PROPERTY}>0.8.0"
+            f"</{build_installer._OFFLINE_VERSION_PROPERTY}>",
+            props_xml,
+        )
+        self.assertNotIn("9.9.9", props_xml)
+
+        # Props point at snapshots whose bytes still match what was validated,
+        # and the record digests describe those same bytes.
+        for prop, provided, snapshot in (
+            ("BundledOfflineBootstrapScript", script, snapshot_script),
+            ("BundledOfflineUpdaterBundle", bundle, snapshot_bundle),
+        ):
+            entry = record["offlineBootstrap"][prop]
+            staged = Path(entry["path"]).resolve()
+            self.assertNotEqual(staged, provided.resolve())
+            self.assertIn(
+                f"<{prop}>{build_installer._xml_escape(str(staged))}</{prop}>",
+                props_xml,
+            )
+            self.assertEqual(staged.read_bytes(), snapshot)
+            self.assertEqual(entry["bytes"], len(snapshot))
+            self.assertEqual(entry["sha256"], _sha(snapshot))
+
+        # The embedded version really is the one inside the snapshot manifest.
+        staged_bundle = Path(
+            record["offlineBootstrap"]["BundledOfflineUpdaterBundle"]["path"]
+        )
+        with tarfile.open(str(staged_bundle), mode="r:gz") as archive:
+            staged_document = json.loads(
+                archive.extractfile("manifest.json").read().decode("utf-8")
+            )
+        self.assertEqual(staged_document["version"], record["offlineUpdaterVersion"])
+        self.assertEqual(staged_document["version"], "0.8.0")
 
     def test_offline_bundle_over_the_transport_limit_fails_before_build(self):
         # The managed SSH session refuses uploads above 256 MiB; accepting a
@@ -991,14 +1097,20 @@ class CliTests(unittest.TestCase):
             self.assertEqual(publish_argv[cfg_idx + 1], "Release")
             self.assertNotIn("/releases/download/build-inputs", joined)
             self.assertNotIn("old-release", joined)
-            # the publish props carry both offline assets
+            # the publish props carry the snapshots staged for this run
             props_xml = props_path.read_text(encoding="utf-8")
+            run_dirs = list((work_dir / "runs").iterdir())
+            self.assertEqual(len(run_dirs), 1)
+            staged_dir = run_dirs[0] / "offline"
             for prop, provided in (
                 ("BundledOfflineBootstrapScript", script),
                 ("BundledOfflineUpdaterBundle", bundle),
             ):
-                value = build_installer._xml_escape(str(provided.resolve()))
+                staged = (staged_dir / prop).resolve()
+                self.assertNotEqual(staged, provided.resolve())
+                value = build_installer._xml_escape(str(staged))
                 self.assertIn(f"<{prop}>{value}</{prop}>", props_xml)
+                self.assertEqual(staged.read_bytes(), provided.read_bytes())
 
     def test_publish_without_offline_assets_fails_before_prepare(self):
         with tempfile.TemporaryDirectory(prefix="bi cli \u2013 ") as tmp:

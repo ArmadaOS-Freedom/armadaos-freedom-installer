@@ -208,6 +208,129 @@ public sealed class UpdatePackageMediaTests : IDisposable
     }
 
     [Fact]
+    public void PrivateSnapshotPolicyIsSignedAndNonWindowsOnly()
+    {
+        Assert.False(PackageImporter.RequiresPrivateArchiveSnapshot(signedImport: false));
+        Assert.Equal(
+            !OperatingSystem.IsWindows(),
+            PackageImporter.RequiresPrivateArchiveSnapshot(signedImport: true));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SignedMediaVerifiesFromPrivateSnapshotAfterOriginalsAreGone(bool split)
+    {
+        var c = CreateCase(split ? "snapshot-split" : "snapshot-single", splitCount: split ? 3 : 0);
+        string[] parts = split
+            ? Enumerable.Range(1, 3).Select(number => Part(c, number)).ToArray()
+            : [c.Path];
+        var expectedBytes = c.Descriptor["archive"]!["bytes"]!.GetValue<long>();
+
+        using var snapshot = PackageImporter.CaptureArchiveSnapshot(parts, expectedBytes, root, default);
+
+        Assert.Equal(expectedBytes, snapshot.Length);
+        Assert.Equal(split, snapshot.IsSplitSource);
+        Assert.Equal(split ? 3 : 1, snapshot.Parts.Count);
+
+        if (!OperatingSystem.IsWindows())
+        {
+            // The snapshot is created with these bits directly, so no umask-derived group or other
+            // permissions can ever be observed on it.
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                snapshot.UnixPermissions);
+            Assert.Equal(
+                UnixFileMode.None,
+                snapshot.UnixPermissions & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
+                    UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherWrite |
+                    UnixFileMode.OtherExecute));
+        }
+
+        // Nothing may reopen the originals once the snapshot exists, so verification, including the
+        // per-volume digests of a split archive, has to work after the files are gone.
+        foreach (var part in parts)
+        {
+            File.Delete(part);
+        }
+
+        PackageImporter.VerifyCapturedSnapshot(snapshot, parts, DescriptorOf(c), default);
+    }
+
+    [Fact]
+    public void SnapshotReplaysSignedDigestsInsteadOfRecheckingOriginals()
+    {
+        var c = CreateCase("snapshot-replay", splitCount: 3);
+        var parts = Enumerable.Range(1, 3).Select(number => Part(c, number)).ToArray();
+        var expectedBytes = c.Descriptor["archive"]!["bytes"]!.GetValue<long>();
+
+        using var snapshot = PackageImporter.CaptureArchiveSnapshot(parts, expectedBytes, root, default);
+
+        // Same length, different bytes: reading the original again would now fail every digest check.
+        var changed = File.ReadAllBytes(parts[1]);
+        changed[0] ^= 0x80;
+        File.WriteAllBytes(parts[1], changed);
+
+        PackageImporter.VerifyCapturedSnapshot(snapshot, parts, DescriptorOf(c), default);
+    }
+
+    [Fact]
+    public void SnapshotRequiresExactlyTheSignedByteCount()
+    {
+        var c = CreateCase("snapshot-bytes");
+        var expectedBytes = c.Descriptor["archive"]!["bytes"]!.GetValue<long>();
+
+        AssertMediaInvalid(() => PackageImporter.CaptureArchiveSnapshot([c.Path], expectedBytes - 1, root, default));
+        AssertMediaInvalid(() => PackageImporter.CaptureArchiveSnapshot([c.Path], expectedBytes + 1, root, default));
+        AssertMediaInvalid(() => PackageImporter.CaptureArchiveSnapshot(
+            [c.Path], PackageImporter.VerifiedArchiveSnapshot.MaxBytes + 1, root, default));
+        Assert.Empty(Directory.GetFiles(root));
+
+        using (var snapshot = PackageImporter.CaptureArchiveSnapshot([c.Path], expectedBytes, root, default))
+        {
+            Assert.Equal(expectedBytes, snapshot.Length);
+
+            var expected = File.ReadAllBytes(c.Path);
+            var actual = new byte[expectedBytes];
+            snapshot.Stream.Position = 0;
+            snapshot.Stream.ReadExactly(actual);
+            Assert.Equal(expected, actual);
+        }
+
+        Assert.Empty(Directory.GetFiles(root));
+    }
+
+    [Fact]
+    public void AbortedSnapshotCopyLeavesNoPartialFile()
+    {
+        var payload = new byte[64 * 1024];
+        Array.Fill(payload, (byte)0x5A);
+
+        using (var cancellation = new CancellationTokenSource())
+        {
+            using var cancelled = new InterruptingStream(payload, 16 * 1024, cancellation);
+            Assert.ThrowsAny<OperationCanceledException>(() =>
+            {
+                using var snapshot = PackageImporter.VerifiedArchiveSnapshot.Copy(
+                    cancelled, ["update.zip"], [payload.LongLength], payload.LongLength, root, cancellation.Token);
+            });
+        }
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+
+        using (var failing = new InterruptingStream(payload, 16 * 1024))
+        {
+            Assert.Throws<IOException>(() =>
+            {
+                using var snapshot = PackageImporter.VerifiedArchiveSnapshot.Copy(
+                    failing, ["update.zip"], [payload.LongLength], payload.LongLength, root, default);
+            });
+        }
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+    }
+
+    [Fact]
     public async Task InspectRequiresBothSidecarsAndTrustedSignatureWithoutCreatingFiles()
     {
         await AssertInspectDenied("missing", null, null);
@@ -245,6 +368,12 @@ public sealed class UpdatePackageMediaTests : IDisposable
 
     private static void AssertMediaInvalid(Action action) =>
         Assert.IsType<InvalidDataException>(Record.Exception(action));
+
+    private static UpdatePackageDescriptor DescriptorOf(Case c)
+    {
+        using var document = JsonDocument.Parse(c.Descriptor.ToJsonString());
+        return (UpdatePackageDescriptor)ParseMethod.Invoke(null, [document.RootElement])!;
+    }
 
     private Case CreateCase(
         string name,
@@ -364,4 +493,38 @@ public sealed class UpdatePackageMediaTests : IDisposable
     private sealed record EntrySpec(
         string Path, byte[] Data, byte[]? Expanded, byte[]? Unused, string Role,
         Action<ZipArchiveEntry>? Configure);
+
+    /// <summary>
+    /// In-memory archive stand-in that stops supplying bytes at a fixed offset, either cancelling the
+    /// snapshot copy or failing the read, so the partial-file cleanup can be observed without a real
+    /// interruption.
+    /// </summary>
+    private sealed class InterruptingStream : MemoryStream
+    {
+        private readonly int _limit;
+        private readonly CancellationTokenSource? _cancellation;
+
+        internal InterruptingStream(byte[] data, int limit, CancellationTokenSource? cancellation = null)
+            : base(data, writable: false)
+        {
+            _limit = limit;
+            _cancellation = cancellation;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (Position >= _limit)
+            {
+                if (_cancellation is not null)
+                {
+                    _cancellation.Cancel();
+                    throw new OperationCanceledException(_cancellation.Token);
+                }
+
+                throw new IOException("模拟读取失败。");
+            }
+
+            return base.Read(buffer, offset, (int)Math.Min(count, _limit - Position));
+        }
+    }
 }

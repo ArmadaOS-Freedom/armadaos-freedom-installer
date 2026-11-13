@@ -13,7 +13,9 @@ namespace OfflineSshProbe;
 /// account, so this harness is not read-only. The info and preflight steps are
 /// read-only: preflight validates the signed document and writes neither an OS
 /// upgrade nor a partition. The harness has no calls to prepare, execute or
-/// restart an upgrade.
+/// restart an upgrade. A requested preflight is reported with the same
+/// canonical pass contract as the installer UI, and a failed check makes the
+/// run fail instead of reporting ok.
 /// </summary>
 internal static class Program
 {
@@ -46,10 +48,12 @@ internal static class Program
 
         try
         {
-            var result = await RunAsync(options, cts.Token);
+            var (result, preflightPassed) = await RunAsync(options, cts.Token);
             WriteOutput(options.OutputPath, result);
-            Console.WriteLine("offline SSH probe completed");
-            return 0;
+            Console.WriteLine(preflightPassed
+                ? "offline SSH probe completed"
+                : "offline SSH probe completed with a failed preflight");
+            return preflightPassed ? 0 : 1;
         }
         catch (OperationCanceledException)
         {
@@ -65,7 +69,8 @@ internal static class Program
         }
     }
 
-    private static async Task<JsonObject> RunAsync(Options options, CancellationToken token)
+    private static async Task<(JsonObject Output, bool PreflightPassed)> RunAsync(
+        Options options, CancellationToken token)
     {
         var bundleSha256 = ComputeSha256(options.BundlePath);
         var scriptPath = Path.GetFullPath(options.ScriptPath);
@@ -150,14 +155,26 @@ internal static class Program
                 var document = await File.ReadAllBytesAsync(options.DescriptorPath, token);
                 var signature = await File.ReadAllBytesAsync(options.SignaturePath, token);
                 var preflight = await connection.Rpc.PreflightAsync(document, signature, token);
+                // A device-side rejection still returns a JSON object, so the
+                // probe must apply the same canonical pass contract as the UI
+                // instead of reporting a successful run for a failed check.
+                bool passed = OfflineUpdatePreflight.Passed(preflight);
+                output["ok"] = passed;
                 output["preflight"] = new JsonObject
                 {
-                    ["ok"] = true,
+                    ["ok"] = passed,
+                    ["requested"] = true,
+                    ["phase"] = OfflineUpdatePreflight.Phase(preflight),
+                    ["bootWriteState"] = OfflineUpdatePreflight.BootWriteState(preflight),
                     ["result"] = JsonNode.Parse(preflight.GetRawText()),
                 };
+                return (output, passed);
             }
             else
             {
+                // Not requested is not a failure: the run itself still succeeded,
+                // so the top-level ok stays true and only the preflight block is
+                // explicitly marked as not requested.
                 output["preflight"] = new JsonObject
                 {
                     ["ok"] = false,
@@ -165,7 +182,7 @@ internal static class Program
                 };
             }
 
-            return output;
+            return (output, true);
         }
     }
 

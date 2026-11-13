@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using Renci.SshNet;
@@ -33,18 +34,29 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
     private static readonly TimeSpan MaxDiscoveryTimeout = TimeSpan.FromSeconds(30);
 
     private readonly OfflineUpdateSshPasswordOptions _options;
-    private SshClient? _client;
-    private int _disposed;
+    private readonly Func<IPAddress, IPAddress?> _resolveSelectedSource;
+    private readonly OfflineUpdateSshClientLease _clientLease = new();
 
     internal OfflineUpdateSshNetTransport(OfflineUpdateSshPasswordOptions options)
+        : this(options, OfflineUpdateSshUsbRoute.ResolveSelectedSource)
+    {
+    }
+
+    internal OfflineUpdateSshNetTransport(
+        OfflineUpdateSshPasswordOptions options,
+        Func<IPAddress, IPAddress?> resolveSelectedSource)
     {
         _options = options;
+        _resolveSelectedSource = resolveSelectedSource ??
+            throw new ArgumentNullException(nameof(resolveSelectedSource));
     }
 
     public void Connect(TimeSpan timeout, Func<OfflineUpdateSshHostKey, bool> approveHostKey, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(approveHostKey);
         token.ThrowIfCancellationRequested();
+        if (_clientLease.IsDisposed)
+            throw new ObjectDisposedException(nameof(OfflineUpdateSshNetTransport));
 
         // No credential exists yet, so the discovery handshake only has to be
         // bounded by the network timeout; it is disposed before any prompt.
@@ -81,7 +93,8 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
         CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        var client = _client ?? throw new ObjectDisposedException(nameof(OfflineUpdateSshNetTransport));
+        var client = _clientLease.Current as SshClient
+            ?? throw new ObjectDisposedException(nameof(OfflineUpdateSshNetTransport));
         var sshCommand = client.CreateCommand(command);
         sshCommand.CommandTimeout = timeout;
 
@@ -182,7 +195,8 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
 
     public IOfflineUpdateSshChannel Start(string command)
     {
-        var client = _client ?? throw new ObjectDisposedException(nameof(OfflineUpdateSshNetTransport));
+        var client = _clientLease.Current as SshClient
+            ?? throw new ObjectDisposedException(nameof(OfflineUpdateSshNetTransport));
         var sshCommand = client.CreateCommand(command);
         sshCommand.CommandTimeout = TimeSpan.FromHours(6);
 
@@ -262,16 +276,21 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return;
-
-        var client = _client;
-        _client = null;
-        if (client is null)
-            return;
-
-        ReleaseClient(client);
+        // Atomically claim the installed client and mark the lease disposed.
+        // A client that loses this race is released by its own late-acquisition
+        // path before it is ever connected.
+        if (_clientLease.Release() is SshClient client)
+            ReleaseClient(client);
     }
+
+    /// <summary>
+    /// Re-validates the USB source route immediately before a managed
+    /// handshake. The route can change between the key preflight and the
+    /// password handshake, so each handshake gets its own decision. Wi-Fi
+    /// (no bind address) performs no lookup.
+    /// </summary>
+    internal void VerifySelectedUsbSource() =>
+        OfflineUpdateSshUsbRoute.VerifySelectedSource(_options.Host, _options.BindAddress, _resolveSelectedSource);
 
     private static TimeSpan BoundDiscoveryTimeout(TimeSpan timeout) =>
         timeout < MaxDiscoveryTimeout ? timeout : MaxDiscoveryTimeout;
@@ -285,6 +304,10 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
     private OfflineUpdateSshHostKey DiscoverHostKey(TimeSpan timeout, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+
+        // Key preflight: the OS-selected source must still be the USB bind
+        // address before this handshake sends anything.
+        VerifySelectedUsbSource();
 
         var connectionInfo = new ConnectionInfo(
             _options.Host,
@@ -349,6 +372,12 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
 
     private void AuthenticateWithPassword(TimeSpan timeout, OfflineUpdateSshHostKeyGate gate, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+
+        // Password handshake: re-check the USB route against the destination
+        // actually used by this connection attempt, not the earlier preflight.
+        VerifySelectedUsbSource();
+
         var connectionInfo = new ConnectionInfo(
             _options.Host,
             _options.Port,
@@ -379,7 +408,14 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
                 keyChanged = true;
         };
 
-        _client = client;
+        // Atomic ownership handoff: either the lease installs this client for
+        // later commands, or disposal already won and this late client is
+        // released before it ever connects. No lock is held across Connect.
+        if (!_clientLease.TryAcquire(client))
+        {
+            ReleaseClient(client);
+            throw new ObjectDisposedException(nameof(OfflineUpdateSshNetTransport));
+        }
 
         try
         {
@@ -812,6 +848,41 @@ internal sealed class OfflineUpdateSshNetTransport : IOfflineUpdateSshTransport
         public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
             ValueTask.FromException(new IOException(ClosedMessage));
     }
+}
+
+/// <summary>
+/// Atomic single-owner handoff between a newly constructed SSH client and
+/// disposal. Exactly one party wins: either the client is installed for later
+/// commands, or the lease is already disposed and the late client is reported
+/// as unowned so its caller can release it before connecting. The exchange is
+/// a lock-free compare-and-swap, so no lock is ever held across blocking SSH
+/// I/O.
+/// </summary>
+internal sealed class OfflineUpdateSshClientLease
+{
+    private static readonly object Disposed = new();
+    private object? _state;
+
+    internal bool IsDisposed => ReferenceEquals(Volatile.Read(ref _state), Disposed);
+
+    internal object? Current =>
+        Volatile.Read(ref _state) is { } state && !ReferenceEquals(state, Disposed) ? state : null;
+
+    /// <summary>Installs the client only while the lease is still empty.</summary>
+    internal bool TryAcquire(object client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        return !IsDisposed && Interlocked.CompareExchange(ref _state, client, null) is null;
+    }
+
+    /// <summary>
+    /// Atomically marks the lease disposed and returns the installed client, if
+    /// any. The result is returned at most once.
+    /// </summary>
+    internal object? Release() =>
+        Interlocked.Exchange(ref _state, Disposed) is { } state && !ReferenceEquals(state, Disposed)
+            ? state
+            : null;
 }
 
 /// <summary>

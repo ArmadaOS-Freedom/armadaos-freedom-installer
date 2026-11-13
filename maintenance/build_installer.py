@@ -3,7 +3,9 @@
 
 Phases
 ------
-0. optional paired offline bootstrap input validation (cheap, before any build)
+0. optional paired offline bootstrap inputs staged into the isolated run
+   directory with bounded streaming and validated there (cheap, before any
+   build)
 1. manifest load + strict vendor file validation (before any download/compile)
 2. official input fetch into a real cache, per-run isolated directories
 3. compile all three tools from checked-in source
@@ -16,6 +18,9 @@ After prepare(), the CLI optionally runs `dotnet publish` of the WPF app against
 the freshly generated props file.  A publish requires the paired
 --offline-bootstrap-script and --offline-updater-bundle inputs; they are local
 artefacts of the system offline updater bundle build, never downloaded here.
+The pair is copied into the per-run directory before it is validated, and the
+props, the record digests and the publish all read only that snapshot, so an
+edit to the originals cannot change what is embedded.
 
 Stdlib only. No GitHub API, no auth, no devices, no broad cleanup.
 """
@@ -98,6 +103,10 @@ _OFFLINE_MAX_CAPABILITY_LENGTH = 64
 _OFFLINE_CAPABILITY = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z", re.ASCII)
 _OFFLINE_VERSION = re.compile(r"\d+(?:\.\d+)*\Z", re.ASCII)
 _OFFLINE_MODE = re.compile(r"[0-7]{3,4}\Z", re.ASCII)
+
+# Streaming chunk for snapshotting build inputs: bounded memory regardless of
+# input size, and the only way a file is ever read on the way into a run.
+_COPY_CHUNK = 1024 * 1024
 
 _TOOL_NAMES = ("client", "packer", "unpacker")
 
@@ -401,22 +410,100 @@ def _offline_entry_member(bundle, spec):
         raise SystemExit(prefix + f"{entry} sha256 {got_sha} != expected {want_sha}")
 
 
-def _validate_offline_inputs(script, bundle):
-    """Validate the optional paired offline-bootstrap inputs.
+def _stage_offline_asset(prop, source, dest_dir, limit=None):
+    """Snapshot one offline input into the run directory with bounded streaming.
+
+    The source is read one chunk at a time, never more than ``limit`` bytes in
+    total, and the exact bytes written are hashed as they pass through, so the
+    returned digest describes the snapshot rather than a later re-read of the
+    original.  A source whose size or modification time changes while it is
+    being copied is rejected instead of being captured half-way.
+    """
+    source = Path(source)
+    prefix = f"offline assets error: {prop}: "
+    try:
+        before = os.stat(str(source))
+    except OSError as error:
+        raise SystemExit(prefix + f"cannot read: {error}")
+    if limit is not None and not 0 < before.st_size <= limit:
+        raise SystemExit(
+            f"offline bundle error: {source}: bundle size is out of bounds"
+        )
+    dest_dir = Path(dest_dir)
+    # Fixed destination name per property: independent of the source basename,
+    # so two inputs can never collide and no caller-supplied name is reused.
+    dest = dest_dir / prop
+    try:
+        reader = open(str(source), "rb")
+    except OSError as error:
+        raise SystemExit(prefix + f"cannot read: {error}")
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=str(dest_dir))
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with reader, os.fdopen(fd, "wb") as writer:
+            while True:
+                chunk = reader.read(_COPY_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if limit is not None and total > limit:
+                    raise SystemExit(
+                        f"offline bundle error: {source}: bundle size is out of bounds"
+                    )
+                digest.update(chunk)
+                writer.write(chunk)
+            writer.flush()
+            os.fsync(writer.fileno())
+        try:
+            after = os.stat(str(source))
+        except OSError as error:
+            raise SystemExit(prefix + f"cannot re-read after staging: {error}")
+        if (
+            total != before.st_size
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+        ):
+            raise SystemExit(prefix + "input changed while it was being staged")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return {
+        "path": str(dest.resolve()),
+        "bytes": total,
+        "sha256": digest.hexdigest(),
+    }
+
+
+def _validate_offline_inputs(script, bundle, work_dir):
+    """Stage then validate the optional paired offline-bootstrap inputs.
 
     Both paths must be supplied together, and each must be an existing,
-    readable regular file.  The bundle's manifest is then read in place from
-    the tar.gz - bounded, without extraction or execution - and must declare
-    the capability this installer requires, after which the entry script
-    member is streamed and checked against the manifest's size and SHA-256.
-    This runs before the expensive build phases so a typo or a stale bundle
-    never costs a full tool compilation.  Returns a ``(resolved, version)``
-    pair: the props-name to resolved-path mapping and the bundle manifest
-    version that the installer will require in the install receipt, or
-    ``({}, None)`` when both inputs are omitted.
+    readable regular file.  The pair is copied into a fresh, isolated run
+    directory with bounded streaming, and only those snapshots are read from
+    then on: the manifest, the entry bytes, the props, the record digests and
+    the publish all refer to the snapshot, never to the mutable originals.
+
+    The bundle's manifest is read from the staged snapshot - bounded, without
+    extraction or execution - and must declare the capability this installer
+    requires, after which the staged entry script member is streamed and
+    checked against the manifest's size and SHA-256.  This runs before the
+    expensive build phases so a typo or a stale bundle never costs a full
+    tool compilation.
+
+    Returns ``(staged, version, run_dir)``: ``staged`` maps each props name to
+    ``{path, bytes, sha256}`` for the snapshot, ``version`` is the bundle
+    manifest version the installer requires in the install receipt, and
+    ``run_dir`` is the isolated run directory that holds the snapshots.  All
+    three are ``({}, None, None)`` when both inputs are omitted.
     """
     if script is None and bundle is None:
-        return {}, None
+        return {}, None, None
     if script is None or bundle is None:
         missing = (
             "--offline-bootstrap-script" if script is None
@@ -426,7 +513,7 @@ def _validate_offline_inputs(script, bundle):
             f"offline assets error: {missing} is missing; the bootstrap script "
             "and updater bundle must be supplied together"
         )
-    resolved = {}
+    sources = {}
     for prop, raw in (
         ("BundledOfflineBootstrapScript", script),
         ("BundledOfflineUpdaterBundle", bundle),
@@ -440,13 +527,30 @@ def _validate_offline_inputs(script, bundle):
             )
         if not os.access(str(path), os.R_OK):
             raise SystemExit(f"offline assets error: {prop} is not readable: {path}")
-        resolved[prop] = str(path.resolve())
-    bundle_path = resolved["BundledOfflineUpdaterBundle"]
+        sources[prop] = path.resolve()
+
+    run_dir = _new_run_dir(work_dir)
+    staged_dir = run_dir / "offline"
+    staged_dir.mkdir()
+    staged = {
+        "BundledOfflineBootstrapScript": _stage_offline_asset(
+            "BundledOfflineBootstrapScript",
+            sources["BundledOfflineBootstrapScript"],
+            staged_dir,
+        ),
+        "BundledOfflineUpdaterBundle": _stage_offline_asset(
+            "BundledOfflineUpdaterBundle",
+            sources["BundledOfflineUpdaterBundle"],
+            staged_dir,
+            limit=_OFFLINE_MAX_BUNDLE_BYTES,
+        ),
+    }
+    bundle_path = staged["BundledOfflineUpdaterBundle"]["path"]
     document = _offline_manifest_document(bundle_path)
     _offline_entry_member(
         bundle_path, _validate_offline_manifest(bundle_path, document)
     )
-    return resolved, document["version"]
+    return staged, document["version"], run_dir
 
 
 def _make_controlled_env(work_dir):
@@ -479,6 +583,15 @@ def _run(argv, cwd, env, phase):
             f"[{phase}] command failed with exit code {exc.returncode}: "
             + " ".join(str(a) for a in argv)
         ) from exc
+
+
+def _new_run_dir(work_dir):
+    """Create a fresh, uniquely named isolated run directory under ``runs``."""
+    runs_root = Path(work_dir) / "runs"
+    runs_root.mkdir(parents=True, exist_ok=True)
+    run_dir = runs_root / uuid.uuid4().hex
+    run_dir.mkdir(parents=False, exist_ok=False)
+    return run_dir
 
 
 def _extract_libusb(nupkg_path, extract_spec):
@@ -665,10 +778,12 @@ def prepare(repo_root, work_dir, manifest_path=None,
     """Run the source build input preparation.
 
     ``offline_bootstrap_script`` and ``offline_updater_bundle`` are optional
-    but paired: when supplied they are validated as readable regular files
-    before any expensive phase, recorded with size and SHA-256, and written
-    into the generated props for the single-file publish together with the
-    bundle manifest version that the installer requires in the receipt.
+    but paired: when supplied they are copied into the per-run directory with
+    bounded streaming, validated there as regular files before any expensive
+    phase, and recorded with the size and SHA-256 of that snapshot.  The props
+    point at the snapshot, so the single-file publish embeds exactly the bytes
+    that were validated together with the bundle manifest version the
+    installer requires in the receipt.
 
     Returns a record dict describing every generated artefact.
     """
@@ -677,15 +792,23 @@ def prepare(repo_root, work_dir, manifest_path=None,
     if manifest_path is None:
         manifest_path = repo_root / "maintenance" / "build-inputs.json"
     manifest_path = Path(manifest_path)
+    work_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Phase 0: offline bootstrap pair (cheap, before any build) -------
-    offline_inputs, offline_updater_version = _validate_offline_inputs(
-        offline_bootstrap_script, offline_updater_bundle
+    # --- Phase 0: snapshot + validate the offline bootstrap pair ----------
+    # The pair is copied into the isolated run directory before anything is
+    # validated or downloaded.  Everything downstream - manifest, digests,
+    # props, publication - reads that snapshot, not the mutable originals.
+    offline_staged, offline_updater_version, run_dir = _validate_offline_inputs(
+        offline_bootstrap_script, offline_updater_bundle, work_dir
     )
+    offline_inputs = {
+        prop: item["path"] for prop, item in offline_staged.items()
+    }
     if offline_inputs:
         _log(
             "offline",
-            f"paired bootstrap script and updater bundle OK (version {offline_updater_version})",
+            f"paired bootstrap script and updater bundle staged and OK "
+            f"(version {offline_updater_version})",
         )
 
     # --- Phase 1a: manifest load -----------------------------------------
@@ -698,14 +821,10 @@ def prepare(repo_root, work_dir, manifest_path=None,
     _log("vendor", f"{len(vendor_map)} vendor files OK")
 
     # --- Phase 1c: work directories, per-run isolation --------------------
-    work_dir.mkdir(parents=True, exist_ok=True)
     downloads_root = work_dir / "downloads"
     downloads_root.mkdir(parents=True, exist_ok=True)
-    runs_root = work_dir / "runs"
-    runs_root.mkdir(parents=True, exist_ok=True)
-    run_id = uuid.uuid4().hex
-    run_dir = runs_root / run_id
-    run_dir.mkdir(parents=False, exist_ok=False)
+    if run_dir is None:
+        run_dir = _new_run_dir(work_dir)
     materials_dir = run_dir / "materials"
     materials_dir.mkdir()
     run_build_dir = run_dir / "build"
@@ -887,16 +1006,21 @@ def prepare(repo_root, work_dir, manifest_path=None,
             raise SystemExit(f"props error: missing input for {prop}: {path_str}")
 
     offline_assets = {}
-    for prop, path_str in offline_inputs.items():
-        n, sha = _hash_file(path_str)
+    for prop, item in offline_staged.items():
+        # digests were computed from the bytes written into the snapshot, so
+        # they cannot drift from what the props point at.
         offline_assets[prop] = {
-            "path": path_str,
-            "bytes": n,
-            "sha256": sha,
+            "path": item["path"],
+            "bytes": item["bytes"],
+            "sha256": item["sha256"],
             "source": _OFFLINE_ASSET_SOURCE,
         }
     if offline_assets:
-        _log("offline", "hashed paired bootstrap script and updater bundle")
+        _log(
+            "offline",
+            "recorded snapshot digests for the paired bootstrap script and "
+            "updater bundle",
+        )
 
     props_xml = _write_props(None, inputs, offline_updater_version)
     marker = "  <PropertyGroup>\n"

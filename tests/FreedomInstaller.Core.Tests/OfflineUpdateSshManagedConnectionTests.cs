@@ -505,6 +505,28 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Connect_SudoStartupFailure_ReportsSudoUnavailableReasonAndMessage()
+    {
+        // The sudo command exits before the ready marker and reports a policy
+        // refusal. Both the classified Reason and the copy built from it must
+        // identify sudo, never missing updater components.
+        var hostKey = HostKey(26);
+        var channel = new FakeChannel(
+            "sudo: a password is required\n",
+            gaiteOutputOnPassword: false,
+            exited: true,
+            exitStatus: 1);
+        var transport = new FakeTransport(hostKey) { ChannelFactory = _ => channel };
+
+        var error = await ConnectFailsAsync(Options(hostKey), transport);
+
+        Assert.Equal(OfflineUpdateSshManagedFailure.SudoUnavailable, error.Reason);
+        Assert.Contains("sudo", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("password", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("bootstrap", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Connect_InfoQueryRejectedByUpdater_KeepsRemoteCauseAndDoesNotBlameMissingComponents()
     {
         var hostKey = HostKey(22);

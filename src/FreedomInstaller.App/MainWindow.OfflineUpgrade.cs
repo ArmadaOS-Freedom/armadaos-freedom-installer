@@ -172,8 +172,9 @@ namespace FreedomInstaller.App
             // A session the tablet already prepared reaches the recovery
             // export through the same Plan action. Export is read-only, so it
             // is enabled with the same live evidence a prepare needs (package,
-            // selection, preflight) and only while no verified local bundle is
-            // held; the boot policy is not part of this gate.
+            // selection, preflight), a prepared receipt whose nested metadata
+            // matches, and only while no verified local bundle is held; the
+            // boot policy is not part of this gate.
             bool canExportRecovery = !busy && OfflineUpdateUiState.CanExportRecoverySession(
                 connected, imported, _offlinePreflightPassed, _offlineSelectedSession != null,
                 _offlineLastReceipt, _offlineSavedRecovery != null);
@@ -853,10 +854,13 @@ namespace FreedomInstaller.App
                 EnsureReadyForSessionWork(requireSelectedSession: _offlineSessions.Count > 0);
                 // A session the tablet already prepared reaches the export step
                 // instead of failing the prepare gate; it is never prepared a
-                // second time. Export is read-only, so it is the only branch
-                // that does not need the write-side boot policy.
+                // second time. Only the canonical top-level prepared state
+                // routes here, and the export itself still validates the
+                // nested transaction metadata Core will read. Export is
+                // read-only, so it is the only branch that does not need the
+                // write-side boot policy.
                 bool exportRecoveryOnly =
-                    OfflineUpdateUiState.CanExportRecovery(_offlineLastReceipt, _offlineSavedRecovery != null);
+                    OfflineUpdateUiState.NeedsRecoveryExport(_offlineLastReceipt) && _offlineSavedRecovery == null;
                 if (exportRecoveryOnly && _offlineSelectedSession == null)
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
                 if (!exportRecoveryOnly && !_offlineBootPolicySupported)
@@ -1240,11 +1244,6 @@ namespace FreedomInstaller.App
                         ClearOfflineActionEligibility();
                         SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StatePreparedMissingRecovery");
                     }
-                    break;
-
-                case "awaiting_recovery_export":
-                    ClearOfflineActionEligibility();
-                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateAwaitingRecoveryExport");
                     break;
 
                 case "up_to_date":

@@ -2,6 +2,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -176,6 +177,118 @@ public sealed class OfflineUpdateSshNetTransportTests
         Assert.Equal(0, calls);
         Assert.False(gate.IsApproved);
     }
+
+    [Fact]
+    public void UsbRouteChecksTheSourceTheOsSelectsForTheNumericDestination()
+    {
+        IPAddress? destination = null;
+        var transport = new OfflineUpdateSshNetTransport(
+            UsbOptions(),
+            host =>
+            {
+                destination = host;
+                return IPAddress.Parse("172.16.42.2");
+            });
+
+        transport.VerifySelectedUsbSource();
+
+        Assert.Equal(IPAddress.Parse("172.16.42.10"), destination);
+    }
+
+    [Fact]
+    public void UsbRouteRejectsADifferentSelectedSource()
+    {
+        var transport = new OfflineUpdateSshNetTransport(UsbOptions(), _ => IPAddress.Parse("172.16.42.3"));
+
+        Assert.Throws<IOException>(() => transport.VerifySelectedUsbSource());
+    }
+
+    [Fact]
+    public void UsbRouteRejectsAnUnresolvedSelectedSourceWithoutFallback()
+    {
+        var transport = new OfflineUpdateSshNetTransport(UsbOptions(), _ => null);
+
+        Assert.Throws<IOException>(() => transport.VerifySelectedUsbSource());
+    }
+
+    [Fact]
+    public void UsbRouteIsReevaluatedBeforeEveryHandshake()
+    {
+        // First call stands in for the host-key preflight, the second for the
+        // password handshake. A route change between them must be rejected
+        // instead of reusing the first decision.
+        var calls = 0;
+        var transport = new OfflineUpdateSshNetTransport(
+            UsbOptions(),
+            _ =>
+            {
+                calls++;
+                return IPAddress.Parse(calls == 1 ? "172.16.42.2" : "192.168.1.5");
+            });
+
+        transport.VerifySelectedUsbSource();
+        Assert.Throws<IOException>(() => transport.VerifySelectedUsbSource());
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public void WifiConnectionsNeverResolveAUsbSource()
+    {
+        var options = new OfflineUpdateSshPasswordOptions(
+            "device.example", 2222, "armada", "topsecret", Path.GetTempPath());
+        var calls = 0;
+        var transport = new OfflineUpdateSshNetTransport(
+            options,
+            _ =>
+            {
+                calls++;
+                return null;
+            });
+
+        transport.VerifySelectedUsbSource();
+
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public void AClientOfferedAfterDisposalIsNotOwned()
+    {
+        var lease = new OfflineUpdateSshClientLease();
+        var late = new object();
+
+        Assert.Null(lease.Release());
+
+        Assert.False(lease.TryAcquire(late));
+        Assert.True(lease.IsDisposed);
+        Assert.Null(lease.Current);
+    }
+
+    [Fact]
+    public void DisposalTransfersTheOwnedClientExactlyOnce()
+    {
+        var lease = new OfflineUpdateSshClientLease();
+        var client = new object();
+
+        Assert.True(lease.TryAcquire(client));
+        Assert.Same(client, lease.Current);
+        Assert.Same(client, lease.Release());
+        Assert.Null(lease.Release());
+    }
+
+    [Fact]
+    public void AcquiringTwiceNeverReplacesTheInstalledClient()
+    {
+        var lease = new OfflineUpdateSshClientLease();
+        var first = new object();
+        var second = new object();
+
+        Assert.True(lease.TryAcquire(first));
+        Assert.False(lease.TryAcquire(second));
+        Assert.Same(first, lease.Current);
+    }
+
+    private static OfflineUpdateSshPasswordOptions UsbOptions() =>
+        new("172.16.42.10", 2222, "armada", "topsecret", Path.GetTempPath(), "172.16.42.2");
 
     [Fact]
     public void ARunningCommandIsNeverTreatedAsCompleted()

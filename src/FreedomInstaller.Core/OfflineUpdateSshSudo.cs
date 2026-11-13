@@ -415,11 +415,13 @@ internal static class OfflineUpdateSshSudo
                     var detail = string.Join(
                         " ",
                         new[] { line, elevated.ErrorTail }.Where(value => !string.IsNullOrWhiteSpace(value)));
+                    // The reason and the message must come from the same
+                    // classification: a sudo startup failure must not be
+                    // reported as missing updater components.
+                    var reason = ClassifyStartupFailure(detail, password is not null);
                     throw new OfflineUpdateSshManagedException(
-                        OfflineUpdateSshManagedFailure.UpdaterUnavailable,
-                        BuildStartupFailureMessage(
-                            ClassifyStartupFailure(detail, password is not null),
-                            detail));
+                        reason,
+                        BuildStartupFailureMessage(reason, detail));
                 }
                 token.ThrowIfCancellationRequested();
                 throw new TimeoutException("The tablet did not start the offline updater in time.");

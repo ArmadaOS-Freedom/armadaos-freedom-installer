@@ -119,6 +119,13 @@ public sealed class ImportedPackage : IDisposable
 /// RAR volumes such as <c>.part1.rar</c>) is resolved to its complete volume group first.
 /// </para>
 /// <para>
+/// A signed package is verified against the embedded trust anchor before any of it is used. On a
+/// platform whose file sharing is advisory (everything but Windows) that verification and the later
+/// extraction read one private, bounded copy of the logical archive below the work root, so the bytes
+/// that were checked are exactly the bytes that are installed. Windows keeps a
+/// <see cref="FileShare.Read"/> handle on every part for the whole window and needs no copy.
+/// </para>
+/// <para>
 /// Every operational or format problem, including a malformed bundle, a missing or unsupported model
 /// and a rejected package contract, is reported through
 /// <see cref="ImportedPackage.Validation"/> with <see cref="PackageValidationResult.IsValid"/> false
@@ -282,15 +289,28 @@ public static partial class PackageImporter
                 return ImportArchive(source, sourcePath, expectedModel, target, root, token);
             }
 
-            using var stream = source.OpenStream();
+            // A signed import on a platform whose file sharing is only advisory verifies and extracts
+            // from one private copy of the logical archive, so the bytes that were checked are exactly
+            // the bytes that are used. Windows keeps FileShare.Read handles on every part for the whole
+            // verification and extraction window and therefore needs no extra copy.
+            using var snapshot = SignedImportSnapshot(source, updateDescriptor, root, token);
+            using var stream = (Stream?)snapshot?.Stream ?? source.OpenStream();
 
             if (updateDescriptor is not null)
             {
-                VerifyUpdateMedia(source, stream, updateDescriptor, token);
+                VerifyUpdateMedia(source, stream, updateDescriptor, token, snapshot);
             }
 
             if (!HasZipHeader(stream))
             {
+                if (snapshot is not null)
+                {
+                    // A signed descriptor was verified above, which already required a ZIP container.
+                    // Never fall back to the caller's files once the snapshot is in use.
+                    reasons.Add("签名升级包不是 ZIP 归档，拒绝使用。");
+                    return Invalid(sourcePath, expectedModel, reasons);
+                }
+
                 // Everything that is not a ZIP container goes through the general archive reader in
                 // PackageImporter.Archives.cs; the ZIP path below is untouched.
                 return ImportArchive(source, sourcePath, expectedModel, target, root, token);
@@ -440,6 +460,40 @@ public static partial class PackageImporter
             DeleteStage(stage, root, reasons);
             return Invalid(sourcePath, expectedModel, reasons);
         }
+    }
+
+    /// <summary>
+    /// True when a signed import must verify and extract from one private snapshot instead of the
+    /// caller's files.
+    /// <para>
+    /// The shipped Windows x64 app keeps a <see cref="FileShare.Read"/> handle on every part from the
+    /// first verification read until extraction is finished, so another writer cannot replace the bytes
+    /// underneath it. On Unix that sharing mode is advisory only, so a signed import copies the complete
+    /// logical archive into a private file below the work root and verifies and extracts that copy.
+    /// Unsigned bundle imports and legacy directory imports are never copied.
+    /// </para>
+    /// </summary>
+    internal static bool RequiresPrivateArchiveSnapshot(bool signedImport) =>
+        signedImport && !OperatingSystem.IsWindows();
+
+    /// <summary>
+    /// Produces the private snapshot a signed import reads from, or null when the caller's files may be
+    /// read directly. Only a descriptor that was already verified against the embedded trust anchor
+    /// triggers the copy.
+    /// </summary>
+    private static VerifiedArchiveSnapshot? SignedImportSnapshot(
+        ArchiveSource source,
+        UpdatePackageDescriptor? descriptor,
+        string root,
+        CancellationToken token)
+    {
+        if (descriptor is null || !RequiresPrivateArchiveSnapshot(signedImport: true))
+        {
+            return null;
+        }
+
+        token.ThrowIfCancellationRequested();
+        return CaptureArchiveSnapshot(source.Parts, ReadExpectedArchiveBytes(descriptor), root, token);
     }
 
     private static ImportedPackage Invalid(string sourcePath, string deviceModel, List<string> reasons)
