@@ -102,6 +102,13 @@ _OFFLINE_MAX_CAPABILITIES = 16
 _OFFLINE_MAX_CAPABILITY_LENGTH = 64
 _OFFLINE_CAPABILITY = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z", re.ASCII)
 _OFFLINE_VERSION = re.compile(r"\d+(?:\.\d+)*\Z", re.ASCII)
+# The bootstrap coordinator parses this version as dotted decimal ``int``
+# segments (int.TryParse), so a segment above Int32.MaxValue is a version the
+# device can never accept.  It is refused here instead of shipping a bundle
+# that fails during deployment.  Leading zeros are ordinary digits to
+# int.TryParse, so they stay accepted; the check compares digit strings and
+# never converts an arbitrarily long number to a Python int.
+_OFFLINE_VERSION_MAX_PART = "2147483647"  # Int32.MaxValue
 _OFFLINE_MODE = re.compile(r"[0-7]{3,4}\Z", re.ASCII)
 
 # Streaming chunk for snapshotting build inputs: bounded memory regardless of
@@ -222,6 +229,26 @@ def _offline_capability_message():
     )
 
 
+def _offline_version_part_fits_int32(part):
+    """True when one decimal segment fits the coordinator's 32-bit parse.
+
+    Leading zeros carry no value to int.TryParse, so they are dropped before
+    the length/digit comparison.  The comparison is done on digit strings, so
+    a very long segment is rejected without ever calling ``int()`` on it.
+    """
+    significant = part.lstrip("0") or "0"
+    if len(significant) != len(_OFFLINE_VERSION_MAX_PART):
+        return len(significant) < len(_OFFLINE_VERSION_MAX_PART)
+    return significant <= _OFFLINE_VERSION_MAX_PART
+
+
+def _offline_version_fits_int32(version):
+    """True when every dotted segment is at most Int32.MaxValue."""
+    return all(
+        _offline_version_part_fits_int32(part) for part in version.split(".")
+    )
+
+
 def _offline_manifest_document(bundle):
     """Read the one manifest.json from a bundle tar.gz without extracting it.
 
@@ -291,6 +318,13 @@ def _validate_offline_manifest(bundle, document):
     version = document.get("version")
     if not isinstance(version, str) or not _OFFLINE_VERSION.fullmatch(version):
         raise SystemExit(prefix + "manifest version is not a version string")
+    if not _offline_version_fits_int32(version):
+        raise SystemExit(
+            prefix
+            + "manifest version has a segment above "
+            + _OFFLINE_VERSION_MAX_PART
+            + " (the bootstrap coordinator parses each segment as a 32-bit integer)"
+        )
     if document.get("entry") != _OFFLINE_ENTRY:
         raise SystemExit(prefix + f"manifest entry must be {_OFFLINE_ENTRY!r}")
     files = document.get("files")

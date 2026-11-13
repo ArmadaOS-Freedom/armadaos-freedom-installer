@@ -807,6 +807,39 @@ class PrepareTests(unittest.TestCase):
                     _offline_bundle_bytes(**overrides))
                 self.assertIn("offline bundle error", message)
 
+    def test_offline_bundle_version_segments_must_fit_int32(self):
+        # The bootstrap coordinator parses this version with int.TryParse, so a
+        # segment above Int32.MaxValue would build here and fail on the tablet.
+        rejected = (
+            "2147483648",
+            "0.2147483648",
+            "0.8.99999999999999999999",
+            # Far beyond any Python int-from-string digit limit: the check must
+            # compare digit strings and never raise ValueError.
+            "9" * 5000,
+        )
+        for version in rejected:
+            with self.subTest(version=version):
+                message = self._prepare_with_bundle(
+                    _offline_bundle_bytes(version=version))
+                self.assertIn("version", message)
+                self.assertIn("32-bit", message)
+
+        # The maximum itself succeeds, and leading zeros stay accepted because
+        # int.TryParse treats them as insignificant.
+        accepted = (
+            "2147483647",
+            "0008.000.2147483647",
+            "0.8." + "0" * 5000 + "1",
+        )
+        for version in accepted:
+            with self.subTest(version=version):
+                document = _offline_manifest(
+                    version=version, capabilities=["preflight-session-v1"])
+                spec = build_installer._validate_offline_manifest(
+                    "armada-offline-updater.tar.gz", document)
+                self.assertEqual(spec["path"], OFFLINE_ENTRY)
+
     def test_offline_bundle_with_duplicate_manifest_fails_before_build(self):
         data = json.dumps(_offline_manifest()).encode("utf-8")
         message = self._prepare_with_bundle(

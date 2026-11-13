@@ -224,6 +224,27 @@ namespace FreedomInstaller.App
             return OfflineUpdateRecordsDirectory.Resolve(BundledTools.GetCacheRoot(), _workDirectory.RootPath);
         }
 
+        /// <summary>
+        /// Best-effort records root for read-only status work. A store that is
+        /// not ready, invalid or on a missing volume returns null with the
+        /// reason already used for the saved-sessions diagnostic, so the
+        /// caller can still report the tablet's status and only skip the
+        /// optional local lookup.
+        /// </summary>
+        private string? TryGetPersistentRecordsRoot(out string? unavailableReason)
+        {
+            try
+            {
+                unavailableReason = null;
+                return GetPersistentRecordsRoot();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                unavailableReason = ex.Message;
+                return null;
+            }
+        }
+
         private async Task RunOfflineUpgradeAsync(Func<long, CancellationToken, Task> action)
         {
             if (_busy || _offlineUpgradeCloseInProgress || _closed)
@@ -1020,12 +1041,12 @@ namespace FreedomInstaller.App
                 ClearOfflineActionEligibility();
                 var session = _offlineSelectedSession!;
                 bool hasPackage = _offlinePackage != null && !string.IsNullOrEmpty(_offlineDescriptorSha256);
-                string recordsRoot = GetPersistentRecordsRoot();
-                string sessionRoot = Path.Combine(recordsRoot, session.SessionId);
 
                 // Read-only. Without an imported package only the saved
                 // session/device binding is verified; nothing is uploaded,
-                // prepared or executed.
+                // prepared or executed. The remote exchange runs first and on
+                // its own: the records location is local state, and a missing
+                // volume must never hide the tablet's own status.
                 var receipt = hasPackage
                     ? await _offlineTransfer!.QueryStatusAsync(_offlinePackage!, session, ct)
                     : await _offlineTransfer!.QuerySessionStatusAsync(session, ct);
@@ -1047,7 +1068,18 @@ namespace FreedomInstaller.App
                     UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
                 }
 
-                await ApplyQueriedReceiptState(_offlineLastReceipt.Value, sessionRoot, ct, allowLoadRecovery: hasPackage);
+                // Local recovery bookkeeping is best effort here. A records
+                // location that is not ready or is gone only loses the local
+                // bundle lookup; the tablet's status above stays visible and
+                // the existing localized diagnostic names the reason.
+                string? recordsRoot = TryGetPersistentRecordsRoot(out string? recordsUnavailableReason);
+                string? sessionRoot = recordsRoot == null
+                    ? null
+                    : Path.Combine(recordsRoot, session.SessionId);
+                if (recordsUnavailableReason != null)
+                    AppendOfflineLog("Dynamic.OfflineUpdate.LogSavedSessionsUnavailable", recordsUnavailableReason);
+
+                await ApplyQueriedReceiptState(_offlineLastReceipt.Value, sessionRoot, ct, allowLoadRecovery: hasPackage, recordsUnavailableReason: recordsUnavailableReason);
 
                 // The status above stays visible even if this read-only
                 // preflight fails. With the session named, a session that
@@ -1198,7 +1230,9 @@ namespace FreedomInstaller.App
             Dispatcher.BeginInvoke(new Action(Close));
         }
 
-        private async Task ApplyQueriedReceiptState(JsonElement receipt, string sessionRoot, CancellationToken ct, bool allowLoadRecovery)
+        private async Task ApplyQueriedReceiptState(
+            JsonElement receipt, string? sessionRoot, CancellationToken ct,
+            bool allowLoadRecovery, string? recordsUnavailableReason = null)
         {
             EnsureNoBlockingReceiptFlags(receipt);
             string state = GetReceiptState(receipt) ?? "unknown";
@@ -1206,7 +1240,7 @@ namespace FreedomInstaller.App
             switch (state)
             {
                 case "prepared":
-                    if (allowLoadRecovery && _offlineSavedRecovery == null && Directory.Exists(sessionRoot))
+                    if (allowLoadRecovery && _offlineSavedRecovery == null && sessionRoot != null && Directory.Exists(sessionRoot))
                     {
                         // Only a receipt whose export metadata agrees with the
                         // Core precedence may name the local recovery bundle.
@@ -1243,6 +1277,17 @@ namespace FreedomInstaller.App
                             // reporting the read-only connection.
                             SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateBootPolicyReadOnly");
                         }
+                    }
+                    else if (allowLoadRecovery && recordsUnavailableReason != null)
+                    {
+                        // The tablet's prepared status is shown in the details,
+                        // but the local bundle cannot be confirmed because the
+                        // records location is unavailable. Execution stays
+                        // blocked: without a verified local bundle there is no
+                        // acknowledgement and nothing may be prepared again.
+                        ClearOfflineActionEligibility();
+                        SetText(OfflineUpgradePanel.StateText,
+                            "Dynamic.OfflineUpdate.StateSavedSessionsUnavailable", recordsUnavailableReason);
                     }
                     else if (string.IsNullOrEmpty(_offlineDescriptorSha256))
                     {
@@ -1440,20 +1485,28 @@ namespace FreedomInstaller.App
             if (_offlineSessions.Count > 1)
             {
                 SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateMultipleSessionsFound", _offlineSessions.Count);
-                return;
-            }
-
-            _offlineSelectedSession = _offlineSessions[0];
-            _offlineLastReceipt = TryLoadPersistedOfflineReceipt(_offlineSelectedSession);
-            if (_offlineLastReceipt.HasValue)
-            {
-                UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
-                ShowPersistedOfflineResult(_offlineLastReceipt.Value);
             }
             else
             {
-                SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateSessionSelected", _offlineSelectedSession.SessionId);
+                _offlineSelectedSession = _offlineSessions[0];
+                _offlineLastReceipt = TryLoadPersistedOfflineReceipt(_offlineSelectedSession);
+                if (_offlineLastReceipt.HasValue)
+                {
+                    UpdateDetailsWithReceipt(_offlineLastReceipt.Value, null);
+                    ShowPersistedOfflineResult(_offlineLastReceipt.Value);
+                }
+                else
+                {
+                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateSessionSelected", _offlineSelectedSession.SessionId);
+                }
             }
+
+            // A store holding both intact and damaged records is reported as a
+            // warning after the intact sessions were listed and selected: the
+            // unreadable record becomes visible, while the valid selection, its
+            // saved result and every eligibility decision stay exactly as the
+            // intact records already made them.
+            ReportDamagedOfflineSessionRecords();
         }
 
         /// <summary>

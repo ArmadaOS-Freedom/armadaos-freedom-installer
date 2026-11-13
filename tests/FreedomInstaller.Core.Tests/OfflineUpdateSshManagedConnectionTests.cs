@@ -884,7 +884,7 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
     [Fact]
     public async Task Upload_CancelledTokenWithDataReturningStream_SendsNoCommand()
     {
-        // MemoryStream ignores the token and yields its bytes even though
+        // The stream ignores the token and yields its bytes even though
         // cancellation is already requested. The read itself performs no
         // remote work, but `cat > path` truncates on start, so the upload must
         // re-check the token after the read instead of trusting the stream.
@@ -892,16 +892,24 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         var session = new OfflineUpdateSshManagedSession(transport);
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
+        var content = new CancelledButDataStream(new byte[] { 1, 2, 3 });
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             session.UploadFileAsync(
                 "/tmp/armada-stage/file.bin",
-                new MemoryStream(new byte[] { 1, 2, 3 }),
+                content,
                 useSudo: false,
                 cancelled.Token));
 
+        // The read really happened while the token was already cancelled and
+        // really handed back the payload, so the abort can only come from the
+        // post-read guard, and that guard ran before any channel existed.
+        Assert.True(content.TokenWasCancelledOnRead);
+        Assert.Equal(3, content.BytesReturned);
+        Assert.Equal(1, content.ReadCount);
         Assert.Equal(0, transport.StartCount);
         Assert.Null(transport.LastChannel);
+        Assert.Empty(transport.StartedCommand);
     }
 
     [Fact]
@@ -1224,6 +1232,66 @@ public sealed class OfflineUpdateSshManagedConnectionTests : IDisposable
         {
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
             return 0;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A stream that ignores cancellation and hands back its bytes anyway, so
+    /// a test can prove the upload re-checks the token after the read instead
+    /// of relying on the stream to honour it.
+    /// </summary>
+    private sealed class CancelledButDataStream : Stream
+    {
+        private readonly byte[] _data;
+        private int _offset;
+
+        internal CancelledButDataStream(byte[] data) => _data = data;
+
+        internal int ReadCount { get; private set; }
+
+        internal int BytesReturned { get; private set; }
+
+        internal bool TokenWasCancelledOnRead { get; private set; }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            ReadCount++;
+            TokenWasCancelledOnRead |= cancellationToken.IsCancellationRequested;
+            await Task.Yield();
+            if (buffer.Length == 0 || _offset >= _data.Length)
+                return 0;
+
+            var count = Math.Min(buffer.Length, _data.Length - _offset);
+            _data.AsSpan(_offset, count).CopyTo(buffer.Span);
+            _offset += count;
+            BytesReturned += count;
+            return count;
         }
 
         public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
