@@ -1298,6 +1298,35 @@ internal sealed class IB001SyntheticDevice
     /// <summary>The padded, owned copy claims of the ten direct sources; empty for a default device.</summary>
     internal IReadOnlyDictionary<string, VerifiedEdlFile> DirectSourceFiles => _directSources;
 
+    /// <summary>
+    /// REVIEW02 test-only: flips exactly one byte of the live device copy of a direct source role while keeping
+    /// its length, so a pre-write recheck can observe a loader that changed after the backup was captured.
+    /// </summary>
+    internal void MutateDirectSourceByte(string role, long offset)
+    {
+        if (!_directPaths.TryGetValue(role, out string? path) || string.IsNullOrEmpty(path))
+        {
+            throw new InvalidOperationException("the direct fixture has no live copy for '" + role + "'.");
+        }
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+        if (offset < 0 || offset >= stream.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(offset));
+        }
+
+        stream.Position = offset;
+        int value = stream.ReadByte();
+        if (value < 0)
+        {
+            throw new InvalidDataException("unexpected end of the live copy: " + role);
+        }
+
+        stream.Position = offset;
+        stream.WriteByte((byte)(value ^ 0xFF));
+        stream.Flush(flushToDisk: true);
+    }
+
     /// <summary>A unique, owned path for an accepted write snapshot inside this fixture's child directory.</summary>
     internal string CreateWriteSnapshotPath(string suffix) =>
         Path.Combine(

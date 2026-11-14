@@ -94,14 +94,31 @@ public partial class MainWindow
 
     private void SaveWorkLogOnClose()
     {
+        // Wait for every queued append write, then write the final snapshot so closing cannot lose a line.
+        InstallerLog.Flush();
+        PersistWorkLogSnapshot();
+    }
+
+    /// <summary>
+    /// 工作会话存在时把当前日志行的不可变快照排进后台队列。界面线程只物化快照，不做整文件写入；
+    /// 会话尚未建立时什么也不排，绝不声称更早的日志行已经保存。
+    /// </summary>
+    private void QueueWorkLogPersistence()
+    {
         if (_workSession is null) return;
-        try
-        {
-            File.WriteAllLines(Path.Combine(_workSession.DirectoryPath, "installer.log"),
-                System.Linq.Enumerable.Select(_localizedLogRows, row => row.Row.Text));
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        InstallerLog.EnqueuePersist(
+            _workSession.DirectoryPath,
+            System.Linq.Enumerable.ToArray(
+                System.Linq.Enumerable.Select(_localizedLogRows, row => row.Row.Text)));
+    }
+
+    /// <summary>关闭窗口时的最终快照；只在队列已清空后调用，与追加日志写同一个文件。</summary>
+    private void PersistWorkLogSnapshot()
+    {
+        if (_workSession is null) return;
+        InstallerLog.TryPersist(
+            _workSession.DirectoryPath,
+            System.Linq.Enumerable.Select(_localizedLogRows, row => row.Row.Text));
     }
 
     private void CleanWorkFilesOnClose(bool preserveRecovery)

@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
@@ -124,6 +125,104 @@ public sealed class AblAvbTrustTests
     [Fact]
     public void CancellationPropagates()
         => Assert.Throws<OperationCanceledException>(() => Inspect(Image(), new CancellationToken(true)));
+
+    // ------------------------------------------------------------------ all referenced keys
+
+    [Fact]
+    public void AllKeysViewIncludesEveryReferencedKeyAndLeavesSingleKeyRankingUnchanged()
+    {
+        byte[] pe = DualKeyImage();
+
+        var all = InspectAllKeys(pe);
+
+        Assert.Equal(2, all.Count);
+        Assert.Contains(Sha256(Aosp), all.Select(facts => Value<string>(facts, "KeySha256")));
+        Assert.Contains(Sha256(Other), all.Select(facts => Value<string>(facts, "KeySha256")));
+
+        // The existing single-key API keeps choosing the key with the most code references.
+        var single = Inspect(pe);
+        Assert.Equal(Sha256(Other), Value<string>(single, "KeySha256"));
+        Assert.Equal(2, Value<int>(single, "XrefCount"));
+    }
+
+    [Fact]
+    public void AllKeysViewKeepsAospWhenAnotherKeyHasMoreReferences()
+    {
+        // Reviewed Gen4 evidence: an OEM key with more xrefs is still not the only authorization path.
+        byte[] pe = DualKeyImage();
+        object aosp = InspectAllKeys(pe).Single(facts => Value<string>(facts, "KeySha256") == Sha256(Aosp));
+        object oem = InspectAllKeys(pe).Single(facts => Value<string>(facts, "KeySha256") == Sha256(Other));
+
+        Assert.Equal(1, Value<int>(aosp, "XrefCount"));
+        Assert.Equal(2, Value<int>(oem, "XrefCount"));
+        Assert.True(Value<int>(oem, "XrefCount") > Value<int>(aosp, "XrefCount"));
+    }
+
+    [Fact]
+    public void AllKeysViewEmitsEachKeyOnceWithItsOwnStrongestEvidence()
+    {
+        var pe = Image();
+        Aosp.CopyTo(pe, 0x1803);
+        Aosp.CopyTo(pe, 0x2003);
+        Adr(pe, 0x240, 0x1803);
+        Adr(pe, 0x244, 0x2003);
+        Adr(pe, 0x248, 0x2003);
+
+        object facts = InspectAllKeys(pe).Single();
+
+        Assert.Equal(Sha256(Aosp), Value<string>(facts, "KeySha256"));
+        Assert.Equal(2, Value<int>(facts, "XrefCount"));
+        Assert.Equal(0x2003, Value<int>(facts, "RawOffset"));
+    }
+
+    [Fact]
+    public void AllKeysViewRejectsUnreferencedAndDataOnlyKeys()
+    {
+        var pe = Image();
+        Aosp.CopyTo(pe, 0x1803);
+        Assert.Empty(InspectAllKeys(pe));
+
+        Adr(pe, 0x3100, 0x1803);
+        Assert.Empty(InspectAllKeys(pe));
+
+        // The single-key API refuses the same evidence, so both views agree on what is not a key.
+        Assert.Throws<InvalidDataException>(() => Inspect(pe));
+    }
+
+    internal static string Sha256(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
+
+    /// <summary>Two structurally valid keys with different code-reference counts: AOSP once, OEM twice.</summary>
+    internal static byte[] DualKeyImage(bool aospReferenced = true)
+    {
+        var pe = Image();
+        Aosp.CopyTo(pe, 0x1803);
+        Other.CopyTo(pe, 0x2803);
+        if (aospReferenced)
+        {
+            Adr(pe, 0x240, 0x1803);
+        }
+
+        Adr(pe, 0x244, 0x2803);
+        Adr(pe, 0x248, 0x2803);
+        return pe;
+    }
+
+    /// <summary>The production all-keys view over an already decoded PE image.</summary>
+    internal static System.Collections.Generic.IReadOnlyList<object> InspectAllKeys(byte[] pe)
+    {
+        try
+        {
+            object result = typeof(EdlRawBootBuilder).GetMethod(
+                "InspectAblPeAvbKeys", BindingFlags.Static | BindingFlags.NonPublic)!
+                .Invoke(null, new object[] { pe, CancellationToken.None })!;
+            return ((System.Collections.IEnumerable)result).Cast<object>().ToArray();
+        }
+        catch (TargetInvocationException e) when (e.InnerException is not null)
+        {
+            ExceptionDispatchInfo.Capture(e.InnerException).Throw();
+            throw;
+        }
+    }
 
     internal static byte[] Image()
     {
