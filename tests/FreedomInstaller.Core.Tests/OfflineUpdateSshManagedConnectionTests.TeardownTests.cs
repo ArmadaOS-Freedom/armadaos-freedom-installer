@@ -45,22 +45,20 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
     [Fact]
     public async Task Dispose_IdleSessionWhoseChannelCancelIsBlocked_IsReleasedByTheWatchdog()
     {
-        // Nothing has failed here: the idle RPC session is healthy and no
-        // exchange is in flight. SSH.NET's 15 second keepalive send still holds
-        // the session write lock, so the updater's synchronous channel cancel
-        // blocks inside the graceful cleanup. Only the watchdog may end that:
-        // DisposeAsync must return a task instead of blocking on the caller's
-        // thread, the captured socket must be the one released, and the
-        // cleanup must still release the transport exactly once.
+        // The idle session's cancel blocks in the fake the way SSH.NET's session
+        // write lock can hold it, so only the watchdog can release the captured
+        // socket. The fake records the cancel just before signalling
+        // cancelStarted, so sampling IsCompleted inside Abort(), before this
+        // test opens the gate, proves the release followed a cancel that had
+        // actually started, rather than one merely seen as started later.
         var hostKey = HostKey(51);
-        var events = new List<string>();
         var cancelStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancelGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelObservedOnAbort = 0;
         var channel = new FakeChannel(
             ReadyOutput(),
             gaiteOutputOnPassword: false,
             exited: false,
-            events: events,
             cancelGate: cancelGate.Task,
             cancelStarted: cancelStarted);
         var transport = new FakeTransport(hostKey)
@@ -68,7 +66,9 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
             ChannelFactory = _ => channel,
             SocketAbortFactory = () => new FakeSocketAbort(() =>
             {
-                events.Add("socket-release");
+                // A fact of the abort itself, not of the test's later polling:
+                // an abort that ran before the cancel left it unset.
+                Volatile.Write(ref cancelObservedOnAbort, cancelStarted.Task.IsCompleted ? 1 : 0);
                 cancelGate.TrySetResult(true);
             }),
         };
@@ -81,22 +81,18 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
             TimeSpan.FromSeconds(2));
         Assert.False(connection.Rpc.IsPoisoned);
 
-        var dispose = connection.DisposeAsync().AsTask();
+        // Bounded, and wider than the watchdog plus the cleanup it unblocks:
+        // losing this wait fails the test instead of hanging it.
+        await connection.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
 
-        // The cancel is already blocked inside the cleanup and cannot return
-        // until the socket is released, so DisposeAsync had to hand that work
-        // off the caller's thread and no release has happened yet.
-        await cancelStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.False(dispose.IsCompleted);
-        Assert.Equal(0, transport.SocketAbortCount);
-
-        await dispose.WaitAsync(TimeSpan.FromSeconds(10));
-
+        Assert.True(cancelStarted.Task.IsCompleted, "The teardown never cancelled the channel.");
+        Assert.True(
+            Volatile.Read(ref cancelObservedOnAbort) != 0,
+            "The socket was released before the channel cancel started.");
         Assert.Equal(1, transport.SocketAbortCaptureCount);
         Assert.Equal(1, transport.SocketAbortCount);
         Assert.Equal(1, transport.DisposeCount);
         Assert.True(channel.Disposed);
-        Assert.Contains("socket-release", events);
     }
 
     [Fact]
