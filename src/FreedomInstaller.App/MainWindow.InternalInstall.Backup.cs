@@ -31,8 +31,18 @@ public partial class MainWindow
     /// <summary>唯一一次真实 <see cref="EdlEntry.EnterAsync"/> 返回的 USB 证据。</summary>
     private EdlEntryResult? _internalInstallEdlEntry;
 
-    /// <summary>用户显式选择的电脑文件夹，只作为备份父目录；绝不回退到系统临时目录。</summary>
+    /// <summary>用户显式选择的电脑文件夹，只作为新建备份的父目录；绝不回退到系统临时目录。</summary>
     private string? _internalInstallBackupParent;
+
+    /// <summary>
+    /// 内部安装在当前模式下实际使用的工作父目录：新建模式仍是用户选择的电脑备份位置；
+    /// 复用模式改用环境准备已建立的会话目录，因此不再要求新的备份位置。
+    /// 该属性只读取已存在的会话，绝不在刷新 / 渲染路径中创建会话。
+    /// </summary>
+    private string? InternalInstallWorkParent =>
+        IsInternalInstallMode && _internalInstallBackupUseExisting
+            ? _workSession?.DirectoryPath
+            : _internalInstallBackupParent;
 
     /// <summary>是否复用用户已有的只读备份目录；只由复选框与浏览按钮写入，不是任何完成证据。</summary>
     private bool _internalInstallBackupUseExisting;
@@ -280,6 +290,9 @@ public partial class MainWindow
 
         InternalInstallBackupExistingRow.Visibility =
             useExisting ? Visibility.Visible : Visibility.Collapsed;
+        // 只隐藏内部安装的复用模式；共享维护 / 卸载模式从不复用，始终保留「新备份位置」输入。
+        InternalInstallBackupNewFolderPanel.Visibility =
+            IsInternalInstallMode && useExisting ? Visibility.Collapsed : Visibility.Visible;
         InternalInstallBackupStartLabel.Visibility =
             useExisting ? Visibility.Collapsed : Visibility.Visible;
         InternalInstallBackupExistingLabel.Visibility =
@@ -429,10 +442,69 @@ public partial class MainWindow
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
+        // 复用模式完全忽略用户新的备份位置：工作父目录只能来自环境准备建立的会话。
+        // 新建 / 共享模式仍要求一个真实存在的电脑备份父目录。
+        string parentPath;
+        if (useExisting)
         {
-            SetInternalInstallBackupStatus(M("Dynamic.InternalInstall.Backup.NeedFolder"));
-            return;
+            if (string.IsNullOrWhiteSpace(existingDirectory) || !Directory.Exists(existingDirectory))
+            {
+                SetInternalInstallBackupStatus(
+                    M("Dynamic.InternalInstall.Backup.NeedExistingFolder"));
+                return;
+            }
+
+            // 环境工作区不能是原始备份目录本身或位于其中：在创建会话、进入 9008 之前就拒绝，
+            // 保证复用永远不会写进原始备份。这里报告的是环境准备问题，不再要求改选备份文件夹。
+            var environmentRoot = _workSession?.DirectoryPath ?? _workDirectory?.RootPath;
+            if (!string.IsNullOrWhiteSpace(environmentRoot)
+                && !IsInternalInstallBackupParentOutsideExisting(environmentRoot, existingDirectory!))
+            {
+                SetInternalInstallBackupStatus(
+                    M(
+                        "Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceConflict",
+                        existingDirectory!));
+                return;
+            }
+
+            // 会话只在这次显式校验动作中建立；失败时在进入 9008 之前用本地化错误停下。
+            try
+            {
+                parentPath = TemporaryWorkRoot;
+            }
+            catch (Exception exception) when (exception is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or ArgumentException
+                or NotSupportedException
+                or System.Security.SecurityException)
+            {
+                SetInternalInstallBackupStatus(
+                    M(
+                        "Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceUnavailable",
+                        exception.Message));
+                return;
+            }
+
+            // 会话实际路径同样必须在原始备份之外；异常的自定义工作目录可能正好落在来源里面。
+            if (!IsInternalInstallBackupParentOutsideExisting(parentPath, existingDirectory!))
+            {
+                SetInternalInstallBackupStatus(
+                    M(
+                        "Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceConflict",
+                        existingDirectory!));
+                return;
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
+            {
+                SetInternalInstallBackupStatus(M("Dynamic.InternalInstall.Backup.NeedFolder"));
+                return;
+            }
+
+            parentPath = parent!;
         }
 
         // 共享模式（含 TF 卡安装）：备份父目录绝不能落在已选原厂 / 项目来源目录里面；来源永不作为当前目录。
@@ -445,7 +517,7 @@ public partial class MainWindow
                     continue;
                 }
 
-                if (!IsInternalInstallBackupParentOutsideExisting(parent, source!))
+                if (!IsInternalInstallBackupParentOutsideExisting(parentPath, source!))
                 {
                     SetInternalInstallBackupStatus(
                         M("Dynamic.InternalInstall.Backup.ExistingWorkRootConflict", source!));
@@ -461,26 +533,6 @@ public partial class MainWindow
             }
 
             InvalidateBootMaintenancePreparation();
-        }
-
-        if (useExisting)
-        {
-            // 复用的前提是一个真实存在的原始备份目录，并且工作目录绝不能落在它里面。
-            if (string.IsNullOrWhiteSpace(existingDirectory) || !Directory.Exists(existingDirectory))
-            {
-                SetInternalInstallBackupStatus(
-                    M("Dynamic.InternalInstall.Backup.NeedExistingFolder"));
-                return;
-            }
-
-            if (!IsInternalInstallBackupParentOutsideExisting(parent, existingDirectory!))
-            {
-                SetInternalInstallBackupStatus(
-                    M(
-                        "Dynamic.InternalInstall.Backup.ExistingWorkRootConflict",
-                        existingDirectory!));
-                return;
-            }
         }
 
         var client = _internalInstallEdlClient;
@@ -545,7 +597,6 @@ public partial class MainWindow
             SetInternalInstallBackupStatus(M("Dynamic.InternalInstall.Backup.ExistingRunning"));
         }
 
-        var parentPath = parent!;
         var expected = storedAndroid;
         var existingClient = client;
 

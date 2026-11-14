@@ -252,7 +252,7 @@ public partial class MainWindow
                 return;
             }
 
-            var parent = _internalInstallBackupParent;
+            var parent = InternalInstallWorkParent;
             if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
             {
                 SetInternalInstallCapacityPackageStatus(
@@ -603,6 +603,19 @@ public partial class MainWindow
 
     // ---------- 第 3 步 → 确认页 ----------
 
+    private string GetInternalInstallRecoveryParent(string workParent)
+    {
+        if (!_internalInstallBackupUseExisting) return workParent;
+        string persistent = _workSession?.RecordsDirectory
+            ?? throw new InvalidOperationException(T("Dynamic.InternalInstall.Prepared.NeedParent"));
+        if (!string.IsNullOrWhiteSpace(_internalInstallBackupExistingDirectory) &&
+            !IsInternalInstallBackupParentOutsideExisting(persistent, _internalInstallBackupExistingDirectory))
+            throw new InvalidOperationException(T("Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceConflict",
+                _internalInstallBackupExistingDirectory));
+        Directory.CreateDirectory(persistent);
+        return persistent;
+    }
+
     /// <summary>
     /// 「下一步」从第 3 步进入主机侧准备：只有这里才调用一次真实的 PrepareAsync。
     /// 成功后才导航；导航必须发生在忙碌状态复位之后，否则会被导航闸门拒绝。
@@ -622,7 +635,7 @@ public partial class MainWindow
         var backup = _internalInstallBackup;
         var package = _internalInstallPackage;
         var storage = package?.Validation.Storage;
-        var parent = _internalInstallBackupParent;
+        var parent = InternalInstallWorkParent;
 
         if (!HasInternalInstallAllocationInputs
             || backup is null
@@ -680,7 +693,7 @@ public partial class MainWindow
                             M("Dynamic.InternalInstall.Prepared.PreparingArtifacts"));
                         InternalBackupSet? recoverySource = null;
                         if (backup.Tables[0].Partitions.Any(p => p.Name == "ARMADA_BACKUP"))
-                            recoverySource = await GetBoardFirstRecoverySourceAsync(backup, parentPath, token);
+                            recoverySource = await GetBoardFirstRecoverySourceAsync(backup, GetInternalInstallRecoveryParent(parentPath), token);
                         string attemptRoot = Path.Combine(TemporaryWorkRoot, "artifacts-" + Guid.NewGuid().ToString("N"));
                         Directory.CreateDirectory(attemptRoot);
                         InternalArtifactSet preparedArtifacts;

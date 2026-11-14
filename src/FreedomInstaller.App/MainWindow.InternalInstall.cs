@@ -372,8 +372,10 @@ public partial class MainWindow
 
         var edlHeld = HasInternalInstallLiveEdlState;
         var checkedDevice = HasCheckedInternalInstallDevice;
-        var hasBackupParent = !string.IsNullOrWhiteSpace(_internalInstallBackupParent)
-            && Directory.Exists(_internalInstallBackupParent);
+        // 复用模式不使用用户新的备份位置；生效的工作父目录来自环境准备建立的会话。
+        var workParent = InternalInstallWorkParent;
+        var hasBackupParent = !string.IsNullOrWhiteSpace(workParent)
+            && Directory.Exists(workParent);
         var useExistingBackup = _internalInstallBackupUseExisting;
         var hasExistingBackupDirectory = !string.IsNullOrWhiteSpace(
                 _internalInstallBackupExistingDirectory)
@@ -410,8 +412,9 @@ public partial class MainWindow
             !_busy && !edlHeld && _internalInstallDeviceChoices.Count > 0;
         UpdateInternalInstallDeviceSelector();
 
-        // 第 2 步（系统备份）：父目录对两种模式都必填；复用模式还要求一个真实存在的已有备份目录。
-        // 目录与模式控件只在检查通过、空闲且没有进行中的操作时可用；开始按钮同样受会话复用门槛约束。
+        // 第 2 步（系统备份）：新建模式要求一个真实的备份父目录；复用模式只要求真实存在的已有备份目录，
+        // 绝不再要求新的备份位置。目录与模式控件只在检查通过、空闲且没有进行中的操作时可用；
+        // 开始按钮同样受会话复用门槛约束。
         var backupEditable = !_busy
             && !_internalInstallOperationActive
             && !HasInternalInstallExecutionStarted
@@ -426,8 +429,7 @@ public partial class MainWindow
         InternalInstallBackupButton.IsEnabled = !_busy
             && !_internalInstallOperationActive
             && checkedDevice
-            && hasBackupParent
-            && (!useExistingBackup || hasExistingBackupDirectory)
+            && (useExistingBackup ? hasExistingBackupDirectory : hasBackupParent)
             && (!edlHeld || canReuseSession);
 
         // 容量分配的系统包、滑条与校验入口由本步自己的实现管理；这里只刷新它们的最终可用性。

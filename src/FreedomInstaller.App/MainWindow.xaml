@@ -2140,31 +2140,33 @@
                                        FontWeight="SemiBold"
                                        Margin="0,8,0,0" />
 
-                            <TextBlock Text="{DynamicResource Static.InternalInstall.Backup.FolderLabel}"
-                                       Style="{StaticResource FieldLabelText}"
-                                       Margin="0,16,0,6" />
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBox x:Name="InternalInstallBackupFolderBox"
-                                         Grid.Column="0"
-                                         Style="{StaticResource InputTextBox}"
-                                         IsReadOnly="True"
-                                         VerticalContentAlignment="Center" />
-                                <Button x:Name="InternalInstallBackupBrowseButton"
-                                        Grid.Column="1"
-                                        Content="{DynamicResource Static.Browse}"
-                                        Click="OnBrowseInternalInstallBackupFolder"
-                                        Style="{StaticResource SecondaryButton}"
-                                        IsEnabled="False"
-                                        Margin="10,0,0,0" />
-                            </Grid>
+                            <StackPanel x:Name="InternalInstallBackupNewFolderPanel">
+                                <TextBlock Text="{DynamicResource Static.InternalInstall.Backup.FolderLabel}"
+                                           Style="{StaticResource FieldLabelText}"
+                                           Margin="0,16,0,6" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="InternalInstallBackupFolderBox"
+                                             Grid.Column="0"
+                                             Style="{StaticResource InputTextBox}"
+                                             IsReadOnly="True"
+                                             VerticalContentAlignment="Center" />
+                                    <Button x:Name="InternalInstallBackupBrowseButton"
+                                            Grid.Column="1"
+                                            Content="{DynamicResource Static.Browse}"
+                                            Click="OnBrowseInternalInstallBackupFolder"
+                                            Style="{StaticResource SecondaryButton}"
+                                            IsEnabled="False"
+                                            Margin="10,0,0,0" />
+                                </Grid>
+                            </StackPanel>
 
                             <!--
                                 复用已有备份：勾选后只读取并校验用户指定的原始备份目录，
-                                上方的电脑文件夹仍用于工具、方案输出与日志，父目录对两种模式都是必填。
+                                工作文件改放在环境准备已建立的会话目录，不再要求新的备份位置。
                             -->
                             <CheckBox x:Name="InternalInstallBackupUseExistingCheck"
                                       Style="{StaticResource RiskCheckBox}"
