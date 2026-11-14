@@ -200,7 +200,24 @@ public sealed class UpdatePackageDescriptorTests
         JsonObject json = OfflineBase();
         json["recoveryManifests"] = new JsonObject();
         UpdatePackageDescriptor descriptor = Parse(json);
-        descriptor.RequireOperation("TB710FU", "offline-upgrade", "1.2.3");
+        descriptor.RequireOperation("TB323FU", "offline-upgrade", "1.2.3");
+        Assert.Throws<InvalidDataException>(() =>
+            descriptor.RequireOperation("TB710FU", "offline-upgrade", "1.2.3"));
+    }
+
+    [Fact]
+    public void MixedDescriptor_InstallsEveryModelButOnlyY700Upgrades()
+    {
+        JsonObject json = OfflineBase();
+        json["operations"] = new JsonArray("install", "offline-upgrade");
+        UpdatePackageDescriptor descriptor = Parse(json);
+
+        foreach (string model in new[] { "TB322FC", "TB323FU", "TB710FU" })
+            descriptor.RequireOperation(model, "install", "1.2.3");
+        foreach (string model in new[] { "TB322FC", "TB323FU" })
+            descriptor.RequireOperation(model, "offline-upgrade", "1.2.3");
+        Assert.Throws<InvalidDataException>(() =>
+            descriptor.RequireOperation("TB710FU", "offline-upgrade", "1.2.3"));
     }
 
     [Fact]
