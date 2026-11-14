@@ -3279,9 +3279,9 @@
             </ScrollViewer>
 
             <!--
-                ================= 可选的 9008 全局备份 / 恢复（两个独立视图） =================
-                环境准备通过后先到这里的「备份」视图，再进入功能首页；首页另有两张卡片分别进入
-                「备份」与「恢复」视图。本页不是第七项操作：不备份可以直接跳过，也不写 _selectedOperation。
+                ================= 9008 全局备份 / 恢复（两个独立视图） =================
+                首页两张卡片分别进入「备份」与「恢复」视图，这是本页唯一入口。
+                本页不是第七项操作：不写 _selectedOperation。
                 进入时不做任何设备访问，连接必须由用户显式发起；连接、日志与进度为两个视图共用。
             -->
             <ScrollViewer x:Name="GlobalRecoveryPage"
@@ -3316,29 +3316,12 @@
                                Margin="0,6,0,0"
                                Visibility="Collapsed" />
 
-                    <!-- 只有环境准备完成后的可选页才说明可以跳过；首页入口不显示这句。 -->
-                    <TextBlock x:Name="GlobalOptionalNoteText"
-                               Text="{DynamicResource Static.Global.OptionalNote}"
-                               Style="{StaticResource CaptionText}"
-                               Margin="0,6,0,0" />
-
+                    <!-- 本页唯一的返回入口：没有受保护现场时回功能首页。 -->
                     <WrapPanel Margin="0,12,0,0">
-                        <!-- 环境来源回环境准备页；首页来源回功能首页，两个返回按钮互斥显示。 -->
-                        <Button x:Name="GlobalBackEnvironmentButton"
-                                Content="{DynamicResource Static.Global.BackEnvironment}"
-                                Click="OnGlobalBackEnvironment"
-                                Style="{StaticResource SecondaryButton}"
-                                Margin="0,0,8,8" />
                         <Button x:Name="GlobalBackHomeButton"
                                 Content="{DynamicResource Static.Global.BackHome}"
-                                Click="OnGlobalBackEnvironment"
+                                Click="OnGlobalBackHome"
                                 Style="{StaticResource SecondaryButton}"
-                                Visibility="Collapsed"
-                                Margin="0,0,8,8" />
-                        <Button x:Name="GlobalContinueButton"
-                                Content="{DynamicResource Static.Global.Continue}"
-                                Click="OnGlobalContinue"
-                                Style="{StaticResource PrimaryButton}"
                                 Margin="0,0,8,8" />
                     </WrapPanel>
 
