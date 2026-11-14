@@ -8,9 +8,9 @@
     <Deterministic>true</Deterministic>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
-    <!-- Project-specific versions also determine their assembly and file versions. -->
+    <!-- Project-specific versions also determine their assembly and file versions.
+         InformationalVersion is derived from Version by the SDK, so it is not repeated here. -->
     <Version>0.8.0</Version>
-    <InformationalVersion>0.8.0</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
