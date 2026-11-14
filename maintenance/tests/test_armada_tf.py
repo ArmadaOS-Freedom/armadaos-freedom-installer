@@ -1014,13 +1014,24 @@ class HttpProtocolTests(ServiceTestBase):
         self.assertEqual(json.loads(data)["error"]["code"], "body-too-large")
 
     def test_oversize_binary_rejected(self):
+        # The server rejects on the declared Content-Length, before any body
+        # byte is read. Send the headers only: uploading the oversize body
+        # would race the 413-and-close and surface a client-side broken pipe
+        # instead of the rejection under test.
         session = self.open_session()
-        body = b"\x00" * (armada_tf.BINARY_MAX_BYTES + 512)
-        status, _, data = self.request(
-            "POST", f"/v1/card/{session}/write?offset=0", body=body,
-            headers={"Content-Type": "application/octet-stream",
-                     "X-Content-SHA256": hashlib.sha256(body).hexdigest()})
-        self.assertEqual(status, 413)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            conn.putrequest("POST", f"/v1/card/{session}/write?offset=0")
+            conn.putheader("Authorization", "Bearer " + TOKEN)
+            conn.putheader("Content-Type", "application/octet-stream")
+            conn.putheader(
+                "Content-Length", str(armada_tf.BINARY_MAX_BYTES + 512))
+            conn.endheaders()
+            response = conn.getresponse()
+            data = response.read()
+        finally:
+            conn.close()
+        self.assertEqual(response.status, 413)
         self.assertEqual(json.loads(data)["error"]["code"], "body-too-large")
 
     def test_unknown_paths_and_queries(self):

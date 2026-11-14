@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Install the same SDK the container images pin instead of relying on whatever
       # .NET version the runner image happens to preinstall.
@@ -69,6 +71,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Runs every public maintenance/tests module with synthetic, offline
       # fixtures. maintenance/run_unit_tests.py excludes the bootstrap lifecycle
