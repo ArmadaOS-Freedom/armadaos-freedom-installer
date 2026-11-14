@@ -19,6 +19,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FreedomInstaller.Core\FreedomInstaller.Core.csproj" />
+    <ProjectReference Include="..\..\src\FreedomInstaller.BootTool\FreedomInstaller.BootTool.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(BundledToolPinsSource)' != ''">

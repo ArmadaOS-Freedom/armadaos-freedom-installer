@@ -211,10 +211,10 @@ public static class InternalSlotMaterialReader
 
     /// <summary>
     /// Same five-source verification and base recovery as <see cref="AnalyzeAsync"/>,
-    /// additionally writing the already recovered base image to a caller-owned path.
-    /// The export is material only; no bytes are exposed through the public API.
+    /// additionally writing the already recovered base image to a caller-owned file path.
+    /// The export is file material only; it makes no signature or hardware trust assertion.
     /// </summary>
-    internal static Task<InternalSlotMaterial> AnalyzeAndExportBaseAsync(
+    public static Task<InternalSlotMaterial> AnalyzeAndExportBaseAsync(
         string slot,
         VerifiedEdlFile currentBoot,
         VerifiedEdlFile vendorBoot,

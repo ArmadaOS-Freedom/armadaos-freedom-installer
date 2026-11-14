@@ -102,7 +102,7 @@ internal sealed partial class InternalInstallPreparationContext
         return plan;
     }
 
-    private static GblRuntimeRegion? ReadGblRuntimeRegion(ReadOnlySpan<byte> data, CancellationToken ct)
+    internal static GblRuntimeRegion? ReadGblRuntimeRegion(ReadOnlySpan<byte> data, CancellationToken ct)
     {
         if (data.Length > GblRuntimeMaxDataBytes)
         {

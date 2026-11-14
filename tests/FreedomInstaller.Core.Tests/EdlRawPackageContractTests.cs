@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using FreedomInstaller.Core;
@@ -100,6 +101,51 @@ public sealed class EdlRawPackageContractTests
         var runtime = contract.Artifacts["runtime"];
         Assert.Equal(4194304L, runtime.Bytes);
         Assert.Equal(4194304L, new FileInfo(runtime.FullPath).Length);
+    }
+
+    [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    public void ReadEdlRawContract_RejectsUnmarkedRuntimeForMirrorPolicy(string model)
+    {
+        using var fixture = EdlRawFixture.Create();
+        if (!string.Equals(model, EdlRawFixture.Model, StringComparison.Ordinal))
+        {
+            var metadata = fixture.ReadMetadata();
+            metadata["deviceModel"] = model;
+            var compatible = metadata["compatible"]!.AsObject();
+            compatible["soc"] = "SM8850";
+            compatible["device"] = "baldur";
+            fixture.WriteMetadata(metadata);
+        }
+
+        fixture.ClearRuntimeMarker();
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => PackageReader.ReadEdlRawContract(fixture.Path, model));
+
+        Assert.Contains(
+            LinuxRuntimeContract.MirrorMarkerText,
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadEdlRawContract_AcceptsUnmarkedRuntimeOutsideMirrorPolicy()
+    {
+        using var fixture = EdlRawFixture.Create();
+        var metadata = fixture.ReadMetadata();
+        metadata["deviceModel"] = "TB710FU";
+        var compatible = metadata["compatible"]!.AsObject();
+        compatible["soc"] = "SM8650";
+        compatible["device"] = "tb710fu";
+        fixture.WriteMetadata(metadata);
+        fixture.ClearRuntimeMarker();
+
+        var contract = PackageReader.ReadEdlRawContract(fixture.Path, "TB710FU");
+
+        Assert.Equal("TB710FU", contract.DeviceModel);
+        Assert.Equal(4194304L, contract.Artifacts["runtime"].Bytes);
     }
 
     [Fact]
@@ -264,6 +310,22 @@ public sealed class EdlRawPackageContractTests
     }
 
     // ------------------------------------------------------- existing Validate dispatch for schema 2
+
+    [Fact]
+    public void Validate_DirectEdlSchema2RejectsAnUnmarkedMirrorPolicyRuntime()
+    {
+        using var fixture = EdlRawFixture.Create();
+        fixture.ClearRuntimeMarker();
+
+        var result = PackageReader.Validate(
+            fixture.Path, EdlRawFixture.Model, InstallationTarget.Internal);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(
+            result.Reasons,
+            reason => reason.Contains(
+                LinuxRuntimeContract.MirrorMarkerText, StringComparison.Ordinal));
+    }
 
     [Fact]
     public void Validate_DirectEdlSchema2IsAcceptedForInternalAndExposesTheCommonFields()
@@ -1451,6 +1513,29 @@ internal sealed class EdlRawFixture : IDisposable
         WriteFile(relativePath, bytes);
     }
 
+    /// <summary>Removes the mirror marker and keeps the runtime declaration truthful.</summary>
+    internal void ClearRuntimeMarker()
+    {
+        var bytes = ReadFile(RuntimeFile);
+        var marker = Encoding.ASCII.GetBytes("ARMADA_LINUX_MIRROR_V1");
+        var offset = bytes.AsSpan().IndexOf(marker);
+        if (offset < 0)
+        {
+            throw new InvalidOperationException("fixture runtime has no mirror marker");
+        }
+
+        bytes.AsSpan(offset, marker.Length).Clear();
+        WriteFile(RuntimeFile, bytes);
+
+        var metadata = ReadMetadata();
+        var artifact = metadata["artifacts"]!.AsArray()
+            .Select(entry => entry!.AsObject())
+            .Single(entry => entry["role"]!.GetValue<string>() == "runtime");
+        artifact["bytes"] = bytes.LongLength;
+        artifact["sha256"] = Sha256Hex(bytes);
+        WriteMetadata(metadata);
+    }
+
     internal void Truncate(string relativePath)
     {
         var bytes = ReadFile(relativePath);
@@ -1468,6 +1553,13 @@ internal sealed class EdlRawFixture : IDisposable
             bytes[index] = (byte)((seed + index) & 0xFF);
         }
 
+        return bytes;
+    }
+
+    private static byte[] RuntimePayload()
+    {
+        var bytes = Payload(4194304, 0x52);
+        Encoding.ASCII.GetBytes("ARMADA_LINUX_MIRROR_V1").CopyTo(bytes, 0);
         return bytes;
     }
 
@@ -1495,7 +1587,7 @@ internal sealed class EdlRawFixture : IDisposable
         WriteFile(BootImageFile, Gzip(BootExpandedImage));
         WriteFile(RootImageFile, Gzip(RootExpandedImage));
         WriteFile(KernelFile, Payload(4096, 0x4B));
-        WriteFile(RuntimeFile, Payload(4194304, 0x52));
+        WriteFile(RuntimeFile, RuntimePayload());
         WriteFile(InitramfsFile, Payload(2048, 0x21));
         WriteFile(DtbNormalFile, Payload(1024, 0x6E));
         WriteFile(DtbDiagnosticFile, Payload(1024, 0x64));

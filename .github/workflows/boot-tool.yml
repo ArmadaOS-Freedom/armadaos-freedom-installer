@@ -1,0 +1,100 @@
+name: boot-tool
+
+on:
+  pull_request:
+    paths:
+      - "Directory.Build.props"
+      - "LICENSE"
+      - "src/FreedomInstaller.Core/**"
+      - "src/FreedomInstaller.BootTool/**"
+      - "maintenance/fetch_build_inputs.py"
+      - "maintenance/build-inputs.json"
+      - "maintenance/armada_tf.py"
+      - "maintenance/tests/test_publish_boot_tool.py"
+      - "docs/GblRuntime-NOTICE.txt"
+      - "docs/GblRuntime-LICENSE.txt"
+      - "docs/SharpCompress-LICENSE.txt"
+      - "vendor/aosp/testkey_rsa4096.pem"
+      - "tools/publish-boot-tool.py"
+      - "tools/verify-boot-tool.py"
+      - "tools/boot-tool.Containerfile"
+      - "tools/boot-tool.Containerfile.dockerignore"
+      - ".github/workflows/boot-tool.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "Directory.Build.props"
+      - "LICENSE"
+      - "src/FreedomInstaller.Core/**"
+      - "src/FreedomInstaller.BootTool/**"
+      - "maintenance/fetch_build_inputs.py"
+      - "maintenance/build-inputs.json"
+      - "maintenance/armada_tf.py"
+      - "maintenance/tests/test_publish_boot_tool.py"
+      - "docs/GblRuntime-NOTICE.txt"
+      - "docs/GblRuntime-LICENSE.txt"
+      - "docs/SharpCompress-LICENSE.txt"
+      - "vendor/aosp/testkey_rsa4096.pem"
+      - "tools/publish-boot-tool.py"
+      - "tools/verify-boot-tool.py"
+      - "tools/boot-tool.Containerfile"
+      - "tools/boot-tool.Containerfile.dockerignore"
+      - ".github/workflows/boot-tool.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Run publisher unit tests
+        run: python3 -m unittest discover maintenance/tests -p test_publish_boot_tool.py
+
+      - name: Build and verify BootTool artifact
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="armada-boot-tool:${GITHUB_SHA}"
+          OUT_DIR="$(mktemp -d)"
+          CID=""
+          cleanup() {
+            if [ -n "${CID}" ]; then
+              docker rm -f "${CID}" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          docker build --platform linux/arm64 -f tools/boot-tool.Containerfile -t "${IMAGE_TAG}" .
+          CID="$(docker create "${IMAGE_TAG}" /boot-tool/armada-boot-tool)"
+          docker cp "${CID}:/boot-tool" "${OUT_DIR}/boot-tool"
+          docker rm -f "${CID}" >/dev/null
+          CID=""
+
+          python3 tools/verify-boot-tool.py "${OUT_DIR}/boot-tool"
+
+          docker pull mcr.microsoft.com/dotnet/runtime-deps:10.0.12-noble
+
+          STDERR_FILE="${OUT_DIR}/runtime-stderr.json"
+          docker run --rm --pull=never --network none \
+            -v "${OUT_DIR}/boot-tool:/boot-tool:ro" \
+            -w /boot-tool \
+            mcr.microsoft.com/dotnet/runtime-deps:10.0.12-noble \
+            sh -eu -c 'if command -v dotnet >/dev/null 2>&1; then exit 90; fi; set +e; ./armada-boot-tool > /tmp/out 2> /tmp/err; rc=$?; set -e; [ "$rc" -eq 2 ]; [ ! -s /tmp/out ]; cat /tmp/err >&2' \
+            2> "${STDERR_FILE}"
+
+          python3 -c 'import json, sys; d = json.load(open(sys.argv[1], encoding="utf-8")); assert isinstance(d, dict) and "usage" in str(d.get("error", "")).lower()' "${STDERR_FILE}"
+
+          tar -C "${OUT_DIR}/boot-tool" -czpf "${RUNNER_TEMP}/armada-boot-tool-linux-arm64-${GITHUB_SHA}.tar.gz" .
+
+      - name: Upload BootTool archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: armada-boot-tool-linux-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/armada-boot-tool-linux-arm64-${{ github.sha }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7

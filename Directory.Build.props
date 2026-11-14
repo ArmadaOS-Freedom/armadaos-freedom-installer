@@ -8,6 +8,10 @@
     <Deterministic>true</Deterministic>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <!-- Project-specific versions also determine their assembly and file versions. -->
+    <Version>0.8.0</Version>
+    <InformationalVersion>0.8.0</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -16,6 +20,11 @@
     <BaseOutputPath>$(MSBuildProjectDirectory)/bin/</BaseOutputPath>
     <BaseIntermediateOutputPath>$(MSBuildProjectDirectory)/obj/</BaseIntermediateOutputPath>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Enable strict end-of-input validation in the application and test hosts from startup. -->
+    <RuntimeHostConfigurationOption Include="System.IO.Compression.UseStrictValidation" Value="true" />
+  </ItemGroup>
 
   <!-- Locally downloaded, hash-verified public build inputs. Projects consume these
        values in ItemGroups during evaluation, so the import must run here. -->

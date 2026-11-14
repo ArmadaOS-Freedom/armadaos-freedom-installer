@@ -49,14 +49,78 @@ internal static class GblRuntimeAssets
     /// <c>existingOwnedEvidenceDir\&lt;fixed basename&gt;</c>. The directory must already exist; it is never
     /// created here. Only a file this invocation created is removed on failure.
     /// </summary>
+    internal static async Task<byte[]> ReadVerifiedBytesAsync(
+        GblRuntimeRegion region,
+        CancellationToken ct = default)
+    {
+        var (_, bytes, _) = await ReadVerifiedAssetAsync(region, ct).ConfigureAwait(false);
+        return bytes;
+    }
+
     internal static async Task<VerifiedEdlFile> StageAsync(
         GblRuntimeRegion region,
         string existingOwnedEvidenceDir,
         CancellationToken ct = default)
     {
-        string resourceName;
-        string fileName;
-        string expectedSha256;
+        ResolveRegionPins(region, out _, out var fileName, out _);
+
+        if (string.IsNullOrWhiteSpace(existingOwnedEvidenceDir))
+        {
+            throw new ArgumentException(
+                "An existing owned evidence directory is required.", nameof(existingOwnedEvidenceDir));
+        }
+
+        ct.ThrowIfCancellationRequested();
+
+        var directory = Path.GetFullPath(existingOwnedEvidenceDir);
+        if (!Directory.Exists(directory))
+        {
+            throw new DirectoryNotFoundException(
+                $"The evidence directory '{directory}' does not exist; it is never created by this call.");
+        }
+
+        var (_, bytes, actualSha256) = await ReadVerifiedAssetAsync(region, ct).ConfigureAwait(false);
+
+        var path = Path.Combine(directory, fileName);
+        var created = false;
+        try
+        {
+            using (var output = new FileStream(
+                path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+            {
+                created = true;
+                await output.WriteAsync(bytes, ct).ConfigureAwait(false);
+                await output.FlushAsync(ct).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            if (created)
+            {
+                try
+                {
+                    File.Delete(path);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+
+            throw;
+        }
+
+        return new VerifiedEdlFile(path, bytes.LongLength, actualSha256);
+    }
+
+    private static void ResolveRegionPins(
+        GblRuntimeRegion region,
+        out string resourceName,
+        out string fileName,
+        out string expectedSha256)
+    {
         switch (region)
         {
             case GblRuntimeRegion.Prc:
@@ -73,21 +137,14 @@ internal static class GblRuntimeAssets
                 throw new ArgumentOutOfRangeException(
                     nameof(region), region, "Unknown GBL runtime region; no default asset exists.");
         }
+    }
 
-        if (string.IsNullOrWhiteSpace(existingOwnedEvidenceDir))
-        {
-            throw new ArgumentException(
-                "An existing owned evidence directory is required.", nameof(existingOwnedEvidenceDir));
-        }
-
+    private static async Task<(string FileName, byte[] Bytes, string Sha256)> ReadVerifiedAssetAsync(
+        GblRuntimeRegion region,
+        CancellationToken ct)
+    {
+        ResolveRegionPins(region, out var resourceName, out var fileName, out var expectedSha256);
         ct.ThrowIfCancellationRequested();
-
-        var directory = Path.GetFullPath(existingOwnedEvidenceDir);
-        if (!Directory.Exists(directory))
-        {
-            throw new DirectoryNotFoundException(
-                $"The evidence directory '{directory}' does not exist; it is never created by this call.");
-        }
 
         var bytes = new byte[StandardAssetLength];
         var assembly = typeof(GblRuntimeAssets).Assembly;
@@ -129,37 +186,6 @@ internal static class GblRuntimeAssets
                 $"the pinned value is {expectedSha256}.");
         }
 
-        var path = Path.Combine(directory, fileName);
-        var created = false;
-        try
-        {
-            using (var output = new FileStream(
-                path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
-            {
-                created = true;
-                await output.WriteAsync(bytes, ct).ConfigureAwait(false);
-                await output.FlushAsync(ct).ConfigureAwait(false);
-            }
-        }
-        catch
-        {
-            if (created)
-            {
-                try
-                {
-                    File.Delete(path);
-                }
-                catch (IOException)
-                {
-                }
-                catch (UnauthorizedAccessException)
-                {
-                }
-            }
-
-            throw;
-        }
-
-        return new VerifiedEdlFile(path, StandardAssetLength, expectedSha256);
+        return (fileName, bytes, actualSha256);
     }
 }

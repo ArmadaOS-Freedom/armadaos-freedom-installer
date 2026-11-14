@@ -318,7 +318,8 @@ public static partial class PackageReader
 
         CheckEdlRawTools(metadata);
         var storage = ReadEdlRawStorage(metadata);
-        var payloads = ReadEdlRawPayloads(root, metadata, cancellationToken, target);
+        var payloads = ReadEdlRawPayloads(
+            root, metadata, cancellationToken, target, deviceModel);
         var deployment = ReadEdlRawDeployment(metadata, target);
         var bootRecipe = ReadEdlRawBootRecipe(metadata, payloads, deployment, deviceModel);
 
@@ -545,7 +546,8 @@ public static partial class PackageReader
         string root,
         JsonElement metadata,
         CancellationToken cancellationToken,
-        InstallationTarget target = InstallationTarget.Internal)
+        InstallationTarget target = InstallationTarget.Internal,
+        string? deviceModel = null)
     {
         if (!metadata.TryGetProperty("artifacts", out var artifactsElement)
             || artifactsElement.ValueKind != JsonValueKind.Array)
@@ -661,6 +663,18 @@ public static partial class PackageReader
             else
             {
                 CheckEdlRawOrdinaryRole(element, role, actualLength);
+                // The runtime is the new-system mirrored boot runtime. An older
+                // unmarked build may still control Android slots, so refuse it
+                // before this package can be staged or installed.
+                if (target == InstallationTarget.Internal &&
+                    string.Equals(role, "runtime", StringComparison.Ordinal))
+                {
+                    LinuxRuntimeContract.RequireMirrorMarker(
+                        fullPath,
+                        deviceModel ?? string.Empty,
+                        $"artifact {role}",
+                        cancellationToken);
+                }
             }
         }
 

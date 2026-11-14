@@ -908,8 +908,10 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
             var kernel = Payload(96, 23);
             WriteFile(directory.Path, "files/kernel.bin", kernel);
 
-            // Exact prepared runtime length; the bytes are zeros because this route never executes them.
+            // Exact prepared runtime length with the required new-system policy marker;
+            // the remaining bytes are zeros because this route never executes them.
             var runtime = new byte[(int)RawFacts.RuntimeBytes];
+            Encoding.ASCII.GetBytes("ARMADA_LINUX_MIRROR_V1").CopyTo(runtime, 0);
             WriteFile(directory.Path, "files/runtime.bin", runtime);
 
             var initramfs = Payload(40, 53);
