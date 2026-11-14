@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 
 namespace FreedomInstaller.Core;
 
@@ -13,7 +14,13 @@ public static class BoardRecoveryBackup
     private const int HeaderBytes = 65536;
     private const int ManifestLimit = 8 << 20;
 
-    public static async Task<string?> ReadDirectoryAsync(
+    /// <summary>
+    /// Discovers the board recovery material and returns a lease over the uniquely new extraction directory
+    /// this call created below <paramref name="durableParent"/>. The caller must <see cref="BoardRecoveryExtraction.Retain"/>
+    /// only after the material is validated and handed over; otherwise <see cref="BoardRecoveryExtraction.Dispose"/>
+    /// removes exactly that new directory.
+    /// </summary>
+    public static async Task<BoardRecoveryExtraction?> ReadDirectoryAsync(
         EdlClient client, string durableParent, string temporaryParent, CancellationToken token = default)
     {
         RequireParent(durableParent);
@@ -32,17 +39,18 @@ public static class BoardRecoveryBackup
                 await File.ReadAllBytesAsync(primary.FilePath, token).ConfigureAwait(false),
                 await File.ReadAllBytesAsync(secondary.FilePath, token).ConfigureAwait(false),
                 geometry.SectorSize, checked(geometry.TotalSectors * (long)geometry.SectorSize));
-            var candidates = table.Partitions.Where(p => string.Equals(p.Name, "ARMADA_BACKUP", StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (candidates.Length == 0) return null;
-            if (candidates.Length != 1) throw new InvalidDataException("Multiple recovery partitions were found.");
-            var partition = candidates[0];
-            if (partition.Name != "ARMADA_BACKUP" || partition.SectorCount != ImageBytes / table.SectorSize
-                || !string.Equals(partition.TypeGuid, "0FC63DAF-8483-4772-8E79-3D69D8477DE4", StringComparison.OrdinalIgnoreCase)
-                || !Guid.TryParse(partition.PartUuid, out var uuid) || uuid == Guid.Empty)
-                throw new InvalidDataException("The recovery partition has invalid identity or size.");
+            var partition = FindRecoveryPartition(
+                table,
+                "Multiple recovery partitions were found.",
+                "The recovery partition has invalid identity or size.");
+            if (partition is null) return null;
             var image = await client.ReadAsync(0, partition.StartSector, partition.SectorCount,
                 Path.Combine(work, "recovery.img"), token).ConfigureAwait(false);
-            return await ExtractAsync(image.FilePath, client.Toolchain.Model, partition.PartUuid, durableParent, token).ConfigureAwait(false);
+            if (image.Length != ImageBytes)
+                throw new InvalidDataException("The board recovery capture is incomplete.");
+            var directory = await ExtractAsync(
+                image.FilePath, client.Toolchain.Model, partition.PartUuid, durableParent, token).ConfigureAwait(false);
+            return new BoardRecoveryExtraction(directory, durableParent);
         }
         finally
         {
@@ -61,18 +69,11 @@ public static class BoardRecoveryBackup
         if (!ReferenceEquals(client.Binding, current.Binding))
             throw new InvalidDataException("Recovery and current capture belong to different device sessions.");
         var table = current.Tables[0];
-        var matches = table.Partitions.Where(p =>
-            string.Equals(p.Name, "ARMADA_BACKUP", StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (matches.Length == 0) return null;
-        if (matches.Length != 1) throw new InvalidDataException("Multiple ARMADA_BACKUP partitions were found.");
-        var partition = matches[0];
-        if (partition.Name != "ARMADA_BACKUP"
-            || !Guid.TryParse(partition.PartUuid, out var uuid) || uuid == Guid.Empty
-            || !string.Equals(partition.TypeGuid, "0FC63DAF-8483-4772-8E79-3D69D8477DE4", StringComparison.OrdinalIgnoreCase)
-            || partition.SectorCount != ImageBytes / table.SectorSize
-            || partition.StartSector < table.FirstUsableSector
-            || checked(partition.StartSector + partition.SectorCount) > checked(table.LastUsableSector + 1))
-            throw new InvalidDataException("The board recovery partition has invalid identity or geometry.");
+        var partition = FindRecoveryPartition(
+            table,
+            "Multiple ARMADA_BACKUP partitions were found.",
+            "The board recovery partition has invalid identity or geometry.");
+        if (partition is null) return null;
         RequireParent(durableParent);
         RequireParent(temporaryParent);
         var work = Path.Combine(Path.GetFullPath(temporaryParent), "board-recovery-read-" + Guid.NewGuid().ToString("N"));
@@ -84,13 +85,26 @@ public static class BoardRecoveryBackup
             if (capture.Length != ImageBytes)
                 throw new InvalidDataException("The board recovery capture is incomplete.");
             var directory = await ExtractAsync(path, current.Model, partition.PartUuid, durableParent, token).ConfigureAwait(false);
-            var recovered = await InternalInstallBackup.OpenRecoveryAsync(client, directory, token: token).ConfigureAwait(false);
+
+            // The extraction is owned as soon as it exists: any failure before the successful handoff below
+            // releases the opened backup locks first and then removes only this newly created directory.
+            var extraction = new BoardRecoveryExtraction(directory, durableParent);
+            InternalBackupSet? recovered = null;
             try
             {
+                recovered = await InternalInstallBackup.OpenRecoveryAsync(client, extraction.DirectoryPath, token: token).ConfigureAwait(false);
                 ValidateSource(current, recovered);
-                return recovered;
+                extraction.Retain();
+                var result = recovered;
+                recovered = null;
+                return result;
             }
-            catch { recovered.Dispose(); throw; }
+            catch
+            {
+                recovered?.Dispose();
+                extraction.Dispose();
+                throw;
+            }
         }
         finally
         {
@@ -133,6 +147,28 @@ public static class BoardRecoveryBackup
                 || (before.Name == "userdata" && now.SectorCount > before.SectorCount))
                 throw new InvalidDataException("Recovery material does not match the current vendor partitions.");
         }
+    }
+
+    /// <summary>
+    /// Applies the shared recovery partition identity and geometry gate to either reader's parsed table.
+    /// Returns null when the table carries no <c>ARMADA_BACKUP</c> partition.
+    /// </summary>
+    private static GptPartition? FindRecoveryPartition(
+        GptTable table, string multipleMessage, string invalidMessage)
+    {
+        var matches = table.Partitions.Where(p =>
+            string.Equals(p.Name, "ARMADA_BACKUP", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (matches.Length == 0) return null;
+        if (matches.Length != 1) throw new InvalidDataException(multipleMessage);
+        var partition = matches[0];
+        if (partition.Name != "ARMADA_BACKUP"
+            || !Guid.TryParse(partition.PartUuid, out var uuid) || uuid == Guid.Empty
+            || !string.Equals(partition.TypeGuid, "0FC63DAF-8483-4772-8E79-3D69D8477DE4", StringComparison.OrdinalIgnoreCase)
+            || partition.SectorCount != ImageBytes / table.SectorSize
+            || partition.StartSector < table.FirstUsableSector
+            || checked(partition.StartSector + partition.SectorCount) > checked(table.LastUsableSector + 1))
+            throw new InvalidDataException(invalidMessage);
+        return partition;
     }
 
     internal static Task<string> ExtractAsync(
@@ -265,5 +301,74 @@ public static class BoardRecoveryBackup
         if (!Path.IsPathFullyQualified(path) || !Directory.Exists(path)
             || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             throw new IOException("An existing, regular recovery parent directory is required.");
+    }
+}
+
+/// <summary>
+/// Owns exactly one freshly extracted board recovery directory created by
+/// <see cref="BoardRecoveryBackup.ReadDirectoryAsync"/> or <see cref="BoardRecoveryBackup.ReadAsync"/>.
+/// <para>
+/// The directory path is immutable and the instance is created only by the factory. <see cref="Retain"/> marks a
+/// successful handoff, after which <see cref="Dispose"/> never deletes anything. Without that handoff,
+/// <see cref="Dispose"/> removes only the verified root this factory created below the chosen parent: it never
+/// follows a reparse-point root, never deletes outside that parent and never touches pre-existing, cached or
+/// user-selected backups.
+/// </para>
+/// </summary>
+public sealed class BoardRecoveryExtraction : IDisposable
+{
+    private const string DirectoryPrefix = "board-recovery-";
+    private const int Owned = 0;
+    private const int Retained = 1;
+    private const int Released = 2;
+
+    private readonly string _directoryPath;
+    private readonly string _parentPath;
+    private int _state;
+
+    /// <summary>Factory-only constructor; the directory must already be the unique one this factory created.</summary>
+    internal BoardRecoveryExtraction(string directoryPath, string parentPath)
+    {
+        _directoryPath = Path.GetFullPath(directoryPath);
+        _parentPath = Path.GetFullPath(parentPath);
+    }
+
+    /// <summary>Absolute path of the uniquely new extraction directory this lease owns.</summary>
+    public string DirectoryPath => _directoryPath;
+
+    /// <summary>
+    /// Marks the extraction as successfully handed over so <see cref="Dispose"/> keeps it durable. Idempotent and
+    /// without effect after <see cref="Dispose"/>.
+    /// </summary>
+    public void Retain() => Interlocked.CompareExchange(ref _state, Retained, Owned);
+
+    /// <summary>
+    /// Releases the lease. An unretained owned extraction is deleted; a retained one is left untouched.
+    /// </summary>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _state, Released) != Owned) return;
+        DeleteOwnedDirectory();
+    }
+
+    private void DeleteOwnedDirectory()
+    {
+        try
+        {
+            var parent = Path.TrimEndingDirectorySeparator(_parentPath);
+            var prefix = parent.EndsWith(Path.DirectorySeparatorChar)
+                ? parent
+                : parent + Path.DirectorySeparatorChar;
+            var name = Path.GetFileName(_directoryPath);
+            if (!_directoryPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                || !name.StartsWith(DirectoryPrefix, StringComparison.Ordinal)
+                || !Guid.TryParseExact(name.Substring(DirectoryPrefix.Length), "N", out _)
+                || !Directory.Exists(_directoryPath)
+                || (File.GetAttributes(_directoryPath) & FileAttributes.ReparsePoint) != 0)
+                return;
+            Directory.Delete(_directoryPath, recursive: true);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 }
