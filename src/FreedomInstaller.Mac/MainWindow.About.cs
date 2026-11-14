@@ -13,7 +13,7 @@ public partial class MainWindow
     private Task<bool> OpenLinkAsync(string url) => Launcher.LaunchUriAsync(new Uri(url));
 
     private async void OnOpenAboutRepository(object? sender, RoutedEventArgs e) =>
-        await OpenLinkAsync("https://github.com/mydanyi/armadaos-freedom");
+        await OpenLinkAsync("https://github.com/ArmadaOS-Freedom/armadaos-freedom");
 
     private async void OnOpenLichWangGithub(object? sender, RoutedEventArgs e) =>
         await OpenLinkAsync("https://github.com/lich-wang");
