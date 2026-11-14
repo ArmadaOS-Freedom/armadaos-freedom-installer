@@ -61,6 +61,9 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         "2d4a7bed46110cf5c50e9bfaa3a294aa5e260c9d106f6ca8b8a0bb325afbc54c";
     private const string SeedManifestDigestPin =
         "sha256:af569f306a86a246fac51370e2dc8d54b514e1c06b484dee33d3db02dce108c1";
+    // The fingerprint pin above describes one immutable historical raw manifest, so its seed origin must
+    // stay the legacy repository path recorded in that manifest. A new package with a new origin needs its
+    // own reviewed fingerprint before it can be pinned here.
     private const string SeedOriginPin =
         "ostree-image-signed:docker://ghcr.io/mydanyi/armadaos-freedom:testing";
 

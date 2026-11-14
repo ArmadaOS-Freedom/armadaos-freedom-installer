@@ -227,7 +227,7 @@
         "maintenance/portable_gpt.py",
         "maintenance/edl_gpt_cli.py"
       ],
-      "repository": "https://github.com/mydanyi/armadaos-freedom-installer",
+      "repository": "https://github.com/ArmadaOS-Freedom/armadaos-freedom-installer",
       "id": "avb-gpt-scripts"
     },
     {

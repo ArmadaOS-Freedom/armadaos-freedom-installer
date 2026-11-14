@@ -25,9 +25,24 @@
        SharpCompress is a single fully managed, MIT-licensed dependency (net10 supported); no external
        archiver executable and no native helper is installed or invoked at build or run time. ZIP/ZIP64
        keeps using System.IO.Compression, so the fast path never goes through this library. -->
+  <!-- Fixed system release trust anchor for signed install/offline-upgrade documents. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\armadaos-freedom.pub"
+                      LogicalName="FreedomInstaller.UpdateTrust.PublicKey.pem"
+                      WithCulture="false" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="SharpCompress" Version="0.50.6" />
     <PackageReference Include="System.IO.Ports" Version="10.0.0" />
+    <!-- Managed SSH transport for password authentication. Pinned; no native helper. -->
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+  </ItemGroup>
+
+  <!-- The password transport's internal transport seam is exercised by the focused
+       core tests with an in-memory fake; no production type becomes public for it. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="FreedomInstaller.Core.Tests" />
   </ItemGroup>
 
   <!-- Fixed AOSP AVB public test RSA4096 signing material, supplied by the build

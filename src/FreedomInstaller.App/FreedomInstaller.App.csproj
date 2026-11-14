@@ -14,13 +14,6 @@
     <AssemblyTitle>ArmadaOS Freedom 安装助手</AssemblyTitle>
     <Description>免费软件，谨防被骗。ArmadaOS Freedom 双系统安装助手。</Description>
     <Copyright>Installer by danyi (mydanyi). Third-party components retain their original licenses.</Copyright>
-    <!-- 安装助手自身版本号（非 ArmadaOS 系统版本）。AssemblyVersion/FileVersion 固定四段；
-         IncludeSourceRevisionInInformationalVersion=false 使 InformationalVersion 保持 0.7.32，不追加 git 提交号。 -->
-    <Version>0.7.32</Version>
-    <InformationalVersion>0.7.32</InformationalVersion>
-    <AssemblyVersion>0.7.32.0</AssemblyVersion>
-    <FileVersion>0.7.32.0</FileVersion>
-    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <!-- Single-file, self-contained publish configuration (win-x64, no trimming, no ReadyToRun). -->
@@ -48,6 +41,31 @@
     <EmbeddedResource Include="Resources\Dynamic.*.json"
                       LogicalName="FreedomInstaller.Strings.%(Filename).json"
                       WithCulture="false" />
+  </ItemGroup>
+
+  <!-- Offline-updater bootstrap inputs from the system worker: a standalone Python
+       bootstrap script and the compressed ARM64 updater bundle. They are explicit
+       build inputs, embedded byte-for-byte under fixed logical names and never
+       downloaded or regenerated here. A normal source build may omit them; a
+       single-file publish fails if either is missing. -->
+  <ItemGroup Condition="'$(BundledOfflineBootstrapScript)' != '' and Exists('$(BundledOfflineBootstrapScript)')">
+    <EmbeddedResource Include="$(BundledOfflineBootstrapScript)"
+                      LogicalName="FreedomInstaller.OfflineBootstrap.Script.py"
+                      WithCulture="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(BundledOfflineUpdaterBundle)' != '' and Exists('$(BundledOfflineUpdaterBundle)')">
+    <EmbeddedResource Include="$(BundledOfflineUpdaterBundle)"
+                      LogicalName="FreedomInstaller.OfflineBootstrap.Updater.tar.gz"
+                      WithCulture="false" />
+  </ItemGroup>
+
+  <!-- Version of the embedded updater bundle manifest. maintenance/build_installer.py
+       reads it from the validated manifest and passes it through the generated
+       props, so the coordinator never hardcodes a bundle version. -->
+  <ItemGroup Condition="'$(BundledOfflineUpdaterVersion)' != ''">
+    <AssemblyMetadata Include="BundledOfflineUpdaterVersion"
+                      Value="$(BundledOfflineUpdaterVersion)" />
   </ItemGroup>
 
   <!-- Bundled platform-tools: only embedded when the build supplies an existing archive.
@@ -192,6 +210,24 @@
     <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledQualcommDriverArchive)' != '' and !Exists('$(BundledQualcommDriverArchive)')"
            Code="FRDM1024"
            Text="BundledQualcommDriverArchive '$(BundledQualcommDriverArchive)' does not exist. Point it at the existing Qualcomm USB driver pack archive; the build never downloads or generates it." />
+    <!-- The offline service deployment and its verifier are wired into the
+         connection path; a single-file publish without them would silently
+         leave tablets unable to receive the updater. -->
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineBootstrapScript)' == ''"
+           Code="FRDM1027"
+           Text="BundledOfflineBootstrapScript is not set. Set it to the absolute path of the existing armada-offline-bootstrap script before publishing the single-file installer; the build never downloads it." />
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineBootstrapScript)' != '' and !Exists('$(BundledOfflineBootstrapScript)')"
+           Code="FRDM1028"
+           Text="BundledOfflineBootstrapScript '$(BundledOfflineBootstrapScript)' does not exist. Point it at the existing armada-offline-bootstrap script; the build never downloads it." />
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineUpdaterBundle)' == ''"
+           Code="FRDM1029"
+           Text="BundledOfflineUpdaterBundle is not set. Set it to the absolute path of the existing armada-offline-updater.tar.gz bundle before publishing the single-file installer; the build never downloads it." />
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineUpdaterBundle)' != '' and !Exists('$(BundledOfflineUpdaterBundle)')"
+           Code="FRDM1030"
+           Text="BundledOfflineUpdaterBundle '$(BundledOfflineUpdaterBundle)' does not exist. Point it at the existing armada-offline-updater.tar.gz bundle; the build never downloads it." />
+    <Error Condition="'$(PublishSingleFile)' == 'true' and '$(BundledOfflineUpdaterBundle)' != '' and '$(BundledOfflineUpdaterVersion)' == ''"
+           Code="FRDM1031"
+           Text="BundledOfflineUpdaterVersion is not set. It must come from the validated updater bundle manifest via maintenance/build_installer.py; the install receipt and post-install check are never validated against a hardcoded version." />
   </Target>
 
 </Project>

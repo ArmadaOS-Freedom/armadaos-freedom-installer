@@ -250,6 +250,29 @@ public sealed class PackageContractTests
             "origin");
     }
 
+    [Theory]
+    [InlineData("mydanyi")]
+    [InlineData("armadaos-freedom")]
+    public void Validate_OrganizationAndLegacyOriginsAreAccepted(string owner)
+    {
+        foreach (var channel in new[] { "stable", "beta", "testing" })
+        foreach (var suffix in new[] { "", "@sha256:" + PackageFixture.Commit })
+        {
+            var origin = $"ostree-image-signed:docker://ghcr.io/{owner}/armadaos-freedom:{channel}{suffix}";
+            var result = ValidateMutated(ModelA, metadata => Deployment(metadata)["origin"] = origin);
+            Assert.True(result.IsValid, string.Join("; ", result.Reasons));
+        }
+    }
+
+    [Theory]
+    [InlineData("armadaos-freedom-extra/armadaos-freedom")]
+    [InlineData("armadaos-freedom/armadaos-freedom/extra")]
+    public void Validate_OrganizationLookalikeOriginsAreRejected(string repository)
+    {
+        AssertRejected(ValidateMutated(ModelA, metadata => Deployment(metadata)["origin"] =
+            $"ostree-image-signed:docker://ghcr.io/{repository}:stable"), "origin");
+    }
+
     [Fact]
     public void Validate_OriginWithPinnedManifestDigestIsAccepted()
     {

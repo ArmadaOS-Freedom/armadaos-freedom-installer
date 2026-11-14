@@ -4,11 +4,11 @@
 
 ## 一次完整构建
 
-安装 Docker 并使用 Linux 容器。在仓库根目录运行以下两条命令；Linux shell 和 Windows PowerShell 均可使用：
+安装 Docker 并使用 Linux 容器。单 EXE 发布还需要系统仓库生成的离线更新组件（见下节），先把它们放到构建主机的 `artifacts/offline/`，再在仓库根目录运行以下两条命令；Linux shell 和 Windows PowerShell 均可使用：
 
 ```sh
 docker build -f tools/installer-builder.Dockerfile -t armada-installer-builder tools
-docker run --rm -v "${PWD}:/src" -v "${PWD}/artifacts:/work" armada-installer-builder python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /work/publish
+docker run --rm -v "${PWD}:/src" -v "${PWD}/artifacts:/work" armada-installer-builder python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /work/publish --offline-bootstrap-script /work/offline/armada-offline-bootstrap --offline-updater-bundle /work/offline/armada-offline-updater.tar.gz
 ```
 
 产物为 `artifacts/publish/FreedomInstaller.App.exe`，Windows x64 自包含单 EXE。最终用户不需要另装 .NET SDK；Linux 系统镜像仍由系统仓库单独生成。
@@ -18,10 +18,23 @@ docker run --rm -v "${PWD}:/src" -v "${PWD}/artifacts:/work" armada-installer-bu
 已有相同工具链的 Linux 环境也可运行：
 
 ```sh
-python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /work/publish
+python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /work/publish \
+  --offline-bootstrap-script /work/offline/armada-offline-bootstrap \
+  --offline-updater-bundle /work/offline/armada-offline-updater.tar.gz
 ```
 
 工作目录和输出目录应使用绝对路径。编译产物、缓存和日志不应提交到源码仓库。
+
+### 离线更新组件
+
+单 EXE 发布要求两个本地已有文件，均以固定资源名原样嵌入：
+
+- `armada-offline-bootstrap`：独立部署脚本，供安装器在平板上部署更新服务。
+- `armada-offline-updater.tar.gz`：压缩后的 ARM64 更新器包；运行时由嵌入字节计算其哈希。
+
+部署脚本取自系统仓库的 `system_files/usr/libexec/armada/armada-offline-bootstrap`；更新器包由同一版本系统仓库的 `build_files/build-offline-updater-bundle.py` 从完整 ARM64 系统镜像根目录生成。将这两个文件复制进构建环境。安装器构建不下载、不重新生成它们；除存在、可读、普通文件与 256 MiB（与 SSH 上传上限一致）压缩体积校验外，还会读取更新包内的 `manifest.json` 校验身份、入口与必需能力，并把清单里的版本写入 props 与程序集元数据。安装器只按该版本核对安装回执与部署后探测结果，不按文件名猜测版本，也不在代码里写死版本号。
+
+两个参数必须成对给出：只给其中一个时，`build_installer.py` 会在任何下载、工具编译或打包之前报错。脚本与更新包应来自同一次系统构建并保持配对；不匹配的组合会让安装器无法完成部署。`--prepare-only` 可以省略这一对参数，用于只准备工具链、包和固定哈希的流程；此时生成的 props 不含离线更新组件，不能用于单 EXE 发布。
 
 ## macOS 版
 
@@ -41,7 +54,7 @@ python3 -B maintenance/build_installer_macos.py --work-dir "$PWD/artifacts/build
 4. 从本次工具产物生成编译时固定哈希，分别制作四代、五代与 TB710FU 的 9008 工具包，并从仓库原始驱动文件制作驱动归档。
 5. 生成 MSBuild 输入配置，编译并打包单 EXE。
 
-每次构建会生成 `build/build-record.json`，记录源码文件哈希、上游提交、本次工具哈希和产物路径。程序使用编进程序集的本次哈希校验工具，运行时不接受外部配置覆盖。修改工具源码后重新完整构建即可，无需手工替换旧二进制的哈希常量。
+每次构建会生成 `build/build-record.json`，记录源码文件哈希、上游提交、本次工具哈希和产物路径。提供离线更新组件时，记录还会写入两个文件的绝对路径、字节数、SHA-256、来源（系统仓库的离线更新包构建脚本）以及清单版本（`offlineUpdaterVersion`）。程序使用编进程序集的本次哈希校验工具，运行时不接受外部配置覆盖。修改工具源码后重新完整构建即可，无需手工替换旧二进制的哈希常量。
 
 ## 组件与版本关系
 
@@ -68,8 +81,12 @@ python3 -B maintenance/build_installer_macos.py --work-dir "$PWD/artifacts/build
 只准备工具、包、固定哈希和 MSBuild 配置：
 
 ```sh
-python3 -B maintenance/build_installer.py --work-dir /work/build --prepare-only
+python3 -B maintenance/build_installer.py --work-dir /work/build --prepare-only \
+  --offline-bootstrap-script /work/offline/armada-offline-bootstrap \
+  --offline-updater-bundle /work/offline/armada-offline-updater.tar.gz
 ```
+
+用于单 EXE 时不要省略这两个参数：生成的 props 会带上它们的路径，后续 `dotnet publish` 按 props 嵌入。只准备工具链和包、不发布单 EXE 时可以省略；此时 props 不含离线更新组件，只适合不生成安装器的流程。
 
 随后可使用该次配置编译：
 
@@ -104,3 +121,11 @@ python -B tools/boot-packers/tests/windows_paths.py --packer <MultiBootKernelPat
 ```
 
 覆盖长路径、中文名称、绝对路径和网络共享路径；每个成功用例都会逐字节比较重打包结果。网络共享路径需将测试目录放在实际可用的共享中。失败现场保留在测试目录下。
+
+## Linux 系统更新用 BootTool
+
+BootTool 与安装器共用 Core 中的引导解析、重新打包及签名校验逻辑。`tools/publish-boot-tool.py` 生成包含运行时的 Linux ARM64 工具目录；平板无需安装 .NET SDK 或系统级 .NET 运行时。`tools/boot-tool.Containerfile` 以仓库根目录为构建上下文，产物位于镜像的 `/boot-tool`。`tools/verify-boot-tool.py` 检查文件清单、哈希、架构和启动入口；这项检查不代替设备启动验收。
+
+打包仅取得 `maintenance/build-inputs.json` 中固定的 GBL PRC/ROW 文件，并复用仓库内的 AOSP 公开测试素材。需要离线复用下载内容时，可把清单指定文件名的两个 GBL 文件放进 `tools/boot-tool-inputs/`；它们仍须通过长度和 SHA-256 校验，且被 Git 排除。发布目录保留运行时和第三方许可，不包含 Windows 刷机工具或 SDK。
+
+`boot-tool` 工作流在原生 ARM64 runner 上构建并上传压缩产物，同时在没有 .NET 的运行容器中检查启动。系统仓库从本仓库解析并记录实际源码提交后构建同一工具；系统侧接入前，应先合入所需的 BootTool 源码。

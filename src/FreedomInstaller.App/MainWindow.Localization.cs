@@ -195,6 +195,8 @@ public partial class MainWindow
         {
             row.Render(_uiText);
         }
+
+        RerenderOfflineUpgradeLog();
     }
 
     private void ApplyLanguageResources()

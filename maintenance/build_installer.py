@@ -3,6 +3,9 @@
 
 Phases
 ------
+0. optional paired offline bootstrap inputs staged into the isolated run
+   directory with bounded streaming and validated there (cheap, before any
+   build)
 1. manifest load + strict vendor file validation (before any download/compile)
 2. official input fetch into a real cache, per-run isolated directories
 3. compile all three tools from checked-in source
@@ -12,7 +15,12 @@ Phases
 7. emit MSBuild props + build record (atomic last-success pointers)
 
 After prepare(), the CLI optionally runs `dotnet publish` of the WPF app against
-the freshly generated props file.
+the freshly generated props file.  A publish requires the paired
+--offline-bootstrap-script and --offline-updater-bundle inputs; they are local
+artefacts of the system offline updater bundle build, never downloaded here.
+The pair is copied into the per-run directory before it is validated, and the
+props, the record digests and the publish all read only that snapshot, so an
+edit to the originals cannot change what is embedded.
 
 Stdlib only. No GitHub API, no auth, no devices, no broad cleanup.
 """
@@ -21,8 +29,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import uuid
 import zipfile
@@ -51,6 +61,64 @@ _PROPERTY_NAMES = (
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
 )
+
+# Optional paired inputs: embedded only when supplied, and required for a
+# single-file publish.  They are built by the system repository's
+# build_files/build-offline-updater-bundle.py from a full ARM64 image root and
+# copied into the build environment as ordinary local files; this build never
+# downloads or regenerates them.
+_OFFLINE_PROPERTY_NAMES = (
+    "BundledOfflineBootstrapScript",
+    "BundledOfflineUpdaterBundle",
+)
+
+# Value property (not a path) taken from the validated bundle manifest.  The
+# installer embeds it as assembly metadata and requires exactly this version in
+# the install receipt and in the post-install probe.
+_OFFLINE_VERSION_PROPERTY = "BundledOfflineUpdaterVersion"
+
+_OFFLINE_ASSET_SOURCE = "system build_files/build-offline-updater-bundle.py"
+
+# The bundle contract is explicit.  A bundle manifest names the capabilities
+# the runtime it carries provides; the installer refuses any bundle that does
+# not declare the one it requires, so an older bundle that merely unpacks is
+# not accepted and cannot fail later during a resumed upgrade.  The manifest
+# also pins the entry script it installs to /usr/libexec/armada, and the
+# archive member named by that entry must be present exactly once, regular,
+# executable and matching the declared size and SHA-256.
+_OFFLINE_MANIFEST_NAME = "manifest.json"
+_OFFLINE_BUNDLE_NAME = "armada-offline-updater"
+_OFFLINE_ENTRY = "usr/libexec/armada/armada-offline-update"
+_OFFLINE_REQUIRED_CAPABILITY = "preflight-session-v1"
+# The managed SSH session refuses an upload larger than 256 MiB
+# (OfflineUpdateSshManagedSession.MaxUploadBytes) and there is only one such
+# session: the bootstrap script is uploaded first and the updater bundle after
+# it, so each artefact carries the same 1..256 MiB bound.  The builder must
+# never accept an input the transport can never deliver, so the build-side
+# limits match that transport instead of being larger.
+_OFFLINE_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+# The bundle is the larger artefact and the only one whose size is re-checked
+# when its manifest is read, so it keeps its own name for that second rule.
+_OFFLINE_MAX_BUNDLE_BYTES = _OFFLINE_MAX_UPLOAD_BYTES
+_OFFLINE_MAX_MEMBER_BYTES = 128 * 1024 * 1024
+_OFFLINE_MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+_OFFLINE_MAX_MEMBERS = 4096
+_OFFLINE_MAX_CAPABILITIES = 16
+_OFFLINE_MAX_CAPABILITY_LENGTH = 64
+_OFFLINE_CAPABILITY = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z", re.ASCII)
+_OFFLINE_VERSION = re.compile(r"\d+(?:\.\d+)*\Z", re.ASCII)
+# The bootstrap coordinator parses this version as dotted decimal ``int``
+# segments (int.TryParse), so a segment above Int32.MaxValue is a version the
+# device can never accept.  It is refused here instead of shipping a bundle
+# that fails during deployment.  Leading zeros are ordinary digits to
+# int.TryParse, so they stay accepted; the check compares digit strings and
+# never converts an arbitrarily long number to a Python int.
+_OFFLINE_VERSION_MAX_PART = "2147483647"  # Int32.MaxValue
+_OFFLINE_MODE = re.compile(r"[0-7]{3,4}\Z", re.ASCII)
+
+# Streaming chunk for snapshotting build inputs: bounded memory regardless of
+# input size, and the only way a file is ever read on the way into a run.
+_COPY_CHUNK = 1024 * 1024
 
 _TOOL_NAMES = ("client", "packer", "unpacker")
 
@@ -157,6 +225,382 @@ def _validate_vendor_files(repo_root, manifest):
     return results
 
 
+def _offline_capability_message():
+    return (
+        f"bundle does not declare the required capability "
+        f"{_OFFLINE_REQUIRED_CAPABILITY!r}; rebuild it with system "
+        f"build_files/build-offline-updater-bundle.py from a runtime that "
+        f"supports a preflight sessionId"
+    )
+
+
+def _offline_version_part_fits_int32(part):
+    """True when one decimal segment fits the coordinator's 32-bit parse.
+
+    Leading zeros carry no value to int.TryParse, so they are dropped before
+    the length/digit comparison.  The comparison is done on digit strings, so
+    a very long segment is rejected without ever calling ``int()`` on it.
+    """
+    significant = part.lstrip("0") or "0"
+    if len(significant) != len(_OFFLINE_VERSION_MAX_PART):
+        return len(significant) < len(_OFFLINE_VERSION_MAX_PART)
+    return significant <= _OFFLINE_VERSION_MAX_PART
+
+
+def _offline_version_fits_int32(version):
+    """True when every dotted segment is at most Int32.MaxValue."""
+    return all(
+        _offline_version_part_fits_int32(part) for part in version.split(".")
+    )
+
+
+def _offline_manifest_document(bundle):
+    """Read the one manifest.json from a bundle tar.gz without extracting it.
+
+    Only the manifest member is read into memory, and every bound is enforced
+    before its bytes are consumed.  Nothing is written or executed.
+    """
+    prefix = f"offline bundle error: {bundle}: "
+    try:
+        size = Path(bundle).stat().st_size
+    except OSError as error:
+        raise SystemExit(prefix + f"cannot read bundle: {error}")
+    if not 0 < size <= _OFFLINE_MAX_BUNDLE_BYTES:
+        raise SystemExit(prefix + "bundle size is out of bounds")
+    raw = None
+    count = 0
+    try:
+        with tarfile.open(str(bundle), mode="r:gz") as archive:
+            for member in archive:
+                count += 1
+                if count > _OFFLINE_MAX_MEMBERS:
+                    raise SystemExit(prefix + "bundle has too many members")
+                if member.size > _OFFLINE_MAX_MEMBER_BYTES:
+                    raise SystemExit(prefix + "bundle member size is out of bounds")
+                if member.name != _OFFLINE_MANIFEST_NAME:
+                    continue
+                if raw is not None:
+                    raise SystemExit(
+                        prefix + f"bundle has more than one {_OFFLINE_MANIFEST_NAME}"
+                    )
+                if not member.isreg():
+                    raise SystemExit(
+                        prefix + f"{_OFFLINE_MANIFEST_NAME} is not a regular file"
+                    )
+                if not 0 < member.size <= _OFFLINE_MAX_MANIFEST_BYTES:
+                    raise SystemExit(
+                        prefix + f"{_OFFLINE_MANIFEST_NAME} size is out of bounds"
+                    )
+                raw = archive.extractfile(member).read(_OFFLINE_MAX_MANIFEST_BYTES + 1)
+                if len(raw) > _OFFLINE_MAX_MANIFEST_BYTES:
+                    raise SystemExit(
+                        prefix + f"{_OFFLINE_MANIFEST_NAME} exceeds its size limit"
+                    )
+    except (OSError, tarfile.TarError) as error:
+        raise SystemExit(prefix + f"bundle is not a readable tar.gz: {error}")
+    if raw is None:
+        raise SystemExit(prefix + f"bundle has no {_OFFLINE_MANIFEST_NAME}")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise SystemExit(prefix + f"{_OFFLINE_MANIFEST_NAME} is not valid JSON: {error}")
+
+
+def _validate_offline_manifest(bundle, document):
+    """Validate bundle identity, version, entry declaration and the required
+    capability, and return the declared record for the entry member.
+
+    Every ``files`` record is checked for shape here so the archive pass that
+    follows only has to compare bytes against a well-formed declaration.
+    """
+    prefix = f"offline bundle error: {bundle}: "
+    if not isinstance(document, dict):
+        raise SystemExit(prefix + "manifest must be a JSON object")
+    if document.get("schemaVersion") != 1:
+        raise SystemExit(prefix + "manifest schemaVersion must be 1")
+    if document.get("bundle") != _OFFLINE_BUNDLE_NAME:
+        raise SystemExit(prefix + f"manifest bundle must be {_OFFLINE_BUNDLE_NAME!r}")
+    version = document.get("version")
+    if not isinstance(version, str) or not _OFFLINE_VERSION.fullmatch(version):
+        raise SystemExit(prefix + "manifest version is not a version string")
+    if not _offline_version_fits_int32(version):
+        raise SystemExit(
+            prefix
+            + "manifest version has a segment above "
+            + _OFFLINE_VERSION_MAX_PART
+            + " (the bootstrap coordinator parses each segment as a 32-bit integer)"
+        )
+    if document.get("entry") != _OFFLINE_ENTRY:
+        raise SystemExit(prefix + f"manifest entry must be {_OFFLINE_ENTRY!r}")
+    files = document.get("files")
+    if not isinstance(files, list) or not files:
+        raise SystemExit(prefix + "manifest files must be a non-empty list")
+    if len(files) > _OFFLINE_MAX_MEMBERS:
+        raise SystemExit(prefix + "manifest declares too many files")
+    declared = {}
+    for item in files:
+        if not isinstance(item, dict):
+            raise SystemExit(prefix + "manifest files entries must be JSON objects")
+        rel = item.get("path")
+        if not isinstance(rel, str) or not rel or rel.startswith("/"):
+            raise SystemExit(prefix + "manifest files entry path is not relative")
+        parts = rel.split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise SystemExit(
+                prefix + f"manifest files entry path is not normalized: {rel!r}"
+            )
+        if rel in declared:
+            raise SystemExit(prefix + f"manifest declares {rel!r} more than once")
+        want_bytes = item.get("bytes")
+        if (
+            not isinstance(want_bytes, int)
+            or isinstance(want_bytes, bool)
+            or not 0 <= want_bytes <= _OFFLINE_MAX_MEMBER_BYTES
+        ):
+            raise SystemExit(prefix + f"manifest files entry size is invalid for {rel!r}")
+        want_sha = item.get("sha256")
+        if not isinstance(want_sha, str) or len(want_sha) != 64:
+            raise SystemExit(prefix + f"manifest files entry sha256 is invalid for {rel!r}")
+        try:
+            int(want_sha, 16)
+        except ValueError:
+            raise SystemExit(prefix + f"manifest files entry sha256 is invalid for {rel!r}")
+        mode = item.get("mode")
+        if not isinstance(mode, str) or not _OFFLINE_MODE.fullmatch(mode):
+            raise SystemExit(prefix + f"manifest files entry mode is invalid for {rel!r}")
+        declared[rel] = item
+    entry_spec = declared.get(_OFFLINE_ENTRY)
+    if entry_spec is None:
+        raise SystemExit(
+            prefix + f"manifest files must declare the entry {_OFFLINE_ENTRY!r}"
+        )
+    if not (int(entry_spec["mode"], 8) & 0o111):
+        raise SystemExit(prefix + f"manifest entry mode for {_OFFLINE_ENTRY} is not executable")
+    capabilities = document.get("capabilities")
+    if not isinstance(capabilities, list):
+        raise SystemExit(prefix + _offline_capability_message())
+    if len(capabilities) > _OFFLINE_MAX_CAPABILITIES:
+        raise SystemExit(prefix + "manifest declares too many capabilities")
+    seen = set()
+    for capability in capabilities:
+        if (
+            not isinstance(capability, str)
+            or not capability
+            or len(capability) > _OFFLINE_MAX_CAPABILITY_LENGTH
+            or not _OFFLINE_CAPABILITY.fullmatch(capability)
+        ):
+            raise SystemExit(prefix + "manifest capabilities are malformed")
+        if capability in seen:
+            raise SystemExit(prefix + "manifest capabilities must be unique")
+        seen.add(capability)
+    if _OFFLINE_REQUIRED_CAPABILITY not in seen:
+        raise SystemExit(prefix + _offline_capability_message())
+    return entry_spec
+
+
+def _offline_entry_member(bundle, spec):
+    """Check the declared entry member in the bundle archive.
+
+    The archive is streamed again - no extraction, nothing written - and only
+    the bytes of the member named by the manifest entry are hashed, bounded by
+    ``_OFFLINE_MAX_MEMBER_BYTES``.  The member must appear exactly once, must be
+    a regular file (not a symlink, hard link or directory), must carry an
+    executable mode, and must match the declared size and SHA-256.
+    """
+    prefix = f"offline bundle error: {bundle}: "
+    entry = _OFFLINE_ENTRY
+    want_bytes = spec["bytes"]
+    want_sha = spec["sha256"].lower()
+    count = 0
+    got_bytes = 0
+    got_sha = None
+    try:
+        with tarfile.open(str(bundle), mode="r:gz") as archive:
+            for member in archive:
+                if member.name != entry:
+                    continue
+                count += 1
+                if count > 1:
+                    raise SystemExit(prefix + f"bundle has more than one {entry}")
+                if not member.isreg():
+                    raise SystemExit(prefix + f"{entry} is not a regular file")
+                if not (member.mode & 0o111):
+                    raise SystemExit(prefix + f"{entry} is not executable")
+                if member.size != want_bytes:
+                    raise SystemExit(
+                        prefix + f"{entry} size {member.size} != expected {want_bytes}"
+                    )
+                digest = hashlib.sha256()
+                stream = archive.extractfile(member)
+                while True:
+                    chunk = stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    got_bytes += len(chunk)
+                    if got_bytes > _OFFLINE_MAX_MEMBER_BYTES:
+                        raise SystemExit(prefix + f"{entry} exceeds its size limit")
+                    digest.update(chunk)
+                got_sha = digest.hexdigest()
+    except (OSError, tarfile.TarError) as error:
+        raise SystemExit(prefix + f"bundle is not a readable tar.gz: {error}")
+    if not count:
+        raise SystemExit(prefix + f"bundle has no {entry}")
+    if got_sha != want_sha:
+        raise SystemExit(prefix + f"{entry} sha256 {got_sha} != expected {want_sha}")
+
+
+def _stage_offline_asset(prop, source, dest_dir, limit=None):
+    """Snapshot one offline input into the run directory with bounded streaming.
+
+    The source is read one chunk at a time, never more than ``limit`` bytes in
+    total, and the exact bytes written are hashed as they pass through, so the
+    returned digest describes the snapshot rather than a later re-read of the
+    original.  A source whose size or modification time changes while it is
+    being copied is rejected instead of being captured half-way.
+
+    ``limit`` is inclusive and applies to that one input only: a source of
+    exactly ``limit`` bytes is accepted, while an empty source or one byte over
+    the limit is refused before or during the copy.  Either way the error names
+    the property that was being staged, because the same helper carries both
+    the bootstrap script and the updater bundle.
+    """
+    source = Path(source)
+    prefix = f"offline assets error: {prop}: "
+    try:
+        before = os.stat(str(source))
+    except OSError as error:
+        raise SystemExit(prefix + f"cannot read: {error}")
+    if limit is not None and not 0 < before.st_size <= limit:
+        raise SystemExit(
+            prefix + f"size is out of bounds (expected 1..{limit} bytes)"
+        )
+    dest_dir = Path(dest_dir)
+    # Fixed destination name per property: independent of the source basename,
+    # so two inputs can never collide and no caller-supplied name is reused.
+    dest = dest_dir / prop
+    try:
+        reader = open(str(source), "rb")
+    except OSError as error:
+        raise SystemExit(prefix + f"cannot read: {error}")
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=str(dest_dir))
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with reader, os.fdopen(fd, "wb") as writer:
+            while True:
+                chunk = reader.read(_COPY_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if limit is not None and total > limit:
+                    raise SystemExit(
+                        prefix + f"size is out of bounds (expected 1..{limit} bytes)"
+                    )
+                digest.update(chunk)
+                writer.write(chunk)
+            writer.flush()
+            os.fsync(writer.fileno())
+        try:
+            after = os.stat(str(source))
+        except OSError as error:
+            raise SystemExit(prefix + f"cannot re-read after staging: {error}")
+        if (
+            total != before.st_size
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+        ):
+            raise SystemExit(prefix + "input changed while it was being staged")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return {
+        "path": str(dest.resolve()),
+        "bytes": total,
+        "sha256": digest.hexdigest(),
+    }
+
+
+def _validate_offline_inputs(script, bundle, work_dir):
+    """Stage then validate the optional paired offline-bootstrap inputs.
+
+    Both paths must be supplied together, and each must be an existing,
+    readable regular file of 1..256 MiB: both artefacts are uploaded through
+    the same managed SSH session, so neither may exceed the transport limit
+    the runtime enforces.  The pair is copied into a fresh, isolated run
+    directory with bounded streaming, and only those snapshots are read from
+    then on: the manifest, the entry bytes, the props, the record digests and
+    the publish all refer to the snapshot, never to the mutable originals.
+
+    The bundle's manifest is read from the staged snapshot - bounded, without
+    extraction or execution - and must declare the capability this installer
+    requires, after which the staged entry script member is streamed and
+    checked against the manifest's size and SHA-256.  This runs before the
+    expensive build phases so a typo or a stale bundle never costs a full
+    tool compilation.
+
+    Returns ``(staged, version, run_dir)``: ``staged`` maps each props name to
+    ``{path, bytes, sha256}`` for the snapshot, ``version`` is the bundle
+    manifest version the installer requires in the install receipt, and
+    ``run_dir`` is the isolated run directory that holds the snapshots.  All
+    three are ``({}, None, None)`` when both inputs are omitted.
+    """
+    if script is None and bundle is None:
+        return {}, None, None
+    if script is None or bundle is None:
+        missing = (
+            "--offline-bootstrap-script" if script is None
+            else "--offline-updater-bundle"
+        )
+        raise SystemExit(
+            f"offline assets error: {missing} is missing; the bootstrap script "
+            "and updater bundle must be supplied together"
+        )
+    sources = {}
+    for prop, raw in (
+        ("BundledOfflineBootstrapScript", script),
+        ("BundledOfflineUpdaterBundle", bundle),
+    ):
+        path = Path(raw).expanduser()
+        if not path.exists():
+            raise SystemExit(f"offline assets error: {prop} not found: {path}")
+        if not path.is_file():
+            raise SystemExit(
+                f"offline assets error: {prop} is not a regular file: {path}"
+            )
+        if not os.access(str(path), os.R_OK):
+            raise SystemExit(f"offline assets error: {prop} is not readable: {path}")
+        sources[prop] = path.resolve()
+
+    run_dir = _new_run_dir(work_dir)
+    staged_dir = run_dir / "offline"
+    staged_dir.mkdir()
+    staged = {
+        "BundledOfflineBootstrapScript": _stage_offline_asset(
+            "BundledOfflineBootstrapScript",
+            sources["BundledOfflineBootstrapScript"],
+            staged_dir,
+            limit=_OFFLINE_MAX_UPLOAD_BYTES,
+        ),
+        "BundledOfflineUpdaterBundle": _stage_offline_asset(
+            "BundledOfflineUpdaterBundle",
+            sources["BundledOfflineUpdaterBundle"],
+            staged_dir,
+            limit=_OFFLINE_MAX_BUNDLE_BYTES,
+        ),
+    }
+    bundle_path = staged["BundledOfflineUpdaterBundle"]["path"]
+    document = _offline_manifest_document(bundle_path)
+    _offline_entry_member(
+        bundle_path, _validate_offline_manifest(bundle_path, document)
+    )
+    return staged, document["version"], run_dir
+
+
 def _make_controlled_env(work_dir):
     env = dict(os.environ)
     work_dir = Path(work_dir)
@@ -187,6 +631,15 @@ def _run(argv, cwd, env, phase):
             f"[{phase}] command failed with exit code {exc.returncode}: "
             + " ".join(str(a) for a in argv)
         ) from exc
+
+
+def _new_run_dir(work_dir):
+    """Create a fresh, uniquely named isolated run directory under ``runs``."""
+    runs_root = Path(work_dir) / "runs"
+    runs_root.mkdir(parents=True, exist_ok=True)
+    run_dir = runs_root / uuid.uuid4().hex
+    run_dir.mkdir(parents=False, exist_ok=False)
+    return run_dir
 
 
 def _extract_libusb(nupkg_path, extract_spec):
@@ -337,13 +790,26 @@ def _source_digest(repo_root, manifest):
     return entries
 
 
-def _write_props(path, inputs):
+def _write_props(path, inputs, offline_updater_version=None):
     lines = ["<Project>", "  <PropertyGroup>"]
     for prop in _PROPERTY_NAMES:
         if prop not in inputs:
             raise SystemExit(f"props error: missing input property {prop}")
         value = str(Path(inputs[prop]).resolve())
         lines.append(f"    <{prop}>{_xml_escape(value)}</{prop}>")
+    # The offline bootstrap pair is optional: a prepare-only run may omit it,
+    # while a single-file publish requires both.  Its version is a value, not
+    # a path, and comes from the already validated manifest.
+    for prop in _OFFLINE_PROPERTY_NAMES:
+        if prop not in inputs:
+            continue
+        value = str(Path(inputs[prop]).resolve())
+        lines.append(f"    <{prop}>{_xml_escape(value)}</{prop}>")
+    if offline_updater_version is not None:
+        lines.append(
+            f"    <{_OFFLINE_VERSION_PROPERTY}>"
+            f"{_xml_escape(offline_updater_version)}</{_OFFLINE_VERSION_PROPERTY}>"
+        )
     lines.append("  </PropertyGroup>")
     lines.append("</Project>")
     lines.append("")
@@ -355,8 +821,17 @@ def _write_props(path, inputs):
 # ---------------------------------------------------------------------------
 
 
-def prepare(repo_root, work_dir, manifest_path=None):
+def prepare(repo_root, work_dir, manifest_path=None,
+            offline_bootstrap_script=None, offline_updater_bundle=None):
     """Run the source build input preparation.
+
+    ``offline_bootstrap_script`` and ``offline_updater_bundle`` are optional
+    but paired: when supplied they are copied into the per-run directory with
+    bounded streaming, validated there as regular files before any expensive
+    phase, and recorded with the size and SHA-256 of that snapshot.  The props
+    point at the snapshot, so the single-file publish embeds exactly the bytes
+    that were validated together with the bundle manifest version the
+    installer requires in the receipt.
 
     Returns a record dict describing every generated artefact.
     """
@@ -365,6 +840,24 @@ def prepare(repo_root, work_dir, manifest_path=None):
     if manifest_path is None:
         manifest_path = repo_root / "maintenance" / "build-inputs.json"
     manifest_path = Path(manifest_path)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Phase 0: snapshot + validate the offline bootstrap pair ----------
+    # The pair is copied into the isolated run directory before anything is
+    # validated or downloaded.  Everything downstream - manifest, digests,
+    # props, publication - reads that snapshot, not the mutable originals.
+    offline_staged, offline_updater_version, run_dir = _validate_offline_inputs(
+        offline_bootstrap_script, offline_updater_bundle, work_dir
+    )
+    offline_inputs = {
+        prop: item["path"] for prop, item in offline_staged.items()
+    }
+    if offline_inputs:
+        _log(
+            "offline",
+            f"paired bootstrap script and updater bundle staged and OK "
+            f"(version {offline_updater_version})",
+        )
 
     # --- Phase 1a: manifest load -----------------------------------------
     _log("manifest", f"loading {manifest_path}")
@@ -376,14 +869,10 @@ def prepare(repo_root, work_dir, manifest_path=None):
     _log("vendor", f"{len(vendor_map)} vendor files OK")
 
     # --- Phase 1c: work directories, per-run isolation --------------------
-    work_dir.mkdir(parents=True, exist_ok=True)
     downloads_root = work_dir / "downloads"
     downloads_root.mkdir(parents=True, exist_ok=True)
-    runs_root = work_dir / "runs"
-    runs_root.mkdir(parents=True, exist_ok=True)
-    run_id = uuid.uuid4().hex
-    run_dir = runs_root / run_id
-    run_dir.mkdir(parents=False, exist_ok=False)
+    if run_dir is None:
+        run_dir = _new_run_dir(work_dir)
     materials_dir = run_dir / "materials"
     materials_dir.mkdir()
     run_build_dir = run_dir / "build"
@@ -559,11 +1048,29 @@ def prepare(repo_root, work_dir, manifest_path=None):
         "BundledGblPrcEfi": str(Path(fetched["gblPrc"]).resolve()),
         "BundledGblRowEfi": str(Path(fetched["gblRow"]).resolve()),
     }
+    inputs.update(offline_inputs)
     for prop, path_str in inputs.items():
         if not Path(path_str).is_file():
             raise SystemExit(f"props error: missing input for {prop}: {path_str}")
 
-    props_xml = _write_props(None, inputs)
+    offline_assets = {}
+    for prop, item in offline_staged.items():
+        # digests were computed from the bytes written into the snapshot, so
+        # they cannot drift from what the props point at.
+        offline_assets[prop] = {
+            "path": item["path"],
+            "bytes": item["bytes"],
+            "sha256": item["sha256"],
+            "source": _OFFLINE_ASSET_SOURCE,
+        }
+    if offline_assets:
+        _log(
+            "offline",
+            "recorded snapshot digests for the paired bootstrap script and "
+            "updater bundle",
+        )
+
+    props_xml = _write_props(None, inputs, offline_updater_version)
     marker = "  <PropertyGroup>\n"
     extra = f"    <BundledToolPinsSource>{_xml_escape(str(pins_cs_path.resolve()))}</BundledToolPinsSource>\n"
     if marker not in props_xml:
@@ -591,6 +1098,8 @@ def prepare(repo_root, work_dir, manifest_path=None):
         "tools": {name: dict(tools[name]) for name in _TOOL_NAMES},
         "toolPaths": tool_paths,
         "inputs": {k: str(Path(v).resolve()) for k, v in inputs.items()},
+        "offlineBootstrap": offline_assets,
+        "offlineUpdaterVersion": offline_updater_version,
         "toolPinsJson": str(tool_pins_json_path.resolve()),
         "toolPinsSource": str(pins_cs_path.resolve()),
         "propsPath": str(props_path.resolve()),
@@ -647,16 +1156,51 @@ def main(argv=None):
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--manifest", default=None)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument(
+        "--offline-bootstrap-script",
+        default=None,
+        help=(
+            "Existing armada-offline-bootstrap script built by the system "
+            "build_files/build-offline-updater-bundle.py; required with "
+            "--offline-updater-bundle for a single-file publish."
+        ),
+    )
+    parser.add_argument(
+        "--offline-updater-bundle",
+        default=None,
+        help=(
+            "Existing armada-offline-updater.tar.gz bundle built by the system "
+            "build_files/build-offline-updater-bundle.py; required with "
+            "--offline-bootstrap-script for a single-file publish."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    if not args.prepare_only and not args.output_dir:
-        parser.error("--output-dir is required unless --prepare-only is set")
+    if not args.prepare_only:
+        if not args.output_dir:
+            parser.error("--output-dir is required unless --prepare-only is set")
+        # A single-file publish without the offline bootstrap pair would
+        # silently ship an installer that cannot deploy the updater.  Fail
+        # here, before prepare() starts compiling anything.
+        if not args.offline_bootstrap_script or not args.offline_updater_bundle:
+            parser.error(
+                "single-file publish requires both --offline-bootstrap-script "
+                "and --offline-updater-bundle (the paired local artefacts from "
+                "the system offline updater bundle build); use --prepare-only "
+                "only when you do not intend to publish the single EXE"
+            )
 
     repo_root = Path(_HERE).resolve().parent
     work_dir = Path(args.work_dir).resolve()
     manifest_path = Path(args.manifest).resolve() if args.manifest else None
 
-    record = prepare(repo_root, work_dir, manifest_path=manifest_path)
+    record = prepare(
+        repo_root,
+        work_dir,
+        manifest_path=manifest_path,
+        offline_bootstrap_script=args.offline_bootstrap_script,
+        offline_updater_bundle=args.offline_updater_bundle,
+    )
     print(f"prepare complete: {record['propsPath']}", flush=True)
 
     if args.prepare_only:

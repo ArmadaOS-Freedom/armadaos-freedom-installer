@@ -167,6 +167,21 @@ public sealed class RamInstallRequestTests
             Convert.ToHexString(SHA256.HashData(Rh002TestData.RequestBytes(request))).ToLowerInvariant());
     }
 
+    [Theory]
+    [InlineData("mydanyi")]
+    [InlineData("armadaos-freedom")]
+    public void Seed_AcceptsOrganizationAndLegacyOrigins(string owner)
+    {
+        foreach (var channel in new[] { "stable", "beta", "testing" })
+        foreach (var suffix in new[] { "", "@sha256:" + new string('d', 64) })
+        {
+            var origin = $"ostree-image-signed:docker://ghcr.io/{owner}/armadaos-freedom:{channel}{suffix}";
+            var seed = new RamInstallSeed(4096, Rh002TestData.SeedSha256,
+                Rh002TestData.SeedCommit, "sha256:" + Rh002TestData.SeedManifest, origin);
+            Assert.Equal(origin, seed.Origin);
+        }
+    }
+
     [Fact]
     public void Seed_AcceptsPinnedFreedomOrigin()
     {

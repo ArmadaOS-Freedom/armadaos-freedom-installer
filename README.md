@@ -4,7 +4,7 @@
 
 **免费软件，谨防被骗。**
 
-[系统仓库](https://github.com/mydanyi/armadaos-freedom) · [哔哩哔哩](https://space.bilibili.com/258786) · [GitHub](https://github.com/mydanyi)
+[系统仓库](https://github.com/ArmadaOS-Freedom/armadaos-freedom) · [哔哩哔哩](https://space.bilibili.com/258786) · [GitHub](https://github.com/mydanyi)
 
 ## 功能
 
@@ -36,9 +36,11 @@ TF 卡安装暂不开放。Windows 安装器不再携带旧 Linux 维护工具�
 
 A/B 两槽分别核验各自的 AVB 签名和父子密钥关系，支持同一设备中混用 RSA 2048、4096、8192 位源密钥。需要重新签名的路线会重新计算元数据布局，并在生成 boot 后核验完整的引导签名链；锁定设备仍须满足对应启动链的信任要求。准备失败或更换方案后会清理本轮生成的临时镜像，保留日志和正式备份；已经开始写入的恢复材料保留。
 
+两个物理引导候选始终启动**同一份** Linux 部署。正常情况下两槽分别使用本槽的 Android 材料构建；工厂空的槽位改用当前槽的材料，只写项目引导，不补齐该槽的 Android 系统。原厂 Android 载荷和签名保持不变，安装器不写槽位选择或成功标记——活动、选中和成功槽位由 Android 自行维护。离线升级遵循同一 `bootPolicy` 契约，详见[安装包与恢复区约定](docs/package-contract.md#离线升级启动策略)。
+
 ## 系统包与恢复区
 
-系统镜像由[系统仓库的 9008 打包流水线](https://github.com/mydanyi/armadaos-freedom/blob/main/docs/edl-package.zh-CN.md)生成，单独选择导入，不嵌入安装器 EXE。共用系统内容在统一包中只保存一份，型号差异文件分别存放。分卷文件放在同一目录，选择第一卷。
+系统镜像由[系统仓库的 9008 打包流水线](https://github.com/ArmadaOS-Freedom/armadaos-freedom/blob/main/docs/edl-package.zh-CN.md)生成，单独选择导入，不嵌入安装器 EXE。共用系统内容在统一包中只保存一份，型号差异文件分别存放。分卷文件放在同一目录，选择第一卷。
 
 安装器按当前平板的备份生成 `ARMADA_BACKUP`，固定 **2 GiB（2048 MiB）**。它是专用恢复镜像，包含头信息、gzip 压缩的 tar 资料、填充及启动器设置区，并非 ext4、FAT 或普通空白分区。显示写入或回读 2 GiB，不代表压缩后的备份仍有 2 GiB。
 
@@ -53,4 +55,4 @@ A/B 两槽分别核验各自的 AVB 签名和父子密钥关系，支持同一�
 - [安装包与恢复区约定](docs/package-contract.md)
 - [统一包结构](docs/bundle-contract.md)
 
-版本：**0.7.24**。源码按 [GPL-3.0](LICENSE) 提供；第三方组件保留各自许可证和声明，详见 `docs/`。驱动、设备加载器等外部构建素材的许可不由本仓库许可证替代。
+版本：**0.8.0**。源码按 [GPL-3.0](LICENSE) 提供；第三方组件保留各自许可证和声明，详见 `docs/`。驱动、设备加载器等外部构建素材的许可不由本仓库许可证替代。

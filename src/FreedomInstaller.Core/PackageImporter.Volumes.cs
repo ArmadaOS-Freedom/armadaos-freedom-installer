@@ -11,8 +11,9 @@ namespace FreedomInstaller.Core;
 /// same directory must exist from index 1 upwards without a gap, and the volumes are ordered by their
 /// numeric index instead of their names. The caller keeps the path it passed in, so selecting a middle
 /// volume is still visible in <see cref="ImportedPackage.SourcePath"/> while the group is read from its
-/// first volume. Nothing is guessed from the file name, no model is inferred from it and no combined
-/// temporary file is produced.
+/// first volume. Nothing is guessed from the file name and no model is inferred from it. Resolving a
+/// group never materializes a combined file: only a signed import on a platform with advisory file
+/// sharing copies the logical stream once into its private, bounded snapshot.
 /// </para>
 /// </summary>
 public static partial class PackageImporter
@@ -248,14 +249,13 @@ public static partial class PackageImporter
                 : new ConcatenatedArchiveStream(Parts);
     }
 
-    private static FileStream OpenPart(string path) =>
-        new(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            CopyBufferSize,
-            FileOptions.SequentialScan);
+    /// <summary>
+    /// Opens one part for streaming. The descriptor that is read is the descriptor whose type was
+    /// checked, so a volume that has become a link, FIFO, device or directory since the group was
+    /// resolved is refused instead of followed or parked on; the stream stays seekable and nothing is
+    /// buffered beyond the pass. See <see cref="OpenVerifiedRegularFile"/> for the platform rules.
+    /// </summary>
+    private static FileStream OpenPart(string path) => OpenVerifiedRegularFile(path);
 
     /// <summary>
     /// Seekable read-only stream over the raw split volumes, in volume order, without a combined
@@ -317,6 +317,12 @@ public static partial class PackageImporter
         public override bool CanSeek => !_disposed;
 
         public override bool CanWrite => false;
+
+        /// <summary>
+        /// Byte length of every volume in order, recorded from the opened handles when the group was
+        /// assembled. A private snapshot copies exactly these lengths without reopening the parts.
+        /// </summary>
+        internal IReadOnlyList<long> PartLengths => _lengths;
 
         public override long Length
         {
