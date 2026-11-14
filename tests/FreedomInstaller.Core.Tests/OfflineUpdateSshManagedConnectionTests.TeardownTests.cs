@@ -19,7 +19,9 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
     {
         // No exchange is in flight and none was interrupted, so teardown is an
         // ordinary cancel-and-disconnect: the session socket stays untouched and
-        // only the channel and the transport are released, exactly once.
+        // only the channel and the transport are released, exactly once. The
+        // abort handle is still captured before cleanup starts, because only a
+        // cleanup that stalls needs it.
         var hostKey = HostKey(43);
         var events = new List<string>();
         var channel = new FakeChannel(
@@ -33,10 +35,68 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
         await connection.DisposeAsync();
         await connection.DisposeAsync();
 
+        Assert.Equal(1, transport.SocketAbortCaptureCount);
         Assert.Equal(0, transport.SocketAbortCount);
         Assert.Equal(1, transport.DisposeCount);
         Assert.True(channel.Disposed);
         Assert.Contains("channel-cancel", events);
+    }
+
+    [Fact]
+    public async Task Dispose_IdleSessionWhoseChannelCancelIsBlocked_IsReleasedByTheWatchdog()
+    {
+        // Nothing has failed here: the idle RPC session is healthy and no
+        // exchange is in flight. SSH.NET's 15 second keepalive send still holds
+        // the session write lock, so the updater's synchronous channel cancel
+        // blocks inside the graceful cleanup. Only the watchdog may end that:
+        // DisposeAsync must return a task instead of blocking on the caller's
+        // thread, the captured socket must be the one released, and the
+        // cleanup must still release the transport exactly once.
+        var hostKey = HostKey(51);
+        var events = new List<string>();
+        var cancelStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = new FakeChannel(
+            ReadyOutput(),
+            gaiteOutputOnPassword: false,
+            exited: false,
+            events: events,
+            cancelGate: cancelGate.Task,
+            cancelStarted: cancelStarted);
+        var transport = new FakeTransport(hostKey)
+        {
+            ChannelFactory = _ => channel,
+            SocketAbortFactory = () => new FakeSocketAbort(() =>
+            {
+                events.Add("socket-release");
+                cancelGate.TrySetResult(true);
+            }),
+        };
+
+        var connection = await OfflineUpdateSshManagedConnection.ConnectCoreAsync(
+            Options(hostKey),
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None,
+            Factory(transport),
+            TimeSpan.FromSeconds(2));
+        Assert.False(connection.Rpc.IsPoisoned);
+
+        var dispose = connection.DisposeAsync().AsTask();
+
+        // The cancel is already blocked inside the cleanup and cannot return
+        // until the socket is released, so DisposeAsync had to hand that work
+        // off the caller's thread and no release has happened yet.
+        await cancelStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(dispose.IsCompleted);
+        Assert.Equal(0, transport.SocketAbortCount);
+
+        await dispose.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, transport.SocketAbortCaptureCount);
+        Assert.Equal(1, transport.SocketAbortCount);
+        Assert.Equal(1, transport.DisposeCount);
+        Assert.True(channel.Disposed);
+        Assert.Contains("socket-release", events);
     }
 
     [Fact]

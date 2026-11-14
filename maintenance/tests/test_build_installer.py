@@ -678,7 +678,130 @@ class PrepareTests(unittest.TestCase):
                 )
         fetch_mock.assert_not_called()
         run_mock.assert_not_called()
-        self.assertIn("bundle size is out of bounds", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("BundledOfflineUpdaterBundle", message)
+        self.assertIn("size is out of bounds", message)
+
+    def test_offline_bootstrap_script_shares_the_transport_upload_limit(self):
+        # Both offline inputs travel through the one managed SSH session, whose
+        # MaxUploadBytes is 256 MiB, so the production cap must match that
+        # contract and must actually be applied to the script, not only to the
+        # bundle.
+        self.assertEqual(
+            build_installer._OFFLINE_MAX_UPLOAD_BYTES, 256 * 1024 * 1024
+        )
+        self.assertEqual(
+            build_installer._OFFLINE_MAX_BUNDLE_BYTES,
+            build_installer._OFFLINE_MAX_UPLOAD_BYTES,
+        )
+        script, bundle = self._offline_assets()
+        seen = {}
+        real_stage = build_installer._stage_offline_asset
+
+        def stage_recording_limit(prop, source, dest_dir, limit=None):
+            seen[prop] = limit
+            return real_stage(prop, source, dest_dir, limit=limit)
+
+        with mock.patch.object(
+            build_installer, "_stage_offline_asset",
+            side_effect=stage_recording_limit,
+        ):
+            staged, version, _ = build_installer._validate_offline_inputs(
+                str(script), str(bundle), self.work_dir
+            )
+
+        self.assertEqual(
+            seen["BundledOfflineBootstrapScript"],
+            build_installer._OFFLINE_MAX_UPLOAD_BYTES,
+        )
+        self.assertEqual(
+            seen["BundledOfflineUpdaterBundle"],
+            build_installer._OFFLINE_MAX_BUNDLE_BYTES,
+        )
+        self.assertEqual(version, "0.8.0")
+        # Snapshot semantics are untouched: the staged script is a copy of the
+        # original bytes, described by the digest computed while copying.
+        entry = staged["BundledOfflineBootstrapScript"]
+        self.assertEqual(Path(entry["path"]).read_bytes(), script.read_bytes())
+        self.assertEqual(entry["bytes"], len(script.read_bytes()))
+        self.assertEqual(entry["sha256"], _sha(script.read_bytes()))
+
+    def test_offline_bootstrap_script_must_not_be_empty(self):
+        # The runtime upload accepts 1..256 MiB inclusive, so a zero-byte
+        # script is refused here instead of failing during deployment.
+        offline = self.work_parent / "offline & inputs"
+        script = _write(offline / "empty-bootstrap", b"")
+        bundle = _write(
+            offline / "armada-offline-updater.tar.gz", _offline_bundle_bytes()
+        )
+        self.assertEqual(script.stat().st_size, 0)
+
+        with mock.patch.object(
+            fetch_build_inputs, "fetch_all"
+        ) as fetch_mock, mock.patch.object(build_installer, "_run") as run_mock:
+            with self.assertRaises(SystemExit) as caught:
+                build_installer.prepare(
+                    self.repo_root,
+                    self.work_dir,
+                    manifest_path=(
+                        self.repo_root / "maintenance" / "build-inputs.json"
+                    ),
+                    offline_bootstrap_script=str(script),
+                    offline_updater_bundle=str(bundle),
+                )
+        fetch_mock.assert_not_called()
+        run_mock.assert_not_called()
+        message = str(caught.exception)
+        self.assertIn("BundledOfflineBootstrapScript", message)
+        self.assertIn("size is out of bounds", message)
+
+    def test_offline_bootstrap_script_at_the_reduced_cap_is_accepted(self):
+        # A 256 MiB fixture is unnecessary: the injected cap drives the same
+        # inclusive comparison the real transport limit uses.
+        limit = 64
+        offline = self.work_parent / "offline & inputs"
+        payload = b"x" * limit
+        script = _write(offline / "bootstrap-at-cap", payload)
+        bundle = _write(
+            offline / "armada-offline-updater.tar.gz", _offline_bundle_bytes()
+        )
+
+        with mock.patch.object(
+            build_installer, "_OFFLINE_MAX_UPLOAD_BYTES", limit
+        ):
+            staged, version, _ = build_installer._validate_offline_inputs(
+                str(script), str(bundle), self.work_dir
+            )
+
+        entry = staged["BundledOfflineBootstrapScript"]
+        self.assertEqual(entry["bytes"], limit)
+        self.assertEqual(Path(entry["path"]).read_bytes(), payload)
+        self.assertEqual(entry["sha256"], _sha(payload))
+        self.assertEqual(version, "0.8.0")
+
+    def test_offline_bootstrap_script_over_the_reduced_cap_is_rejected(self):
+        limit = 64
+        offline = self.work_parent / "offline & inputs"
+        script = _write(offline / "bootstrap-over-cap", b"x" * (limit + 1))
+        bundle = _write(
+            offline / "armada-offline-updater.tar.gz", _offline_bundle_bytes()
+        )
+
+        with mock.patch.object(
+            build_installer, "_OFFLINE_MAX_UPLOAD_BYTES", limit
+        ):
+            with self.assertRaises(SystemExit) as caught:
+                build_installer._validate_offline_inputs(
+                    str(script), str(bundle), self.work_dir
+                )
+
+        message = str(caught.exception)
+        self.assertIn("BundledOfflineBootstrapScript", message)
+        self.assertIn("size is out of bounds", message)
+        # Nothing from the rejected script was left staged for a later phase.
+        for staged in (self.work_dir / "runs").rglob("*"):
+            if staged.is_file():
+                self.assertNotEqual(staged.name, "BundledOfflineBootstrapScript")
 
     def test_offline_assets_must_be_supplied_together(self):
         script, bundle = self._offline_assets()

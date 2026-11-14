@@ -13,6 +13,20 @@ namespace FreedomInstaller.App
         private OfflineUpdateSshIdentity? _offlinePairingIdentity;
         private OfflineUpdateSshHostCandidate? _offlinePairingCandidate;
 
+        /// <summary>
+        /// Which route produced the authenticated transport that
+        /// <see cref="FinishOfflineConnectionAsync"/> is about to adopt. Only
+        /// the key route may still offer the managed password route as its
+        /// install fallback; the managed route itself cannot offer a retry
+        /// once the capability is still missing.
+        /// </summary>
+        private enum OfflineConnectRoute
+        {
+            Key,
+            PasswordWithBootstrap,
+            PasswordWithoutBootstrap
+        }
+
         private void ClearOfflinePairing()
         {
             _offlinePairingIdentity = null;
@@ -112,7 +126,7 @@ namespace FreedomInstaller.App
         {
             AppendOfflineLog("Dynamic.OfflineUpdate.LogConnecting", opts.Host, opts.Port);
             var conn = await OfflineUpdateSshConnection.ConnectAsync(opts, null, ct);
-            await FinishOfflineConnectionAsync(conn, ct);
+            await FinishOfflineConnectionAsync(conn, OfflineConnectRoute.Key, ct);
         }
 
         private async Task ConnectOfflinePasswordAsync(OfflineUpdateSshPasswordOptions options, CancellationToken ct)
@@ -122,7 +136,9 @@ namespace FreedomInstaller.App
             // The bootstrap assistant is build-supplied. When it is present,
             // run it after SSH trust/authentication and before the updater.info
             // query; it only probes/installs the service and never prepares or
-            // executes an upgrade.
+            // executes an upgrade. A source build may omit it entirely, so the
+            // finish hook has to distinguish that from a real install attempt.
+            bool bootstrapAttempted = false;
             if (OfflineBootstrapAssets.TryCreate(
                     new Progress<OfflineUpdateBootstrapProgress>(p =>
                     {
@@ -142,6 +158,7 @@ namespace FreedomInstaller.App
                     useSudoForInstall: !string.Equals(options.UserName, "root", StringComparison.Ordinal))
                 is { } bootstrap)
             {
+                bootstrapAttempted = true;
                 options.PrepareSessionAsync = (session, token) => bootstrap.EnsureAsync(session, token);
             }
 
@@ -160,7 +177,11 @@ namespace FreedomInstaller.App
                 options.ClearPassword();
             }
 
-            await FinishOfflineConnectionAsync(conn, ct);
+            await FinishOfflineConnectionAsync(conn,
+                bootstrapAttempted
+                    ? OfflineConnectRoute.PasswordWithBootstrap
+                    : OfflineConnectRoute.PasswordWithoutBootstrap,
+                ct);
         }
 
         /// <summary>
@@ -178,7 +199,8 @@ namespace FreedomInstaller.App
         /// still connects read-only; that policy only gates prepare, execute
         /// and restart.
         /// </summary>
-        private async Task FinishOfflineConnectionAsync(IOfflineUpdateConnection conn, CancellationToken ct)
+        private async Task FinishOfflineConnectionAsync(
+            IOfflineUpdateConnection conn, OfflineConnectRoute route, CancellationToken ct)
         {
             if (!OfflineUpdateUiState.SupportsPreflightSession(conn.DeviceInfo))
             {
@@ -186,7 +208,22 @@ namespace FreedomInstaller.App
                 // here is the only disposal on this path.
                 await conn.DisposeAsync();
                 ClearOfflinePairing();
-                ShowOfflineUpdaterInstallPrompt();
+                if (route == OfflineConnectRoute.Key)
+                {
+                    // The public-key route cannot deploy or verify the service
+                    // itself, so its one explicit fallback stays the managed
+                    // password route.
+                    ShowOfflineUpdaterInstallPrompt();
+                }
+                else
+                {
+                    // The managed password route was already tried. Whether
+                    // this build carried the bootstrap assets or none at all,
+                    // asking for the same password again cannot make the
+                    // installed service advertise the capability.
+                    ShowOfflineUpdaterComponentsGuidance(
+                        route == OfflineConnectRoute.PasswordWithBootstrap);
+                }
                 return;
             }
 
@@ -282,10 +319,10 @@ namespace FreedomInstaller.App
         /// The tablet answered <c>info</c> but does not advertise the
         /// preflight-session capability this installer requires, so its
         /// installed updater is older than the gates below assume. The
-        /// public-key route cannot deploy or verify it, while the password
-        /// route runs the build-supplied bootstrap after the same explicit
-        /// host-key approval. Nothing is retried or downgraded automatically:
-        /// the user is told why and offered the password route once.
+        /// public-key route cannot deploy or verify it, so only that route is
+        /// offered the password fallback; the password route reports what can
+        /// actually install the components instead. Nothing is retried or
+        /// downgraded automatically.
         /// </summary>
         private void ShowOfflineUpdaterInstallPrompt()
         {
@@ -306,6 +343,34 @@ namespace FreedomInstaller.App
             // workflow and its single host-key decision stay unchanged.
             OfflineUpgradePanel.CredentialCombo.SelectedIndex = OfflineUpdateConnectionUiState.CustomCredentialIndex;
             ShowOfflinePasswordEntry("Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired");
+        }
+
+        /// <summary>
+        /// The managed password route already ran and the tablet still does not
+        /// advertise the preflight-session capability this installer requires.
+        /// Neither the same password nor the other route can install a newer
+        /// service from here, so the operator is told what actually can: an
+        /// installer built with the offline update components, or those
+        /// components installed on the tablet separately. The password is not
+        /// selected, cleared or focused again because retrying it cannot help.
+        /// </summary>
+        private void ShowOfflineUpdaterComponentsGuidance(bool bootstrapAttempted)
+        {
+            if (OfflineUpgradePanel == null)
+                return;
+
+            string key = bootstrapAttempted
+                ? "Dynamic.OfflineUpdate.UpdaterComponentsStillUnsupported"
+                : "Dynamic.OfflineUpdate.UpdaterComponentsMissing";
+            MessageBox.Show(
+                this,
+                T(key),
+                T("Static.OfflineUpdate.Title"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            SetText(OfflineUpgradePanel.StateText, key);
+            AppendOfflineLog(key);
+            RefreshOfflineUpgradeActions();
         }
 
         /// <summary>

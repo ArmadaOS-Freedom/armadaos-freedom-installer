@@ -240,9 +240,13 @@ public sealed class OfflineUpdateConnectionUiStateTests
         Assert.True(keyRoute >= 0 && passwordRoute > keyRoute && hook > passwordRoute);
 
         // Both routes end at the same hook instead of each deciding for itself.
-        Assert.Contains("await FinishOfflineConnectionAsync(conn, ct);",
+        Assert.Contains("await FinishOfflineConnectionAsync(conn, OfflineConnectRoute.Key, ct);",
             code[keyRoute..passwordRoute], StringComparison.Ordinal);
-        Assert.Contains("await FinishOfflineConnectionAsync(conn, ct);",
+        Assert.Contains("await FinishOfflineConnectionAsync(conn,",
+            code[passwordRoute..hook], StringComparison.Ordinal);
+        Assert.Contains("OfflineConnectRoute.PasswordWithBootstrap",
+            code[passwordRoute..hook], StringComparison.Ordinal);
+        Assert.Contains("OfflineConnectRoute.PasswordWithoutBootstrap",
             code[passwordRoute..hook], StringComparison.Ordinal);
         Assert.DoesNotContain("SupportsPreflightSession", code[..hook], StringComparison.Ordinal);
 
@@ -258,6 +262,80 @@ public sealed class OfflineUpdateConnectionUiStateTests
         // The boot policy remains a separate gate: such a device still
         // connects with the supported read-only status.
         Assert.Contains("StateBootPolicyReadOnly", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MissingCapability_KeepsTheKeyFallbackAndNeverSuggestsThePasswordTwice()
+    {
+        string code = ReadEmbedded("FreedomInstaller.Tests.MainWindow.OfflinePairing.cs");
+        int hook = code.IndexOf("private async Task FinishOfflineConnectionAsync", StringComparison.Ordinal);
+        Assert.True(hook >= 0);
+        string body = code[hook..];
+
+        // The refusal releases the unadopted transport exactly once, then
+        // lets the route decide what can actually help.
+        int adopt = body.IndexOf("_offlineSsh = conn;", StringComparison.Ordinal);
+        Assert.True(adopt > 0);
+        string refusal = body[..adopt];
+        Assert.Equal(1, CountOccurrences(refusal, "await conn.DisposeAsync();"));
+
+        int dispose = refusal.IndexOf("await conn.DisposeAsync();", StringComparison.Ordinal);
+        int keyFallback = refusal.IndexOf("ShowOfflineUpdaterInstallPrompt();", StringComparison.Ordinal);
+        int guidance = refusal.IndexOf("ShowOfflineUpdaterComponentsGuidance(", StringComparison.Ordinal);
+        Assert.True(dispose >= 0 && keyFallback > dispose && guidance > keyFallback);
+        Assert.Contains("if (route == OfflineConnectRoute.Key)", refusal, StringComparison.Ordinal);
+
+        // The key route keeps its one password-install fallback: only the
+        // managed route may install the service.
+        int keyPromptStart = body.IndexOf("private void ShowOfflineUpdaterInstallPrompt", StringComparison.Ordinal);
+        Assert.True(keyPromptStart >= 0);
+        int keyPromptEnd = body.IndexOf("private void ShowOfflineUpdaterComponentsGuidance", keyPromptStart, StringComparison.Ordinal);
+        Assert.True(keyPromptEnd > keyPromptStart);
+        Assert.Contains(
+            "ShowOfflinePasswordEntry(\"Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired\");",
+            body[keyPromptStart..keyPromptEnd], StringComparison.Ordinal);
+
+        // The managed route's guidance must not select or focus the password
+        // again, because retrying it cannot install the capability.
+        int guidanceStart = body.IndexOf("private void ShowOfflineUpdaterComponentsGuidance", StringComparison.Ordinal);
+        Assert.True(guidanceStart >= 0);
+        int guidanceEnd = body.IndexOf("private void ShowOfflinePasswordEntry", guidanceStart, StringComparison.Ordinal);
+        Assert.True(guidanceEnd > guidanceStart);
+        string guidanceBody = body[guidanceStart..guidanceEnd];
+        Assert.DoesNotContain("ShowOfflinePasswordEntry", guidanceBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("_offlineFocusPasswordOnIdle", guidanceBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("CredentialCombo", guidanceBody, StringComparison.Ordinal);
+        Assert.Contains("Dynamic.OfflineUpdate.UpdaterComponentsStillUnsupported", guidanceBody, StringComparison.Ordinal);
+        Assert.Contains("Dynamic.OfflineUpdate.UpdaterComponentsMissing", guidanceBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void JobFailureReceipt_BecomesLiveOnlyThroughTheSelectedFullBinding()
+    {
+        string code = ReadEmbedded("FreedomInstaller.Tests.MainWindow.OfflineUpgrade.cs");
+        int site = code.IndexOf("catch (OfflineUpdateTransferException tex)", StringComparison.Ordinal);
+        Assert.True(site >= 0);
+        int next = code.IndexOf("catch (Exception ex)", site, StringComparison.Ordinal);
+        Assert.True(next > site);
+        string body = code[site..next];
+
+        // The freshly received receipt is recorded as live evidence only when
+        // the selected record, the connected tablet and the imported package
+        // all still name the same binding; otherwise the flag is not elevated.
+        int matched = body.IndexOf(
+            "if (OfflineUpdateUiState.BelongsToSession(receipt, _offlineSelectedSession))",
+            StringComparison.Ordinal);
+        int live = body.IndexOf(
+            "_offlineReceiptLive = OfflineUpdateUiState.IsBoundForReplacement(",
+            StringComparison.Ordinal);
+        int persisted = body.IndexOf("await TryPersistReceiptAsync(_offlineSelectedSession", StringComparison.Ordinal);
+        int foreign = body.IndexOf("await TryPersistUnmatchedReceiptAsync(receipt);", StringComparison.Ordinal);
+        Assert.True(matched >= 0 && live > matched && persisted > live && foreign > persisted);
+
+        // A foreign receipt stays isolated diagnostics and a failure without a
+        // receipt still clears the live flag instead of keeping stale evidence.
+        Assert.DoesNotContain("_offlineReceiptLive = true", body, StringComparison.Ordinal);
+        Assert.Contains("_offlineReceiptLive = false", body, StringComparison.Ordinal);
     }
 
     [Fact]

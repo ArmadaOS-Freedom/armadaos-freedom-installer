@@ -1381,6 +1381,8 @@
   "Dynamic.OfflineUpdate.ErrorPreflightRequired": "请先校验升级包并通过只读预检，再准备本次升级。",
   "Dynamic.OfflineUpdate.ErrorPreflightUnsupportedUpdater": "平板上的离线升级组件不支持升级包预检（版本 {0}）。请先更新该组件，再准备本次升级。",
   "Dynamic.OfflineUpdate.PublicKeyUpdaterInstallRequired": "平板上的离线升级服务版本过低：不支持准备升级所依赖的只读预检步骤。公钥连接无法安装或验证该服务。\n\n已切换到自定义账号密码，请连接一次以安装或验证离线升级服务。主机密钥确认流程不变，在你确认之前不会发送密码。完成后公钥连接即可正常使用。",
+  "Dynamic.OfflineUpdate.UpdaterComponentsMissing": "当前安装程序未包含离线升级组件，密码连接无法在平板上安装或升级该服务。\n\n请改用包含离线升级组件的安装程序，或先在平板上单独安装该组件。再次输入密码不会有帮助。",
+  "Dynamic.OfflineUpdate.UpdaterComponentsStillUnsupported": "密码连接已经运行过，但平板上的离线升级服务仍不支持准备升级所依赖的只读预检步骤。\n\n再次输入密码不会有帮助。请改用包含离线升级组件的安装程序，或先在平板上单独安装该组件。",
   "Dynamic.OfflineUpdate.StateBootPolicyReadOnly": "已以只读方式连接：平板的离线升级服务未声明 dual-boot-no-slot-control 启动策略，准备、执行和重启已禁用，只读状态仍可查看。请先更新平板上的离线升级服务。",
   "Dynamic.OfflineUpdate.LogBootPolicyMissing": "离线升级服务未声明 bootPolicy=dual-boot-no-slot-control，已阻止写入类升级操作；只读状态仍可查看，请先更新该服务。",
   "Dynamic.OfflineUpdate.ErrorBootPolicyRequired": "平板的离线升级服务未声明 dual-boot-no-slot-control 启动策略。请先更新平板上的该服务，再准备或执行升级；只读状态仍可查看。"

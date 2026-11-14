@@ -66,6 +66,13 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
         internal Func<IOfflineUpdateSshSocketAbort?> SocketAbortFactory { get; init; } =
             () => new FakeSocketAbort();
 
+        /// <summary>
+        /// Resolutions of the teardown handle. Teardown always captures one
+        /// before the cleanup starts, so this counts attempts, not releases.
+        /// </summary>
+        internal int SocketAbortCaptureCount { get; private set; }
+
+        /// <summary>Releases actually performed through a captured handle.</summary>
         internal int SocketAbortCount { get; private set; }
 
         internal Queue<Func<string, FakeChannel>> ChannelQueue { get; } = new();
@@ -128,8 +135,9 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
 
         public IOfflineUpdateSshSocketAbort? TryCreateSocketAbort()
         {
-            SocketAbortCount++;
-            return SocketAbortFactory();
+            SocketAbortCaptureCount++;
+            var handle = SocketAbortFactory();
+            return handle is null ? null : new CountedSocketAbort(handle, () => SocketAbortCount++);
         }
 
         public void Dispose()
@@ -187,6 +195,32 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
         }
     }
 
+    /// <summary>
+    /// Keeps capture and release apart. Teardown resolves the handle before the
+    /// cleanup starts, so every teardown captures one; a healthy cleanup must
+    /// never use it, and a second release through the same handle is a defect
+    /// the count would reveal.
+    /// </summary>
+    private sealed class CountedSocketAbort : IOfflineUpdateSshSocketAbort
+    {
+        private readonly IOfflineUpdateSshSocketAbort _inner;
+        private readonly Action _released;
+
+        internal CountedSocketAbort(IOfflineUpdateSshSocketAbort inner, Action released)
+        {
+            _inner = inner;
+            _released = released;
+        }
+
+        public bool IsAborted => _inner.IsAborted;
+
+        public void Abort()
+        {
+            _released();
+            _inner.Abort();
+        }
+    }
+
     private sealed class FakeChannel : IOfflineUpdateSshChannel
     {
         private readonly RecordingInput _input;
@@ -197,6 +231,8 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
         private readonly int _exitStatus;
         private readonly string _errorTail;
         private readonly bool _waitForExitIgnoresTimeout;
+        private readonly Task? _cancelGate;
+        private readonly TaskCompletionSource<bool>? _cancelStarted;
         private readonly List<string>? _events;
 
         internal FakeChannel(
@@ -215,11 +251,15 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
             bool exitOnInputClosed = false,
             Stream? standardInput = null,
             bool waitForExitIgnoresTimeout = false,
-            List<string>? events = null)
+            List<string>? events = null,
+            Task? cancelGate = null,
+            TaskCompletionSource<bool>? cancelStarted = null)
         {
             _exitStatus = exitStatus;
             _errorTail = errorTail;
             _events = events;
+            _cancelGate = cancelGate;
+            _cancelStarted = cancelStarted;
             _input = new RecordingInput(inputClosed);
             _standardInput = standardInput ?? _input;
             _waitForExitIgnoresTimeout = waitForExitIgnoresTimeout;
@@ -291,6 +331,15 @@ public sealed partial class OfflineUpdateSshManagedConnectionTests
         public void Cancel()
         {
             _events?.Add("channel-cancel");
+            _cancelStarted?.TrySetResult(true);
+
+            // A real cancel travels through SSH.NET's session write lock, which
+            // a keepalive send can hold for its whole budget. Waiting on the
+            // gate keeps the cancel blocked until the test releases the exact
+            // socket, exactly like that writer lock does.
+            if (_cancelGate is not null)
+                _cancelGate.Wait(TimeSpan.FromSeconds(30));
+
             _exit.TrySetResult(false);
         }
 

@@ -91,10 +91,15 @@ _OFFLINE_BUNDLE_NAME = "armada-offline-updater"
 _OFFLINE_ENTRY = "usr/libexec/armada/armada-offline-update"
 _OFFLINE_REQUIRED_CAPABILITY = "preflight-session-v1"
 # The managed SSH session refuses an upload larger than 256 MiB
-# (OfflineUpdateSshManagedSession.MaxUploadBytes).  The builder must never
-# accept a bundle the transport can never deliver, so the build-side limit
-# matches that transport instead of being larger.
-_OFFLINE_MAX_BUNDLE_BYTES = 256 * 1024 * 1024
+# (OfflineUpdateSshManagedSession.MaxUploadBytes) and there is only one such
+# session: the bootstrap script is uploaded first and the updater bundle after
+# it, so each artefact carries the same 1..256 MiB bound.  The builder must
+# never accept an input the transport can never deliver, so the build-side
+# limits match that transport instead of being larger.
+_OFFLINE_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+# The bundle is the larger artefact and the only one whose size is re-checked
+# when its manifest is read, so it keeps its own name for that second rule.
+_OFFLINE_MAX_BUNDLE_BYTES = _OFFLINE_MAX_UPLOAD_BYTES
 _OFFLINE_MAX_MEMBER_BYTES = 128 * 1024 * 1024
 _OFFLINE_MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _OFFLINE_MAX_MEMBERS = 4096
@@ -452,6 +457,12 @@ def _stage_offline_asset(prop, source, dest_dir, limit=None):
     returned digest describes the snapshot rather than a later re-read of the
     original.  A source whose size or modification time changes while it is
     being copied is rejected instead of being captured half-way.
+
+    ``limit`` is inclusive and applies to that one input only: a source of
+    exactly ``limit`` bytes is accepted, while an empty source or one byte over
+    the limit is refused before or during the copy.  Either way the error names
+    the property that was being staged, because the same helper carries both
+    the bootstrap script and the updater bundle.
     """
     source = Path(source)
     prefix = f"offline assets error: {prop}: "
@@ -461,7 +472,7 @@ def _stage_offline_asset(prop, source, dest_dir, limit=None):
         raise SystemExit(prefix + f"cannot read: {error}")
     if limit is not None and not 0 < before.st_size <= limit:
         raise SystemExit(
-            f"offline bundle error: {source}: bundle size is out of bounds"
+            prefix + f"size is out of bounds (expected 1..{limit} bytes)"
         )
     dest_dir = Path(dest_dir)
     # Fixed destination name per property: independent of the source basename,
@@ -483,7 +494,7 @@ def _stage_offline_asset(prop, source, dest_dir, limit=None):
                 total += len(chunk)
                 if limit is not None and total > limit:
                     raise SystemExit(
-                        f"offline bundle error: {source}: bundle size is out of bounds"
+                        prefix + f"size is out of bounds (expected 1..{limit} bytes)"
                     )
                 digest.update(chunk)
                 writer.write(chunk)
@@ -518,7 +529,9 @@ def _validate_offline_inputs(script, bundle, work_dir):
     """Stage then validate the optional paired offline-bootstrap inputs.
 
     Both paths must be supplied together, and each must be an existing,
-    readable regular file.  The pair is copied into a fresh, isolated run
+    readable regular file of 1..256 MiB: both artefacts are uploaded through
+    the same managed SSH session, so neither may exceed the transport limit
+    the runtime enforces.  The pair is copied into a fresh, isolated run
     directory with bounded streaming, and only those snapshots are read from
     then on: the manifest, the entry bytes, the props, the record digests and
     the publish all refer to the snapshot, never to the mutable originals.
@@ -571,6 +584,7 @@ def _validate_offline_inputs(script, bundle, work_dir):
             "BundledOfflineBootstrapScript",
             sources["BundledOfflineBootstrapScript"],
             staged_dir,
+            limit=_OFFLINE_MAX_UPLOAD_BYTES,
         ),
         "BundledOfflineUpdaterBundle": _stage_offline_asset(
             "BundledOfflineUpdaterBundle",

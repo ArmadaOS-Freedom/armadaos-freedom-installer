@@ -328,6 +328,18 @@ namespace FreedomInstaller.App
                         if (OfflineUpdateUiState.BelongsToSession(receipt, _offlineSelectedSession))
                         {
                             _offlineLastReceipt = receipt.Clone();
+                            // The exchange that just failed received this
+                            // receipt from the tablet, so it is live evidence
+                            // only for the exact attachment the live-gated
+                            // actions require: this selected record, this
+                            // tablet and this imported package, with the
+                            // verified failed preparation that is the only
+                            // failure those actions may follow. A weaker match
+                            // is displayed and persisted but the flag is not
+                            // elevated.
+                            _offlineReceiptLive = OfflineUpdateUiState.IsBoundForReplacement(
+                                _offlineLastReceipt, _offlineSelectedSession,
+                                _offlineConnectedModel, _offlineRecoveryPartUuid, _offlineDescriptorSha256);
                             await TryPersistReceiptAsync(_offlineSelectedSession, _offlineLastReceipt.Value);
                             UpdateDetailsWithReceipt(_offlineLastReceipt.Value, tex.Message);
                         }
