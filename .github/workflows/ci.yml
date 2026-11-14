@@ -1,0 +1,82 @@
+name: CI
+
+# Full-product build coverage for every pull request and main push. The other
+# workflows stay as they are: package-contracts tests package behaviour and
+# boot-tool publishes the Linux tool, so no test job is repeated here.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Build all projects (Windows, Release)
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Install the same SDK the container images pin instead of relying on whatever
+      # .NET version the runner image happens to preinstall.
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.401'
+
+      # Same public AOSP AVB test key and the same pinned SHA-256 as package-contracts.yml.
+      # It is fetched outside the checkout because FreedomInstaller.Core requires it as a
+      # mandatory build input.
+      - name: Fetch public AOSP AVB test fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d)/aosp-testkey-rsa4096.pem"
+          curl --fail --silent --show-error --location \
+            'https://android.googlesource.com/platform/external/avb/+/refs/heads/main/test/data/testkey_rsa4096.pem?format=TEXT' \
+            | base64 --decode > "${fixture}"
+          printf '%s  %s\n' '6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121' "${fixture}" | sha256sum --check
+          echo "AVB_TESTKEY=$(cygpath -m "${fixture}")" >> "${GITHUB_ENV}"
+
+      # The repository has no solution file, so every project it would contain is built
+      # explicitly: Core, the WPF App, the Avalonia Mac front end and the BootTool.
+      - name: Build every project in Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          for project in \
+            src/FreedomInstaller.Core/FreedomInstaller.Core.csproj \
+            src/FreedomInstaller.App/FreedomInstaller.App.csproj \
+            src/FreedomInstaller.Mac/FreedomInstaller.Mac.csproj \
+            src/FreedomInstaller.BootTool/FreedomInstaller.BootTool.csproj
+          do
+            echo "::group::dotnet build ${project}"
+            dotnet build "${project}" --configuration Release --nologo \
+              -p:BundledAvbSigningKey="${AVB_TESTKEY}"
+            echo "::endgroup::"
+          done
+
+  maintenance-tests:
+    name: Public fixture maintenance checks (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Runs every public maintenance/tests module with synthetic, offline
+      # fixtures. maintenance/run_unit_tests.py excludes the bootstrap lifecycle
+      # harness and prints why: it needs a disposable container, a real BusyBox,
+      # C#-exported fixtures and CAP_SYS_ADMIN for its mount cases.
+      - name: Run public maintenance unit tests
+        run: python3 -B maintenance/run_unit_tests.py
