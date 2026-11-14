@@ -7,9 +7,9 @@ using System.Threading.Tasks;
 namespace FreedomInstaller.App;
 
 /// <summary>
-/// 安装日志的纯逻辑部分：失败诊断的格式化，以及工作会话目录里的落盘。
-/// 追加日志只把不可变快照交给一个串行的后台队列，界面线程不做整文件写入；关闭窗口在
-/// <see cref="Flush"/> 之后再做最后一次同步快照，保证不会丢行。
+/// 安装日志的纯逻辑部分：失败诊断的格式化，以及工作会话目录里的追加落盘。
+/// 每一份不可变的增量批次都交给一个串行的后台队列，界面线程不做整文件写入；
+/// 文件只追加，从不截断已经写入的整场会话内容，因此关闭窗口只需等队列排空。
 /// 只依赖 BCL，测试程序集可以直接链接本文件做回归，无需启动 WPF。
 /// </summary>
 internal static class InstallerLog
@@ -38,7 +38,7 @@ internal static class InstallerLog
     }
 
     /// <summary>
-    /// 把一次日志快照排进串行后台队列。调用方在界面线程上先物化快照，这里再复制一份，
+    /// 把一份增量批次排进串行后台队列。调用方在界面线程上只传新产生的日志行，这里再复制一份，
     /// 因此队列里的内容不会再被后续追加或语言切换改写。落盘失败只影响日志文件本身。
     /// </summary>
     internal static void EnqueuePersist(string directoryPath, string[] lines)
@@ -46,11 +46,11 @@ internal static class InstallerLog
         ArgumentNullException.ThrowIfNull(directoryPath);
         ArgumentNullException.ThrowIfNull(lines);
 
-        var snapshot = new PersistEntry(directoryPath, (string[])lines.Clone());
+        var batch = new PersistEntry(directoryPath, (string[])lines.Clone());
 
         lock (Gate)
         {
-            Pending.Enqueue(snapshot);
+            Pending.Enqueue(batch);
             _outstanding++;
             if (_worker is null || _worker.IsCompleted)
             {
@@ -77,8 +77,9 @@ internal static class InstallerLog
     }
 
     /// <summary>
-    /// 把当前日志行同步写进工作会话目录；关闭窗口在 <see cref="Flush"/> 之后用它写最终快照。
-    /// 落盘失败只影响日志文件本身，不打断安装流程，也不改写调用方已经展示的内容。
+    /// 把一份增量批次同步追加到工作会话目录里的日志文件末尾，已有内容原样保留；
+    /// 文件不存在时就创建它。落盘失败只影响日志文件本身，不打断安装流程，
+    /// 也不改写调用方已经展示的内容。
     /// </summary>
     internal static void TryPersist(string directoryPath, IEnumerable<string> lines)
     {
@@ -86,7 +87,7 @@ internal static class InstallerLog
         ArgumentNullException.ThrowIfNull(lines);
         try
         {
-            File.WriteAllLines(Path.Combine(directoryPath, FileName), lines);
+            File.AppendAllLines(Path.Combine(directoryPath, FileName), lines);
         }
         catch (IOException)
         {
@@ -97,7 +98,7 @@ internal static class InstallerLog
     }
 
     /// <summary>
-    /// 唯一的写线程：只在队列非空时存在，逐条按 FIFO 顺序写，绝不并发写同一个文件。
+    /// 唯一的写线程：只在队列非空时存在，逐份按 FIFO 顺序追加，绝不并发写同一个文件。
     /// 任何写入失败都不允许卡住队列或冒泡到调用方。
     /// </summary>
     private static void Drain()
@@ -123,7 +124,7 @@ internal static class InstallerLog
             }
             catch (Exception)
             {
-                // 日志落盘永远不是致命路径：失败只丢掉这一份快照，队列继续前进。
+                // 日志落盘永远不是致命路径：失败只丢掉这一份批次，队列继续前进。
             }
             finally
             {
