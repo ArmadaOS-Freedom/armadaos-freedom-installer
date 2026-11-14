@@ -11,6 +11,12 @@ public partial class MainWindow
     private string? _manualWorkRoot = Environment.GetEnvironmentVariable("FREEDOM_WORK_ROOT");
     private bool _workDirectoryReady;
 
+    /// <summary>
+    /// 工作会话建立之前产生的日志行。界面只显示最近 200 行，这里不设上限：
+    /// 会话一旦绑定就把它们按原顺序排进追加队列，随后清空，之后只排新产生的行。
+    /// </summary>
+    private readonly System.Collections.Generic.List<string> _pendingWorkLogLines = new();
+
     private string TemporaryWorkRoot
     {
         get
@@ -18,7 +24,15 @@ public partial class MainWindow
             if (_workSession is not null) return _workSession.DirectoryPath;
             if (!_workDirectoryReady || _workDirectory is null)
                 throw new InvalidOperationException("Choose a writable temporary work directory in environment preparation first.");
-            return (_workSession = new InstallerWorkSession(_workDirectory.RootPath)).DirectoryPath;
+            var session = _workSession = new InstallerWorkSession(_workDirectory.RootPath);
+            if (_pendingWorkLogLines.Count > 0)
+            {
+                // 绑定会话时补写启动阶段的行；这一份批次只入队一次，之后不再重复。
+                InstallerLog.EnqueuePersist(session.DirectoryPath, _pendingWorkLogLines.ToArray());
+                _pendingWorkLogLines.Clear();
+            }
+
+            return session.DirectoryPath;
         }
     }
 
@@ -94,31 +108,24 @@ public partial class MainWindow
 
     private void SaveWorkLogOnClose()
     {
-        // Wait for every queued append write, then write the final snapshot so closing cannot lose a line.
+        // Wait for every queued append batch. The file already holds the whole session, so closing
+        // must not write the 200-row UI snapshot again: that would duplicate or overwrite the log.
         InstallerLog.Flush();
-        PersistWorkLogSnapshot();
     }
 
     /// <summary>
-    /// 工作会话存在时把当前日志行的不可变快照排进后台队列。界面线程只物化快照，不做整文件写入；
-    /// 会话尚未建立时什么也不排，绝不声称更早的日志行已经保存。
+    /// 追加一行刚产生的日志。会话尚未建立时先留在本窗口的待写列表里（不设上限）；
+    /// 会话已在时只把这一行排进队列，绝不重写整场日志。
     /// </summary>
-    private void QueueWorkLogPersistence()
+    private void AppendWorkLogLine(string line)
     {
-        if (_workSession is null) return;
-        InstallerLog.EnqueuePersist(
-            _workSession.DirectoryPath,
-            System.Linq.Enumerable.ToArray(
-                System.Linq.Enumerable.Select(_localizedLogRows, row => row.Row.Text)));
-    }
+        if (_workSession is null)
+        {
+            _pendingWorkLogLines.Add(line);
+            return;
+        }
 
-    /// <summary>关闭窗口时的最终快照；只在队列已清空后调用，与追加日志写同一个文件。</summary>
-    private void PersistWorkLogSnapshot()
-    {
-        if (_workSession is null) return;
-        InstallerLog.TryPersist(
-            _workSession.DirectoryPath,
-            System.Linq.Enumerable.Select(_localizedLogRows, row => row.Row.Text));
+        InstallerLog.EnqueuePersist(_workSession.DirectoryPath, new[] { line });
     }
 
     private void CleanWorkFilesOnClose(bool preserveRecovery)

@@ -7,8 +7,9 @@ using Xunit;
 namespace FreedomInstaller.Core.Tests;
 
 /// <summary>
-/// LOG01 / REVIEW01：「内部安装」准备失败的真实诊断必须进入日志；追加日志只把不可变快照排队，
-/// 由单个后台写线程按 FIFO 串行落盘，关闭窗口先等队列清空再写最终快照。
+/// LOG01 / REVIEW01 / issue36：「内部安装」准备失败的真实诊断必须进入日志；追加日志只把不可变的
+/// 增量批次交给一个串行的后台队列，由唯一的写线程按 FIFO 顺序追加到会话日志，关闭窗口先等队列清空。
+/// 界面只显示最近 200 行，但落盘必须是整场会话的完整日志，既不能丢掉更早的行，也不能整文件覆盖。
 /// 这里链接 App 侧的纯逻辑源文件来回归，不需要启动 WPF 窗口。
 /// </summary>
 public sealed class InstallerLogTests
@@ -57,9 +58,9 @@ public sealed class InstallerLogTests
         Assert.Contains("the captured device disappeared", line);
     }
 
-    /// <summary>入队后 <see cref="InstallerLog.Flush"/> 返回即可读到内容，不必等窗口关闭。</summary>
+    /// <summary>入队后 <see cref="InstallerLog.Flush"/> 返回即可读到该增量批次，不必等窗口关闭。</summary>
     [Fact]
-    public void FlushWithoutClosingPersistsQueuedSnapshot()
+    public void FlushWithoutClosingPersistsQueuedBatch()
     {
         string directory = NewDirectory();
         string[] lines = { "10:00:00  Dynamic.InternalInstall.Prepared.StatusReady" };
@@ -67,32 +68,88 @@ public sealed class InstallerLogTests
         InstallerLog.EnqueuePersist(directory, lines);
         InstallerLog.Flush();
 
-        // 不需要关闭窗口：队列排空后内容已经可读。
+        // 不需要关闭窗口：队列排空后这一批已经可读。
         Assert.Equal(lines, File.ReadAllLines(Path.Combine(directory, "installer.log")));
     }
 
-    /// <summary>三份累积快照按 FIFO 串行写入：最终文件是最后入队的那份，不被更早的写入覆盖。</summary>
+    /// <summary>
+    /// 三份互不重叠的增量批次按 FIFO 串行追加：最终文件是三者按入队顺序拼接，
+    /// 后面的批次不能覆盖前面的批次。
+    /// </summary>
     [Fact]
-    public void QueuedSnapshotsKeepFifoOrder()
+    public void QueuedDeltaBatchesKeepFifoOrder()
     {
         string directory = NewDirectory();
         string path = Path.Combine(directory, "installer.log");
         string[] first = { "10:00:00  first" };
-        string[] second = first.Append("10:00:01  second").ToArray();
-        string[] third = second.Append("10:00:02  third").ToArray();
+        string[] second = { "10:00:01  second" };
+        string[] third = { "10:00:02  third" };
 
         InstallerLog.EnqueuePersist(directory, first);
         InstallerLog.EnqueuePersist(directory, second);
         InstallerLog.EnqueuePersist(directory, third);
         InstallerLog.Flush();
 
-        // 最后写入的必须是最后入队的那份快照，不能被更早的写入覆盖。
-        Assert.Equal(third, File.ReadAllLines(path));
+        // 每一批都是新的增量行；落盘后三行都在，且顺序与入队顺序一致。
+        Assert.Equal(first.Concat(second).Concat(third), File.ReadAllLines(path));
     }
 
-    /// <summary>单份快照里的每条记录都按原顺序落盘，不丢行也不改序。</summary>
+    /// <summary>
+    /// 界面只保留最近 200 行，但落盘必须是整场会话：连续入队远多于 200 个增量批次后，
+    /// 每一行都要按顺序出现，最早的行也不能丢。
+    /// </summary>
     [Fact]
-    public void QueuedSnapshotPreservesEveryEntryInOrder()
+    public void QueuedIncrementalBatchesBeyondTheUiWindowPersistEveryLine()
+    {
+        string directory = NewDirectory();
+        string path = Path.Combine(directory, "installer.log");
+        string[] lines = Enumerable.Range(0, 240)
+            .Select(index => "10:00:00  entry " + index.ToString("000"))
+            .ToArray();
+
+        foreach (string line in lines)
+        {
+            InstallerLog.EnqueuePersist(directory, new[] { line });
+        }
+
+        InstallerLog.Flush();
+
+        string[] persisted = File.ReadAllLines(path);
+
+        // 240 个单行批次全部落盘，顺序不变，包含最早的 entry 000 与最晚的 entry 239。
+        Assert.Equal(lines, persisted);
+        Assert.Equal(lines[0], persisted[0]);
+        Assert.Equal(lines[lines.Length - 1], persisted[persisted.Length - 1]);
+    }
+
+    /// <summary>会话日志里已经有内容时，新入队的批次必须追加到文件末尾，而不是把旧内容覆盖掉。</summary>
+    [Fact]
+    public void QueuedBatchAppendsToExistingLogFile()
+    {
+        string directory = NewDirectory();
+        string path = Path.Combine(directory, "installer.log");
+        string[] existing =
+        {
+            "09:59:58  earlier session",
+            "09:59:59  earlier session continued",
+        };
+        string[] resumed =
+        {
+            "10:00:00  resumed",
+            "10:00:01  after resume",
+        };
+        File.WriteAllLines(path, existing);
+
+        InstallerLog.EnqueuePersist(directory, resumed);
+        InstallerLog.Flush();
+
+        // 旧内容原样保留，新批次接在末尾。
+        Assert.Equal(existing.Concat(resumed), File.ReadAllLines(path));
+    }
+
+    /// <summary>单个批次里的每条记录都按原顺序落盘，不丢行也不改序。</summary>
+    [Fact]
+    public void QueuedBatchPreservesEveryEntryInOrder()
     {
         string directory = NewDirectory();
         string[] lines = Enumerable.Range(0, 200)
@@ -107,7 +164,7 @@ public sealed class InstallerLogTests
 
     /// <summary>入队时复制数组：调用方之后改写原数组不影响已排队的日志行。</summary>
     [Fact]
-    public void QueuedSnapshotIsImmutableAfterEnqueue()
+    public void QueuedBatchIsImmutableAfterEnqueue()
     {
         string directory = NewDirectory();
         string[] lines = { "10:00:00  original" };
@@ -120,24 +177,20 @@ public sealed class InstallerLogTests
         Assert.Equal(new[] { "10:00:00  original" }, File.ReadAllLines(Path.Combine(directory, "installer.log")));
     }
 
-    /// <summary>同步落盘直接写会话目录里的同一个日志文件；第二次写入把文件覆盖成最新快照。</summary>
+    /// <summary>同步落盘直接写会话目录里的同一个日志文件；每次调用写入的是一份独立增量，必须追加。</summary>
     [Fact]
-    public void AppendPersistsToWorkSessionWithoutClosingTheWindow()
+    public void TryPersistAppendsIndependentDeltas()
     {
         string directory = NewDirectory();
+        string path = Path.Combine(directory, "installer.log");
         string[] first = { "10:00:00  Dynamic.InternalInstall.Prepared.StatusReady" };
+        string[] second = { "10:00:01  System.InvalidOperationException: requires-compatible-bootloader: no proof" };
 
         InstallerLog.TryPersist(directory, first);
-
-        // 关闭窗口的最终快照仍写同一个文件。
-        string path = Path.Combine(directory, "installer.log");
-        Assert.Equal(first, File.ReadAllLines(path));
-
-        string[] second = first.Append(
-            "10:00:01  System.InvalidOperationException: requires-compatible-bootloader: no proof").ToArray();
         InstallerLog.TryPersist(directory, second);
 
-        Assert.Equal(second, File.ReadAllLines(path));
+        // 两次调用各写一份增量：第一行不能被第二次写入覆盖。
+        Assert.Equal(first.Concat(second), File.ReadAllLines(path));
     }
 
     /// <summary>目标目录不存在时失败只影响日志文件：不抛异常，也不留下半份文件。</summary>
@@ -152,7 +205,7 @@ public sealed class InstallerLogTests
         Assert.False(File.Exists(Path.Combine(missing, "installer.log")));
     }
 
-    /// <summary>队列里的写入失败不能卡住队列：这份快照丢掉，后续入队仍能正常落盘。</summary>
+    /// <summary>队列里的写入失败不能卡住队列：这份批次丢掉，后续入队仍能正常落盘。</summary>
     [Fact]
     public void QueuedPersistenceFailureStaysNonFatal()
     {
@@ -161,7 +214,7 @@ public sealed class InstallerLogTests
         InstallerLog.EnqueuePersist(missing, new[] { "line" });
         InstallerLog.Flush();
 
-        // 队列本身必须继续前进：失败只丢掉这份快照。
+        // 队列本身必须继续前进：失败只丢掉这一份增量。
         Assert.False(File.Exists(Path.Combine(missing, "installer.log")));
 
         // 后续入队仍然正常落盘。
