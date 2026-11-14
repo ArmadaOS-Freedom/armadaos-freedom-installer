@@ -542,6 +542,143 @@ public sealed partial class InternalInstallExistingBackupTests : IClassFixture<E
         }
     }
 
+    /// <summary>
+    /// ISSUE38: <see cref="BoardRecoveryBackup.ReadAsync"/> extracts the 2 GiB board archive into a new
+    /// <c>board-recovery-*</c> directory below the durable parent and only afterwards opens and validates it.
+    /// When that post-extraction step rejects the material, the directory this call created must not survive, and
+    /// nothing that existed before the call may be touched.
+    /// <para>
+    /// The failure is raised by <see cref="BoardRecoveryBackup.ValidateSource"/> and by nothing earlier: the
+    /// current device keeps the retained <c>ARMADA_BACKUP</c> partition with the archive's own partition UUID, so
+    /// the identity and geometry gate and the whole extraction succeed, while one LUN0 partition of the current
+    /// GPT carries a different PARTUUID than the archived factory table. The second attempt proves the rejection
+    /// and the cleanup are repeatable on the very same prepared fixture.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task BoardRecovery_ReadAsync_removes_the_extracted_directory_when_source_validation_fails()
+    {
+        const string Name = nameof(BoardRecovery_ReadAsync_removes_the_extracted_directory_when_source_validation_fails);
+        string sourceDirectory = _fixture.NewCaseDirectory(Name + "-sources");
+        IReadOnlyDictionary<string, VerifiedEdlFile> sources = CreateDirectSources(sourceDirectory);
+        string backing = _fixture.NewCaseDirectory(Name + "-backing");
+        IB001SyntheticDevice device = IB001SyntheticDevice.CreateDirect(backing, sources);
+
+        string backupParent = _fixture.NewCaseDirectory(Name + "-backup");
+        EdlClient createClient = NewClient(new IB001FakeEdlRunner(device), NewBinding());
+        using InternalBackupSet factory = await InternalInstallBackup.CreateAsync(createClient, backupParent);
+
+        string artifactsParent = _fixture.NewCaseDirectory(Name + "-artifacts");
+        using InternalArtifactSet artifacts = await InternalInstallArtifacts.PrepareAsync(
+            factory,
+            48,
+            new PackageStorage(1L << 30, 8L << 30, 4L << 30, 1L << 30),
+            artifactsParent);
+        Assert.Equal(BoardArchiveBytes, new FileInfo(artifacts.BoardSummary.FilePath).Length);
+
+        GptTable original = factory.Tables[0];
+        GptPartition originalSsd = original.Partitions.Single(p => p.Name == "ssd");
+        string changedSsdUuid = Guid.NewGuid().ToString();
+        long retainedEnd = (original.LastUsableSector + 1) / 256 * 256;
+        long retainedStart = retainedEnd - BoardArchiveBytes / original.SectorSize;
+        string backupUuid = artifacts.BackupPartition.PartUuid;
+        GptPartitionSpec[] specs = original.Partitions.Select(p => new GptPartitionSpec(
+                p.Number,
+                p.Name,
+                p.TypeGuid,
+                p.Name == "ssd" ? changedSsdUuid : p.PartUuid,
+                p.StartSector,
+                p.Name == "userdata" ? retainedStart - p.StartSector : p.SectorCount,
+                p.Attributes))
+            .Append(new GptPartitionSpec(
+                original.Partitions.Max(p => p.Number) + 1,
+                "ARMADA_BACKUP",
+                "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+                backupUuid,
+                retainedStart,
+                BoardArchiveBytes / original.SectorSize,
+                1UL << 60))
+            .ToArray();
+        GptImage retainedImage = new(
+            original.SectorSize,
+            original.DiskBytes,
+            original.DiskGuid,
+            original.FirstUsableSector,
+            original.LastUsableSector,
+            specs);
+        byte[] primary = new byte[64 * original.SectorSize];
+        byte[] secondary = new byte[64 * original.SectorSize];
+        byte[] head = retainedImage.BuildPrimaryFragment();
+        byte[] tail = retainedImage.BuildBackupFragment();
+        Array.Copy(head, 0, primary, 0, head.Length);
+        Array.Copy(tail, 0, secondary, secondary.Length - tail.Length, tail.Length);
+        string primaryPath = Path.Combine(artifactsParent, "retained-primary.bin");
+        string secondaryPath = Path.Combine(artifactsParent, "retained-secondary.bin");
+        File.WriteAllBytes(primaryPath, primary);
+        File.WriteAllBytes(secondaryPath, secondary);
+        device.AddWriteOverlay(0, 0, 64, primaryPath);
+        device.AddWriteOverlay(0, device.TotalSectors(0) - 64, 64, secondaryPath);
+        device.AddWriteOverlay(
+            0, retainedStart, BoardArchiveBytes / original.SectorSize, artifacts.BoardSummary.FilePath);
+
+        IB001FakeEdlRunner openRunner = new(device);
+        EdlClient openClient = NewClient(openRunner, NewBinding());
+        using InternalBackupSet current = await InternalInstallBackup.CreateAsync(openClient, backupParent);
+
+        // The capture carries the retained layout with the mismatching LUN0 identity, while the archive stays
+        // exactly the factory image this run prepared.
+        Assert.NotEqual(
+            originalSsd.PartUuid,
+            current.Tables[0].Partitions.Single(p => p.Name == "ssd").PartUuid,
+            StringComparer.OrdinalIgnoreCase);
+        Assert.Single(current.Tables[0].Partitions.Where(p => p.Name == "ARMADA_BACKUP"));
+        Assert.Equal(
+            backupUuid,
+            current.Tables[0].Partitions.Single(p => p.Name == "ARMADA_BACKUP").PartUuid,
+            StringComparer.OrdinalIgnoreCase);
+
+        string durableParent = _fixture.NewCaseDirectory(Name + "-durable");
+        string userDirectory = Path.Combine(durableParent, "user-notes");
+        Directory.CreateDirectory(userDirectory);
+        string sentinel = Path.Combine(userDirectory, "keep.txt");
+        File.WriteAllText(sentinel, "keep me");
+        string[] durableBefore = Directory.GetDirectories(durableParent)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        string scratch = Path.Combine(artifactsParent, "scratch");
+        Directory.CreateDirectory(scratch);
+        long archiveSectors = BoardArchiveBytes / original.SectorSize;
+
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            Exception error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                BoardRecoveryBackup.ReadAsync(openClient, current, durableParent, scratch));
+
+            // Only ValidateSource can produce this message, and it runs after the capture and the extraction.
+            Assert.Contains("does not match the current vendor partitions", error.Message);
+            Assert.Contains(openRunner.Reads, read =>
+                read.Lun == 0 && read.StartSector == retainedStart && read.SectorCount == archiveSectors);
+
+            // The capture scratch never survives; only the extracted directory is at stake here.
+            Assert.Empty(Directory.GetFileSystemEntries(scratch));
+
+            // ISSUE38: a failed post-extraction validation must not leave its own recovery directory behind.
+            Assert.Empty(Directory.GetDirectories(durableParent, "board-recovery-*"));
+            Assert.Equal(durableBefore, Directory.GetDirectories(durableParent)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray());
+            Assert.Equal("keep me", File.ReadAllText(sentinel));
+
+            // The original factory backup and the original recovery archive are untouched by the failed attempt.
+            Assert.True(File.Exists(Path.Combine(factory.DirectoryPath, ManifestFileName)));
+            Assert.True(File.Exists(artifacts.BoardSummary.FilePath));
+            Assert.Equal(BoardArchiveBytes, new FileInfo(artifacts.BoardSummary.FilePath).Length);
+        }
+
+        Assert.Empty(openRunner.Writes);
+        Assert.Equal(0, openRunner.ResetCount);
+    }
+
     [Fact]
     public async Task OpenExisting_precancel_opens_nothing_and_creates_nothing()
     {
@@ -691,6 +828,67 @@ public sealed partial class InternalInstallExistingBackupTests : IClassFixture<E
         });
 
         await OpenFailureAsync(device, backupDirectory);
+    }
+
+    /// <summary>
+    /// ISSUE38 lease contract: an unretained extraction removes only its own verified root below the chosen
+    /// parent, while a retained one stays durable. Pre-existing directories - including ones that look like
+    /// cached extractions - and directories outside the chosen parent are never deleted.
+    /// </summary>
+    [Fact]
+    public void BoardRecoveryExtraction_cleans_only_its_own_unretained_new_directory()
+    {
+        const string Name = nameof(BoardRecoveryExtraction_cleans_only_its_own_unretained_new_directory);
+        string parent = _fixture.NewCaseDirectory(Name);
+        string userDirectory = Path.Combine(parent, "user-notes");
+        Directory.CreateDirectory(userDirectory);
+        string sentinel = Path.Combine(userDirectory, "keep.txt");
+        File.WriteAllText(sentinel, "keep me");
+        string cached = Path.Combine(parent, "board-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(cached);
+        File.WriteAllText(Path.Combine(cached, "cached.bin"), "cached");
+
+        var constructor = typeof(BoardRecoveryExtraction).GetConstructor(
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            new[] { typeof(string), typeof(string) },
+            modifiers: null) ?? throw new InvalidOperationException(
+                "BoardRecoveryExtraction no longer exposes the factory constructor.");
+
+        BoardRecoveryExtraction NewLease(string directory, string chosenParent) =>
+            (BoardRecoveryExtraction)constructor.Invoke(new object[] { directory, chosenParent });
+
+        string discarded = Path.Combine(parent, "board-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(discarded);
+        File.WriteAllText(Path.Combine(discarded, "recovery.bin"), "partial");
+        using (BoardRecoveryExtraction lease = NewLease(discarded, parent))
+        {
+            Assert.Equal(discarded, lease.DirectoryPath, StringComparer.OrdinalIgnoreCase);
+            lease.Dispose();
+            Assert.False(Directory.Exists(discarded));
+            Assert.True(Directory.Exists(userDirectory));
+            Assert.True(Directory.Exists(cached));
+            Assert.Equal("keep me", File.ReadAllText(sentinel));
+            Assert.Equal("cached", File.ReadAllText(Path.Combine(cached, "cached.bin")));
+        }
+
+        string kept = Path.Combine(parent, "board-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(kept);
+        File.WriteAllText(Path.Combine(kept, "recovery.bin"), "durable");
+        BoardRecoveryExtraction success = NewLease(kept, parent);
+        success.Retain();
+        success.Dispose();
+        Assert.True(Directory.Exists(kept));
+        Assert.Equal("durable", File.ReadAllText(Path.Combine(kept, "recovery.bin")));
+
+        string outsideParent = _fixture.NewCaseDirectory(Name + "-outside");
+        string outside = Path.Combine(outsideParent, "board-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        using (BoardRecoveryExtraction lease = NewLease(outside, parent))
+        {
+            lease.Dispose();
+        }
+        Assert.True(Directory.Exists(outside));
     }
 
     // --------------------------------------------------------------------------- helpers

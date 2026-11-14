@@ -752,20 +752,30 @@ public partial class MainWindow
                     else if (useBoardBackup)
                     {
                         SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.ReadingBoard"));
-                        var recoveredDirectory = await BoardRecoveryBackup.ReadDirectoryAsync(
+                        var extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
                             activeClient, parentPath, TemporaryWorkRoot, token)
                             ?? throw new InvalidDataException(T("Dynamic.RecoverySource.BoardMissing"));
-                        var recovery = await InternalInstallBackup.OpenRecoveryAsync(activeClient, recoveredDirectory, token: token);
+                        InternalBackupSet? recovery = null;
                         try
                         {
+                            // The lease stays alive across opening, binding and the preparation snapshot; any
+                            // failure or cancellation releases those locks before the lease cleanup runs.
+                            recovery = await InternalInstallBackup.OpenRecoveryAsync(
+                                activeClient, extraction.DirectoryPath, token: token);
                             set = await InternalInstallBackup.CreatePreparationSnapshotAsync(
-                                activeClient, recovery, TemporaryWorkRoot, progress, token);
+                                activeClient, recovery!, TemporaryWorkRoot, progress, token);
                         }
-                        catch { recovery.Dispose(); throw; }
+                        catch
+                        {
+                            recovery?.Dispose();
+                            extraction.Dispose();
+                            throw;
+                        }
                         _internalInstallRecoverySource = recovery;
-                        _boardRecoveryDiscoveredDirectory = recoveredDirectory;
+                        _boardRecoveryDiscoveredDirectory = extraction.DirectoryPath;
                         _boardRecoveryAttemptManifest = set.ManifestSha256;
-                        AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", recoveredDirectory));
+                        extraction.Retain();
+                        AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", extraction.DirectoryPath));
                     }
                     else set = useExisting
                         ? await InternalInstallBackup.OpenExistingAsync(

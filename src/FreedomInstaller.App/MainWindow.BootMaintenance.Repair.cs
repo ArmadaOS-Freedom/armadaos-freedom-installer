@@ -18,13 +18,15 @@ public partial class MainWindow
         if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
             throw new InvalidDataException("Repair capture parent directory is unavailable.");
 
+        BoardRecoveryExtraction? extraction = null;
         string? boardDirectory = _boardRecoveryDiscoveredDirectory;
         if (boardDirectory is null)
         {
             SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.ReadingBoard"));
             AppendLocalizedLog(M("Dynamic.RecoverySource.ReadingBoard"));
-            boardDirectory = await BoardRecoveryBackup.ReadDirectoryAsync(
+            extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
                 client, parent, TemporaryWorkRoot, token);
+            boardDirectory = extraction?.DirectoryPath;
         }
 
         if (boardDirectory is null)
@@ -33,28 +35,32 @@ public partial class MainWindow
             return await InternalInstallBackup.CreateAsync(client, parent, progress, token);
         }
 
-        var recovery = await InternalInstallBackup.OpenRecoveryAsync(client, boardDirectory, token: token);
+        InternalBackupSet? recovery = null;
         InternalBackupSet? snapshot = null;
         try
         {
+            recovery = await InternalInstallBackup.OpenRecoveryAsync(client, boardDirectory, token: token);
+
             // Historical recovery is only original-epoch evidence, not current rollback state.
             snapshot = await InternalInstallBackup.CreateAsync(client, parent, progress, token);
 
             BoardRecoveryBackup.ValidateSourceForReuse(snapshot, recovery);
-
-            _internalInstallRecoverySource?.Dispose();
-            _internalInstallRecoverySource = recovery;
-            _boardRecoveryDiscoveredDirectory = boardDirectory;
-            _boardRecoveryAttemptManifest = snapshot.ManifestSha256;
-            _bootMaintenanceOriginalDirectory = boardDirectory;
-            AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", boardDirectory));
-            return snapshot;
         }
         catch
         {
             snapshot?.Dispose();
-            recovery.Dispose();
+            recovery?.Dispose();
+            extraction?.Dispose();
             throw;
         }
+
+        _internalInstallRecoverySource?.Dispose();
+        _internalInstallRecoverySource = recovery;
+        _boardRecoveryDiscoveredDirectory = boardDirectory;
+        _boardRecoveryAttemptManifest = snapshot!.ManifestSha256;
+        _bootMaintenanceOriginalDirectory = boardDirectory;
+        extraction?.Retain();
+        AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", boardDirectory));
+        return snapshot!;
     }
 }
