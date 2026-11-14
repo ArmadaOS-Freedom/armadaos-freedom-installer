@@ -11,8 +11,8 @@ namespace FreedomInstaller.App;
 
 /// <summary>
 /// 全局救援页面的自有状态与视图层。页面有两个独立视图（备份 / 恢复），共用同一份连接、日志与进度，
-/// 视图只由 <see cref="GlobalRecoveryMode"/> 与 <see cref="GlobalRecoveryOrigin"/> 决定；
-/// 两者都不写进六种功能模式的 <c>_selectedOperation</c> / 页面字段，也不复用内部安装的会话字段。
+/// 视图只由 <see cref="GlobalRecoveryMode"/> 决定；
+/// 它不写进六种功能模式的 <c>_selectedOperation</c> / 页面字段，也不复用内部安装的会话字段。
 /// <para>
 /// 页面本身不改写环境自检结论；进入页面不做任何设备 IO，真正的设备访问只发生在用户显式点击
 /// 连接 / 备份 / 准备还原 / 开始还原 / 重启按钮时，并由 <c>MainWindow.GlobalRecovery.Execution.cs</c> 承担。
@@ -27,13 +27,6 @@ public partial class MainWindow
         Restore,
     }
 
-    /// <summary>进入本页的来源：环境准备完成后的可选页，或首页的独立卡片。</summary>
-    internal enum GlobalRecoveryOrigin
-    {
-        Onboarding,
-        Home,
-    }
-
     // ---------- 与六种功能完全隔离的会话状态 ----------
 
     /// <summary>当前是否停留在全局救援页；由父级导航在展示 / 返回时维护。</summary>
@@ -41,9 +34,6 @@ public partial class MainWindow
 
     /// <summary>当前视图（备份 / 恢复）。切换视图只改可见性，不清空任何会话。</summary>
     private GlobalRecoveryMode _globalRecoveryMode = GlobalRecoveryMode.Backup;
-
-    /// <summary>当前来源；决定标题文案、返回目标与「可选、可跳过」说明是否出现。</summary>
-    private GlobalRecoveryOrigin _globalRecoveryOrigin = GlobalRecoveryOrigin.Onboarding;
 
     /// <summary>整段外层异步操作（连接 / 备份 / 准备 / 还原 / 重启）正在运行。</summary>
     private bool _globalOperationActive;
@@ -120,7 +110,7 @@ public partial class MainWindow
     /// 进入指定视图：只校验前置条件并切换可见性，不做任何设备 IO，也不改写六种功能的选择。
     /// 已有受保护现场时拒绝切换到另一个视图，绝不为换页清空唯一可核对的会话。
     /// </summary>
-    internal void ShowGlobalRecoveryPage(GlobalRecoveryMode mode, GlobalRecoveryOrigin origin)
+    internal void ShowGlobalRecoveryPage(GlobalRecoveryMode mode)
     {
         if (!_ready || _closed || !EnvironmentIsReady)
         {
@@ -134,7 +124,6 @@ public partial class MainWindow
         }
 
         _globalRecoveryMode = mode;
-        _globalRecoveryOrigin = origin;
         ResumeGlobalRecoveryPage();
     }
 
@@ -155,7 +144,7 @@ public partial class MainWindow
         GlobalRecoveryPage.ScrollToTop();
     }
 
-    /// <summary>按当前模式 / 来源只切可见性；语言切换与刷新都不会调用它，因此模式不会被改回默认值。</summary>
+    /// <summary>按当前模式只切可见性；语言切换与刷新都不会调用它，因此模式不会被改回默认值。</summary>
     private void ApplyGlobalRecoveryModeView()
     {
         if (!_ready)
@@ -164,7 +153,6 @@ public partial class MainWindow
         }
 
         var backup = _globalRecoveryMode == GlobalRecoveryMode.Backup;
-        var homeOrigin = _globalRecoveryOrigin == GlobalRecoveryOrigin.Home;
 
         // 标题、说明与输出目录标签按视图互斥；同一时刻只有一个标题，备份说明不留在恢复页。
         GlobalBackupTitleText.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
@@ -175,12 +163,6 @@ public partial class MainWindow
         GlobalOutputRestoreLabelText.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
         GlobalBackupCard.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
         GlobalRestoreCard.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
-
-        // 首页来源返回功能首页；环境来源返回环境准备页，并保留「可选、可跳过」说明。
-        GlobalBackEnvironmentButton.Visibility = homeOrigin ? Visibility.Collapsed : Visibility.Visible;
-        GlobalBackHomeButton.Visibility = homeOrigin ? Visibility.Visible : Visibility.Collapsed;
-        GlobalContinueButton.Visibility = homeOrigin ? Visibility.Collapsed : Visibility.Visible;
-        GlobalOptionalNoteText.Visibility = homeOrigin ? Visibility.Collapsed : Visibility.Visible;
     }
 
     // ---------- 导航 ----------
@@ -217,10 +199,11 @@ public partial class MainWindow
             return;
         }
 
-        ShowGlobalRecoveryPage(mode, GlobalRecoveryOrigin.Home);
+        ShowGlobalRecoveryPage(mode);
     }
 
-    private async void OnGlobalBackEnvironment(object sender, RoutedEventArgs e)
+    /// <summary>本页唯一的返回入口：只回功能首页，不重跑环境自检。</summary>
+    private void OnGlobalBackHome(object sender, RoutedEventArgs e)
     {
         if (!_ready || _busy || _closed)
         {
@@ -228,36 +211,6 @@ public partial class MainWindow
         }
 
         // 有真实 9008 会话 / 入口尝试 / 未确定写入时，返回会丢掉可核对的现场。
-        if (HasGlobalRecoveryProtectedState)
-        {
-            SetText(GlobalProgressStatusText, "Dynamic.Global.Status.BlockedBySession");
-            return;
-        }
-
-        // 首页来源：同一个返回按钮直接回功能首页，不重跑环境自检。
-        if (_globalRecoveryOrigin == GlobalRecoveryOrigin.Home)
-        {
-            _showingGlobalRecovery = false;
-            ShowFunctionHome();
-            RefreshActions();
-            return;
-        }
-
-        _showingGlobalRecovery = false;
-        _showingEnvironment = true;
-        ApplyFunctionView();
-        RefreshEnvironmentActions();
-        await RunEnvironmentCheckAsync();
-    }
-
-    private void OnGlobalContinue(object sender, RoutedEventArgs e)
-    {
-        if (!_ready || _busy || _closed || !EnvironmentIsReady)
-        {
-            return;
-        }
-
-        // 只有完全没有本页现场时才允许直接回首页。
         if (HasGlobalRecoveryProtectedState)
         {
             SetText(GlobalProgressStatusText, "Dynamic.Global.Status.BlockedBySession");
@@ -408,22 +361,10 @@ public partial class MainWindow
                 && (!writesAttempted || _globalRestoreSucceeded);
         }
 
-        if (GlobalBackEnvironmentButton is not null)
-        {
-            GlobalBackEnvironmentButton.IsEnabled = !busy && !HasGlobalRecoveryProtectedState;
-        }
-
-        // 首页来源的「返回功能首页」与准备页返回共用同一道受保护现场闸门。
+        // 本页唯一的返回入口：有受保护现场时不可用。
         if (GlobalBackHomeButton is not null)
         {
             GlobalBackHomeButton.IsEnabled = !busy && !HasGlobalRecoveryProtectedState;
-        }
-
-        if (GlobalContinueButton is not null)
-        {
-            GlobalContinueButton.IsEnabled = !busy
-                && !HasGlobalRecoveryProtectedState
-                && EnvironmentIsReady;
         }
     }
 
