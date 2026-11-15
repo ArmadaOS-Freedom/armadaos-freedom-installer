@@ -459,15 +459,27 @@ public static partial class EdlRawBootBuilder
             RequireIdenticalFile(packedPath, repackedPath, "repacked raw image", token);
 
             // Envelope: the existing owner rebuilds the candidate partition from this slot's own boot.
+            // A source that already carries the project kshim composite is a previously wrapped boot:
+            // its footer describes the new payload while the embedded vbmeta still signs the previous
+            // leaf. That source uses the guarded entry, which authenticates the embedded blob and parses
+            // against its signed size; every other source keeps the strict footer equality.
             var packedClaim = new VerifiedEdlFile(packedPath, packed.Bytes, packed.Sha256);
             string candidatePath = Path.Combine(child, CandidateBootFileName);
-            EdlRawBootEnvelope envelope = await RepackEnvelopeAsync(
-                    request.CurrentBoot,
-                    packedClaim,
-                    material.LoaderBudget.MaxRawBytes,
-                    candidatePath,
-                    token)
-                .ConfigureAwait(false);
+            EdlRawBootEnvelope envelope = material.IsKshim
+                ? await RepackKshimHybridEnvelopeAsync(
+                        request.CurrentBoot,
+                        packedClaim,
+                        material.LoaderBudget.MaxRawBytes,
+                        candidatePath,
+                        token)
+                    .ConfigureAwait(false)
+                : await RepackEnvelopeAsync(
+                        request.CurrentBoot,
+                        packedClaim,
+                        material.LoaderBudget.MaxRawBytes,
+                        candidatePath,
+                        token)
+                    .ConfigureAwait(false);
 
             // Whole-parser readback through the proven reader, never a second manifest implementation.
             InternalSlotMaterial candidateMaterial = await InternalSlotMaterialReader

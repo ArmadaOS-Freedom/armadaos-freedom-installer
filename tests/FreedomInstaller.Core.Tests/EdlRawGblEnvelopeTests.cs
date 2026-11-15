@@ -720,6 +720,10 @@ public sealed class EdlRawGblEnvelopeTests : IClassFixture<EdlRawGblEnvelopeTest
 
         internal AvbFixture OtherOem = null!;
 
+        internal EdlRawBootBuilderTests.SlotFixture SlotA = null!;
+
+        internal EdlRawBootBuilderTests.SlotFixture SlotB = null!;
+
         internal EdlRawBuiltBoot NormalBuilt = null!;
 
         internal EdlRawBuiltBoot BudgetBuilt = null!;
@@ -751,6 +755,8 @@ public sealed class EdlRawGblEnvelopeTests : IClassFixture<EdlRawGblEnvelopeTest
 
             EdlRawBootBuilderTests.SlotFixture slotA = EdlRawBootBuilderTests.CreateSlot(Workspace, "a", 0x31);
             EdlRawBootBuilderTests.SlotFixture slotB = EdlRawBootBuilderTests.CreateSlot(Workspace, "b", 0x71);
+            SlotA = slotA;
+            SlotB = slotB;
 
             // The original is the stock boot body signed independently by the OEM key, never re-signed.
             slotA.CurrentBoot = DefaultOem.RewriteBootLeaf(slotA.CurrentBoot.Path);
