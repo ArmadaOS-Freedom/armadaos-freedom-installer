@@ -327,7 +327,7 @@ public sealed class MaintenanceBundleTests
     /// Dispose deletes the source archive, the work root, or sibling files such as the
     /// sentinel. Uses the real mounted pins; it is never skipped.
     /// </summary>
-    [Fact]
+    [RequiredFixturesFact(RequiredFixtureVariables.MaintenanceTestAssetRoot)]
     public async Task LoadAsync_WithRealPinnedAssets_ReturnsProfileAndAssets_AndDisposeRemovesOnlyStaging()
     {
         var assetRoot = TestPaths.AssetRoot;

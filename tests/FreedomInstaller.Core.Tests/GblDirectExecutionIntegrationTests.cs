@@ -39,7 +39,9 @@ public sealed class GblDirectExecutionIntegrationTests
     // A. Empty slot B — EFI + both effective boots, no slot-B metadata (1)
     // ---------------------------------------------------------------------------------------
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task Execute_Empty_B_WritesEfiThenBothEffectiveBootsWithoutMetadata()
     {
         using var source = new GblDirectSourceFixture("PRC");
@@ -120,7 +122,9 @@ public sealed class GblDirectExecutionIntegrationTests
     // B. EFI fresh-target tamper: fail closed before any write (1)
     // ---------------------------------------------------------------------------------------
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task Execute_EfispFreshTargetTamperFailsBeforeAnyWrite()
     {
         using var source = new GblDirectSourceFixture("PRC");
@@ -152,7 +156,9 @@ public sealed class GblDirectExecutionIntegrationTests
     // C. EFI readback failure: unknown outcome, nothing after EFI (1)
     // ---------------------------------------------------------------------------------------
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task Execute_EfispReadbackFailureStopsBeforeBootAndMisc()
     {
         using var source = new GblDirectSourceFixture("PRC");

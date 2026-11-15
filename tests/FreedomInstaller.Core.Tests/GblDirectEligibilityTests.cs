@@ -36,7 +36,9 @@ public sealed class GblDirectEligibilityTests
     /// A legal 48-file legacy backup on a device whose GPT still carries EFI is not malformed input:
     /// it is a valid old backup, and the direct route must refuse GBL rather than silently drop EFI.
     /// </summary>
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task LockedOem_RequiresCompleteBackupWithEfisp()
     {
         using GblDirectSourceFixture source = new(region: "PRC");
@@ -51,7 +53,9 @@ public sealed class GblDirectEligibilityTests
     /// The parent RSA verifies on its own, but the parent's boot-child principal is not the one the
     /// child chain allows: only the child itself is a legal signer here, so the pair must be refused.
     /// </summary>
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task LockedOem_RejectsMismatchedParentBootChild()
     {
         using GblDirectSourceFixture source = new(region: "PRC", mismatchParentBootChild: true);
@@ -67,7 +71,9 @@ public sealed class GblDirectEligibilityTests
     /// "UNK", so the refusal must come from the region check and not from a default of PRC, a locale,
     /// or any firmware inference.
     /// </summary>
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task LockedOem_RejectsUnknownSourceRegion()
     {
         using GblDirectSourceFixture source = new(region: "UNK");

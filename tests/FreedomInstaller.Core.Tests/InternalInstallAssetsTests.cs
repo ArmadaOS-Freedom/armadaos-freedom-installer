@@ -266,7 +266,10 @@ public sealed class InternalInstallAssetsTests
     /// contract through a narrow reflection bridge: the real returned task is awaited and the real
     /// instance is read, never an uninitialized object, and no readiness flag is proven.
     /// </summary>
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.InternalInstallMaintenanceBoot,
+        RequiredFixtureVariables.InternalInstallSupportArchive,
+        RequiredFixtureVariables.InternalInstallToolbox)]
     public async Task LoadAsync_WithTheRealFrozenAssets_AcquiresRevalidatesAndRefusesOnlyAfterDispose()
     {
         var bootPath = RequireAbsoluteEnvironmentPath(BootPathVariable);

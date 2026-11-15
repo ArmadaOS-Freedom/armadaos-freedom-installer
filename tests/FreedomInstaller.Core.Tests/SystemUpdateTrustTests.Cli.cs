@@ -17,7 +17,9 @@ public sealed partial class SystemUpdateTrustTests
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Cli_InspectTrust_ValidFixture_WritesResultJsonAndMatchesStdout(bool gbl)
@@ -67,7 +69,9 @@ public sealed partial class SystemUpdateTrustTests
         Assert.True(slotB.GetProperty("maxRawBytes").GetInt64() > 0);
     }
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData("numeric-lock")]
     [InlineData("unknown-lock")]
     [InlineData("extra-top")]
@@ -112,7 +116,9 @@ public sealed partial class SystemUpdateTrustTests
         Assert.False(Directory.Exists(outDir));
     }
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData("duplicate-root-schemaVersion")]
     [InlineData("duplicate-claim-path")]
     public async Task Cli_InspectTrust_DuplicateJsonKeys_FailsWithoutCreatingOutput(string duplicateCase)
@@ -142,7 +148,9 @@ public sealed partial class SystemUpdateTrustTests
         Assert.False(Directory.Exists(outDir));
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task Cli_InspectTrust_PreexistingOutputDir_PreservesSentinelAndWritesNoResult()
     {
         string requestPath = _fx.NewCaseFilePath("request.json");
@@ -166,7 +174,9 @@ public sealed partial class SystemUpdateTrustTests
         Assert.Equal(sentinelPath, singleEntry);
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task Cli_InspectTrust_BadBootSha_FailsWithoutOutputAndLeavesFixtureBootUnchanged()
     {
         string requestPath = _fx.NewCaseFilePath("request.json");

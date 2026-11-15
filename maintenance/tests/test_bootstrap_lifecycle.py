@@ -226,8 +226,19 @@ class LifecycleCase(unittest.TestCase):
     def run_cleanup(self):
         environment = self.shim.env()
         environment["PATH"] = self.bin_dir + ":" + environment.get("PATH", "")
+        environment["TF_SHIM_BUSYBOX"] = self.shim.script
+        # BusyBox sh in standalone (ASH) mode runs its own applets before
+        # searching PATH, so `busybox ...` inside cleanup.sh never reaches the
+        # PATH shim: trace stays empty and the injection hooks are bypassed.
+        # Instead define a shell function named `busybox` in the very shell that
+        # sources the unmodified cleanup.sh; function lookup is not subject to
+        # standalone applet dispatch, and the function calls the shim, which
+        # delegates every operation to the real BusyBox except the explicit
+        # kill/umount injections. The path travels via env and argv only.
+        dispatch = 'busybox() { "$TF_SHIM_BUSYBOX" "$@"; }; . "$1"'
         result = subprocess.run(
-            [os.environ["TF_BOOTSTRAP_REAL_BUSYBOX"], "sh", self.cleanup_sh],
+            [os.environ["TF_BOOTSTRAP_REAL_BUSYBOX"], "sh", "-c", dispatch,
+             "tf-bootstrap-harness", self.cleanup_sh],
             env=environment, capture_output=True, text=True, timeout=120)
         # capture evidence immediately, before any later assertion or teardown
         # unmount failure can lose it

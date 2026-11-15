@@ -1128,7 +1128,9 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.False(File.Exists(outputPath));
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.EdlClientLoaderLogPath,
+        RequiredFixtureVariables.EdlClientMiscLogPath)]
     public async Task Historical_loader_and_misc_logs_replay_anonymized_identity_and_path()
     {
         static string RequireLogPath(string variable)

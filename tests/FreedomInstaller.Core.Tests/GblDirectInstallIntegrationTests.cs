@@ -38,7 +38,9 @@ public sealed class GblFixtureFactorySmokeTests
         _raw = raw;
     }
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData(false, 48)]
     [InlineData(true, 47)]
     public async Task UnlockedG5_UsesRealFactoryAndTruthfulBackup(bool omitEfispBackup, int expectedBackupFiles)
@@ -112,7 +114,9 @@ public sealed class GblDirectInstallIntegrationTests
         _raw = raw;
     }
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData("PRC", "Prc", PrcEfispRuntimeAssetSha256)]
     [InlineData("ROW", "Row", RowEfispRuntimeAssetSha256)]
     public async Task LockedOem_UsesTypedGblPlanAndDistinctParentChildKeys(
