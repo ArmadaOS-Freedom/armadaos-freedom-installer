@@ -496,8 +496,12 @@ public static partial class BoardRecoveryBackup
         {
             using var document = JsonDocument.Parse(bytes);
             var root = document.RootElement;
+            // A syntactically valid receipt that carries the wrong JSON kind for schemaVersion is still an
+            // invalid receipt: TryGetInt32 would throw InvalidOperationException out of this optional-cache
+            // probe, so the kind is rejected here exactly like any other failed receipt check.
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("schemaVersion", out var schemaVersion)
+                || schemaVersion.ValueKind != JsonValueKind.Number
                 || !schemaVersion.TryGetInt32(out int version) || version != 1)
             {
                 return false;

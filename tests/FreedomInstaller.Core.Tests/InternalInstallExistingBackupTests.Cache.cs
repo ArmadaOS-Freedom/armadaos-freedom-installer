@@ -19,7 +19,8 @@ namespace FreedomInstaller.Core.Tests;
 /// Every case prepares one real 2 GiB board archive through the production factories, retains one extraction and
 /// then opens a fresh <see cref="EdlClient"/> over a freshly captured set. The assertions are only about what a
 /// session does: which sector ranges it reads, which directory it returns and which files still exist afterwards.
-/// Cache markers are never inspected, and no file-name pattern is banned.
+/// Apart from the receipt-kind and proof-collision cases, which corrupt one marker on purpose, cache markers are
+/// never inspected and no file-name pattern is banned.
 /// </para>
 /// </summary>
 public sealed partial class InternalInstallExistingBackupTests
@@ -543,5 +544,253 @@ public sealed partial class InternalInstallExistingBackupTests
             File.Exists(newlyCreatedPath),
             "the proof write must not leave behind a file it created before the collision");
         Assert.Single(Directory.GetFiles(directory));
+    }
+
+    // --------------------------------------------- receipt schemaVersion of a non-numeric JSON kind
+
+    /// <summary>
+    /// PR49 review, P2: the receipt reader asked <c>schemaVersion.TryGetInt32</c> before looking at its
+    /// <c>ValueKind</c>, so a syntactically valid receipt carrying <c>"1"</c>, <c>null</c>, <c>true</c>,
+    /// <c>[]</c> or <c>{}</c> threw <see cref="InvalidOperationException"/> straight out of the optional cache
+    /// probe and out of the public reader, for an archive that was fully intact. Each kind below must instead
+    /// leave the receipt unreadable-but-ignored, keep every pre-existing cache file byte-for-byte, and let the
+    /// session read and extract the whole board archive exactly as if no cache existed.
+    /// </summary>
+    private static readonly string[] InvalidReceiptSchemaVersionKinds =
+        { "string", "null", "boolean", "array", "object" };
+
+    [Fact]
+    public async Task InvalidReceiptSchemaVersionKind_ReadAgain_ignores_the_cache_and_reads_the_whole_archive()
+    {
+        const string Name =
+            nameof(InvalidReceiptSchemaVersionKind_ReadAgain_ignores_the_cache_and_reads_the_whole_archive);
+        RetainedRecoveryMaterial material = await CreateRetainedRecoveryMaterialAsync(Name);
+        string invalidDirectory = await RetainCacheWithReadAsync(material, Name + "-first");
+        string receiptPath = Path.Combine(invalidDirectory, "board-recovery-cache.json");
+        Assert.True(File.Exists(receiptPath), "the retained first session must leave a cache receipt behind");
+
+        byte[] validReceipt = File.ReadAllBytes(receiptPath);
+        string cachedManifestPath = Path.Combine(invalidDirectory, ManifestFileName);
+        string cachedManifestSha256 = HashFile(cachedManifestPath);
+        int cachedFileCount = Directory.GetFiles(invalidDirectory, "*", SearchOption.AllDirectories).Length;
+
+        foreach (string kind in InvalidReceiptSchemaVersionKinds)
+        {
+            byte[] tampered = RewriteReceiptSchemaVersion(validReceipt, kind);
+            File.WriteAllBytes(receiptPath, tampered);
+
+            RetainedSession second = await CreateRetainedSessionAsync(material, Name + "-" + kind);
+            InternalBackupSet? reused = null;
+            Exception? error = null;
+            try
+            {
+                using (second.Current)
+                {
+                    string scratch = _fixture.NewCaseDirectory(Name + "-" + kind + "-scratch");
+                    try
+                    {
+                        reused = await BoardRecoveryBackup.ReadAsync(
+                            second.Client, second.Current, material.DurableParent, scratch);
+                    }
+                    catch (Exception exception)
+                    {
+                        error = exception;
+                    }
+                }
+
+                Assert.True(
+                    error is null,
+                    $"{kind}: an optional cache marker must never fail the read of an intact archive: {error}");
+                Assert.NotNull(reused);
+                InternalBackupSet fallback = reused!;
+                Assert.NotEqual(invalidDirectory, fallback.DirectoryPath, StringComparer.OrdinalIgnoreCase);
+                Assert.Equal(51, fallback.Files.Count);
+                Assert.Equal(
+                    HashFile(fallback.ManifestPath), fallback.ManifestSha256, StringComparer.OrdinalIgnoreCase);
+                Assert.True(File.Exists(Path.Combine(fallback.DirectoryPath, "misc.bin")));
+
+                // The fallback is the full capture the first session already had to take once.
+                Assert.Contains(second.Runner.Reads, read =>
+                    read.Lun == 0 && read.StartSector == second.ArchiveStart && read.SectorCount == second.ArchiveSectors);
+                Assert.Empty(second.Runner.Writes);
+                Assert.Equal(0, second.Runner.ResetCount);
+
+                string[] fresh = FreshExtractions(material.DurableParent, invalidDirectory);
+                Assert.True(
+                    fresh.Length == 1,
+                    $"{kind}: exactly one fresh fallback extraction was expected, found {fresh.Length}");
+            }
+            finally
+            {
+                reused?.Dispose();
+                DeleteExtractionsExcept(material.DurableParent, invalidDirectory);
+            }
+
+            AssertUnchangedInvalidCache(
+                kind, invalidDirectory, receiptPath, tampered, cachedManifestPath, cachedManifestSha256,
+                cachedFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task InvalidReceiptSchemaVersionKind_ReadDirectoryAgain_ignores_the_cache_and_reads_the_whole_archive()
+    {
+        const string Name =
+            nameof(InvalidReceiptSchemaVersionKind_ReadDirectoryAgain_ignores_the_cache_and_reads_the_whole_archive);
+        RetainedRecoveryMaterial material = await CreateRetainedRecoveryMaterialAsync(Name);
+        string invalidDirectory = await RetainCacheWithDirectoryAsync(material, Name + "-first");
+        string receiptPath = Path.Combine(invalidDirectory, "board-recovery-cache.json");
+        Assert.True(File.Exists(receiptPath), "the retained first lease must leave a cache receipt behind");
+
+        byte[] validReceipt = File.ReadAllBytes(receiptPath);
+        string cachedManifestPath = Path.Combine(invalidDirectory, ManifestFileName);
+        string cachedManifestSha256 = HashFile(cachedManifestPath);
+        int cachedFileCount = Directory.GetFiles(invalidDirectory, "*", SearchOption.AllDirectories).Length;
+
+        foreach (string kind in InvalidReceiptSchemaVersionKinds)
+        {
+            byte[] tampered = RewriteReceiptSchemaVersion(validReceipt, kind);
+            File.WriteAllBytes(receiptPath, tampered);
+
+            RetainedSession second = await CreateRetainedSessionAsync(material, Name + "-" + kind);
+            BoardRecoveryExtraction? lease = null;
+            Exception? error = null;
+            using (second.Current)
+            {
+                string scratch = _fixture.NewCaseDirectory(Name + "-" + kind + "-scratch");
+                try
+                {
+                    lease = await BoardRecoveryBackup.ReadDirectoryAsync(
+                        second.Client, material.DurableParent, scratch);
+                }
+                catch (Exception exception)
+                {
+                    error = exception;
+                }
+            }
+
+            try
+            {
+                Assert.True(
+                    error is null,
+                    $"{kind}: an optional cache marker must never fail the discovery of an intact archive: {error}");
+                Assert.NotNull(lease);
+                BoardRecoveryExtraction extracted = lease!;
+                Assert.NotEqual(invalidDirectory, extracted.DirectoryPath, StringComparer.OrdinalIgnoreCase);
+                Assert.True(File.Exists(Path.Combine(extracted.DirectoryPath, ManifestFileName)));
+                Assert.True(File.Exists(Path.Combine(extracted.DirectoryPath, "misc.bin")));
+
+                Assert.Contains(second.Runner.Reads, read =>
+                    read.Lun == 0 && read.StartSector == second.ArchiveStart && read.SectorCount == second.ArchiveSectors);
+                Assert.Empty(second.Runner.Writes);
+                Assert.Equal(0, second.Runner.ResetCount);
+
+                string[] fresh = FreshExtractions(material.DurableParent, invalidDirectory);
+                Assert.True(
+                    fresh.Length == 1,
+                    $"{kind}: exactly one fresh fallback extraction was expected, found {fresh.Length}");
+            }
+            finally
+            {
+                // This lease was never retained, so disposing it removes only the directory it created.
+                lease?.Dispose();
+                DeleteExtractionsExcept(material.DurableParent, invalidDirectory);
+            }
+
+            // The unretained lease removed exactly its own extraction; the invalid cache directory is the only one left.
+            string[] remaining = Directory.GetDirectories(material.DurableParent, "board-recovery-*");
+            Assert.True(
+                remaining.Length == 1
+                    && string.Equals(remaining[0], invalidDirectory, StringComparison.OrdinalIgnoreCase),
+                $"{kind}: the unretained lease must remove only its own extraction and keep the invalid cache");
+            AssertUnchangedInvalidCache(
+                kind, invalidDirectory, receiptPath, tampered, cachedManifestPath, cachedManifestSha256,
+                cachedFileCount);
+        }
+    }
+
+    // ------------------------------------------------------------------ receipt-kind fixtures
+
+    private async Task<string> RetainCacheWithReadAsync(RetainedRecoveryMaterial material, string name)
+    {
+        RetainedSession session = await CreateRetainedSessionAsync(material, name);
+        using (session.Current)
+        {
+            string scratch = _fixture.NewCaseDirectory(name + "-scratch");
+            using InternalBackupSet? retained = await BoardRecoveryBackup.ReadAsync(
+                session.Client, session.Current, material.DurableParent, scratch);
+            Assert.NotNull(retained);
+            Assert.Equal(51, retained!.Files.Count);
+            return retained.DirectoryPath;
+        }
+    }
+
+    private async Task<string> RetainCacheWithDirectoryAsync(RetainedRecoveryMaterial material, string name)
+    {
+        RetainedSession session = await CreateRetainedSessionAsync(material, name);
+        using (session.Current)
+        {
+            BoardRecoveryExtraction lease = (await BoardRecoveryBackup.ReadDirectoryAsync(
+                session.Client, material.DurableParent, _fixture.NewCaseDirectory(name + "-scratch")))!;
+            Assert.NotNull(lease);
+            using (lease)
+            {
+                lease.Retain();
+                return lease.DirectoryPath;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Rewrites only the JSON kind of <c>schemaVersion</c> in an otherwise genuine receipt: model, recovery
+    /// partition identity and all three hashes stay exactly as the first session wrote them, so the kind guard
+    /// is the only check that can reject this marker.
+    /// </summary>
+    private static byte[] RewriteReceiptSchemaVersion(byte[] receipt, string kind)
+    {
+        JsonObject root = JsonNode.Parse(receipt)!.AsObject();
+        JsonNode? replacement = kind switch
+        {
+            "string" => JsonValue.Create("1"),
+            "null" => null,
+            "boolean" => JsonValue.Create(true),
+            "array" => new JsonArray(JsonValue.Create(1)),
+            "object" => new JsonObject { ["value"] = 1 },
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown schemaVersion kind."),
+        };
+        root["schemaVersion"] = replacement;
+        return Encoding.UTF8.GetBytes(root.ToJsonString());
+    }
+
+    private static string[] FreshExtractions(string durableParent, string keep) =>
+        Directory.GetDirectories(durableParent, "board-recovery-*")
+            .Where(directory => !string.Equals(directory, keep, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+    /// <summary>Removes only the fresh extractions this case created, so the next kind meets one candidate again.</summary>
+    private static void DeleteExtractionsExcept(string durableParent, string keep)
+    {
+        foreach (string directory in FreshExtractions(durableParent, keep))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static void AssertUnchangedInvalidCache(
+        string kind,
+        string directory,
+        string receiptPath,
+        byte[] tampered,
+        string manifestPath,
+        string manifestSha256,
+        int fileCount)
+    {
+        Assert.True(Directory.Exists(directory), $"{kind}: the invalid cache directory must not be deleted");
+        Assert.True(File.Exists(receiptPath), $"{kind}: the invalid receipt must not be deleted");
+        Assert.True(
+            tampered.AsSpan().SequenceEqual(File.ReadAllBytes(receiptPath)),
+            $"{kind}: the invalid receipt must stay byte-for-byte unchanged");
+        Assert.Equal(manifestSha256, HashFile(manifestPath), StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(fileCount, Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Length);
     }
 }
