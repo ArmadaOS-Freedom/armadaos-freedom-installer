@@ -214,10 +214,10 @@ public sealed class UpdatePackageImportTests
     }
 
     [Fact]
-    public void Core_AssemblyVersionIs08x()
+    public void Core_AssemblyVersionIs09x()
     {
         var version = typeof(PackageImporter).Assembly.GetName().Version;
         Assert.NotNull(version);
-        Assert.Equal("0.8.0", version!.ToString(3));
+        Assert.Equal("0.9.0", version!.ToString(3));
     }
 }

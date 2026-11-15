@@ -10,7 +10,7 @@
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <!-- Project-specific versions also determine their assembly and file versions.
          InformationalVersion is derived from Version by the SDK, so it is not repeated here. -->
-    <Version>0.8.0</Version>
+    <Version>0.9.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
