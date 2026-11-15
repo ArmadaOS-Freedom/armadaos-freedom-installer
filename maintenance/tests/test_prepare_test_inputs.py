@@ -3,10 +3,11 @@
 
 Only the pure input-mapping and validation helpers are exercised; the real
 prepare()/CMake run is a CI step, not a unit test.  Nothing here restates the
-build record schema beyond the public key names the mapper consumes, except the
-TB710FU bundle whose public variable and record key are pinned literally: the
-toolchain tests skip when that variable is unset, so a mapping omission must
-fail here instead of quietly dropping a suite.
+build record schema beyond the public key names the mapper consumes, except
+two suites that skip when their variables are unset: the TB710FU toolchain
+bundle, and the compiled-tool-pins pair (BUILD_TOOL_PINS_JSON plus the
+EDL_CLIENT_TEST_BINARY PE).  Their variable names are pinned literally so a
+mapping omission fails here instead of quietly dropping a suite.
 """
 
 import shutil
@@ -36,11 +37,19 @@ class ComposeEnvironmentTests(unittest.TestCase):
             content = b"MZ\x90\x00" if variable in prepare_test_inputs._WINDOWS_PE_VARIABLES else b"PK\x03\x04"
             inputs[key] = _touch(root / (key + ".bin"), content)
         props = _touch(root / "build-inputs.props", b"<Project />\n")
+        pins = _touch(
+            root / "tool-pins.json", b'{"schemaVersion": 1, "tools": {}}\n')
+        client = _touch(root / "edl-ng.exe", b"MZ\x90\x00")
         native = {}
         for variable in prepare_test_inputs._LINUX_ELF_VARIABLES:
             key = "unpacker" if "UNPACKER" in variable else "packer"
             native[variable] = _touch(root / (key + ".elf"), b"\x7fELF")
-        return {"inputs": inputs, "propsPath": props}, native
+        return {
+            "inputs": inputs,
+            "propsPath": props,
+            "toolPinsJson": pins,
+            "toolPaths": {"client": client},
+        }, native
 
     def test_maps_every_mandatory_variable_to_a_real_path(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -52,13 +61,54 @@ class ComposeEnvironmentTests(unittest.TestCase):
 
             expected = {variable for variable, _ in prepare_test_inputs._RECORD_INPUTS}
             expected.update(prepare_test_inputs._LINUX_ELF_VARIABLES)
-            expected.update({"TEST_ARTIFACT_ROOT", "EDL_CLIENT_TEST_WORK_ROOT",
+            expected.update({"BUILD_TOOL_PINS_JSON", "EDL_CLIENT_TEST_BINARY",
+                             "TEST_ARTIFACT_ROOT", "EDL_CLIENT_TEST_WORK_ROOT",
                              "CORE_TEST_PROPS_PATH"})
             self.assertEqual(expected, set(environment))
             self.assertTrue((work / "artifacts").is_dir())
             self.assertTrue((work / "edl-client").is_dir())
             self.assertEqual(record["propsPath"], environment["CORE_TEST_PROPS_PATH"])
             self.assertEqual(b"\x7fELF", Path(environment["EDL_RAW_LINUX_PACKER_PATH"]).read_bytes()[:4])
+
+    def test_tool_pins_and_client_binary_are_exported_by_literal_names(self):
+        # Literal names for the compiled-pins test: BUILD_TOOL_PINS_JSON gates
+        # the Fact and EDL_CLIENT_TEST_BINARY is the PE whose hash it compares,
+        # so both have to reach the environment even though neither lives in the
+        # inputs object the table under test covers.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record, native = self._fixture(root)
+
+            environment = prepare_test_inputs.compose_environment(record, native, root / "work")
+
+            self.assertEqual(
+                str(Path(record["toolPinsJson"]).resolve()),
+                environment["BUILD_TOOL_PINS_JSON"])
+            self.assertEqual(
+                str(Path(record["toolPaths"]["client"]).resolve()),
+                environment["EDL_CLIENT_TEST_BINARY"])
+            self.assertTrue(Path(environment["BUILD_TOOL_PINS_JSON"]).is_file())
+            self.assertTrue(Path(environment["EDL_CLIENT_TEST_BINARY"]).is_file())
+
+    def test_absent_tool_pins_json_aborts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record, native = self._fixture(root)
+            del record["toolPinsJson"]
+
+            with self.assertRaises(SystemExit) as raised:
+                prepare_test_inputs.compose_environment(record, native, root / "work")
+            self.assertIn("BUILD_TOOL_PINS_JSON", str(raised.exception))
+
+    def test_absent_client_tool_path_aborts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record, native = self._fixture(root)
+            del record["toolPaths"]["client"]
+
+            with self.assertRaises(SystemExit) as raised:
+                prepare_test_inputs.compose_environment(record, native, root / "work")
+            self.assertIn("EDL_CLIENT_TEST_BINARY", str(raised.exception))
 
     def test_missing_generated_archive_aborts(self):
         with tempfile.TemporaryDirectory() as temporary:

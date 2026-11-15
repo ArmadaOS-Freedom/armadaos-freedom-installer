@@ -47,7 +47,11 @@ _RECORD_INPUTS = (
     ("QUALCOMM_DRIVER_TEST_ARCHIVE", "BundledQualcommDriverArchive"),
 )
 
-_WINDOWS_PE_VARIABLES = {"EDL_RAW_PACKER_PATH", "EDL_RAW_UNPACKER_PATH"}
+_WINDOWS_PE_VARIABLES = {
+    "EDL_RAW_PACKER_PATH",
+    "EDL_RAW_UNPACKER_PATH",
+    "EDL_CLIENT_TEST_BINARY",
+}
 
 _LINUX_ELF_VARIABLES = {
     "EDL_RAW_LINUX_PACKER_PATH",
@@ -104,6 +108,17 @@ def compose_environment(record, native, work_root):
 
     for variable, key in _RECORD_INPUTS:
         environment[variable] = _require_file(_record_input(record, key), variable)
+
+    # These two record fields are top-level rather than ``inputs`` entries, and
+    # they gate the compiled-tool-pins test, so the names are written literally
+    # instead of being derived from a shared table.
+    environment["BUILD_TOOL_PINS_JSON"] = _require_file(
+        record.get("toolPinsJson"), "BUILD_TOOL_PINS_JSON")
+    tool_paths = record.get("toolPaths")
+    if not isinstance(tool_paths, dict):
+        raise SystemExit("test input error: build record has no toolPaths object")
+    environment["EDL_CLIENT_TEST_BINARY"] = _require_file(
+        tool_paths.get("client"), "EDL_CLIENT_TEST_BINARY")
 
     for variable in sorted(_WINDOWS_PE_VARIABLES):
         if not _magic(environment[variable]).startswith(b"MZ"):

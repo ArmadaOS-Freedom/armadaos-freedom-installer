@@ -27,6 +27,10 @@ python3 -B maintenance/run_unit_tests.py
 - `ARMADA_SYSTEM_SOURCE_PATH`：对公共 `ArmadaOS-Freedom/armadaos-freedom` 仓库做第二个 checkout（`ref: main`，无子模块、无 LFS、无额外大文件），指向其中的 `system_files` 源码，供 Python `boot_trust` 测试只读导入；
 - `/usr/libexec/armada/kshim-tools/{MultiBootKernelPatcher,UnpackTool}`：CLI 只信任这两个固定安装路径，所以工作流在一次性 Linux runner 上把上面已校验的原生 ELF 以 `0755` 安装到该处（root 属主、普通文件、非符号链接，不使用 Windows PE）。这是 CI runner 的准备步骤，不是生产部署，CLI 的信任检查本身未改变；需要本机复现 `SystemUpdateBootToolTests` 的 `build-raw`/编排用例时，同样要先把这两个 ELF 装到这两个路径。
 
+### 资源文件系统前置条件
+
+`core-tests-linux` 需要远超托管 runner 默认可用空间的可写空间：按各自既有的清理契约，测试在运行期间同时保留多个数 GiB 的零填充归档和镜像，单个测试类即可占用数十 GiB。因此该作业在 `RUNNER_TEMP` 下用 `mktemp -d` 新建本次运行专属的稀疏镜像（128 GiB），`mkfs.btrfs` 后用 `-o loop,compress-force=zstd:1` 挂载，只把 `TEST_ARTIFACT_ROOT` 和 `EDL_CLIENT_TEST_WORK_ROOT` 覆盖为该卷内的子目录，其余环境变量、测试属性和不加过滤的运行方式保持不变。测试写入的字节内容、文件长度和路径与原来完全相同，物理占用只因零数据被压缩而下降；归档格式、测试输入、断言和清理契约均未改变。TRX 结果通过 `--logger trx --results-directory` 写到卷外的专属 `RUNNER_TEMP` 路径。作业结束时只卸载并删除本次运行自己创建的挂载、镜像和空目录，卸载失败则保留镜像并让作业失败。本机复现同样需要一个容量足够、支持压缩的可写文件系统，否则会因空间不足而失败。
+
 ### 外部固件夹具的正式跳过
 
 少数测试需要本仓库无法再分发的输入：公开渠道的 G5 stock 固件（`G5_PUBLIC_ABL_PATH`、`G5_LOADER_FIXTURE_ROOT`），私有历史 EDL 日志（`EDL_CLIENT_LOADER_LOG_PATH`、`EDL_CLIENT_MISC_LOG_PATH`），以及私有的真实资产挂载（`MAINTENANCE_TEST_ASSET_ROOT`、`TF_NATIVE_PACKAGE_PATH`、`INTERNAL_INSTALL_MAINTENANCE_BOOT`、`INTERNAL_INSTALL_SUPPORT_ARCHIVE`、`INTERNAL_INSTALL_TOOLBOX`）。对应测试方法使用 `RequiredFixturesFact`/`RequiredFixturesTheory`（见 `RequiredFixtureAttributes.cs`），规则是：

@@ -99,7 +99,9 @@ jobs:
       # Dependencies of the checked-in build scripts: tools/build-boot-packers.sh
       # cross-compiles the Windows PE pins with mingw-w64; the native Linux
       # oracle needs cmake + a host C compiler; the Core process tests need
-      # python3 and ssh-keygen; the archive/driver tests need unzip and 7z.
+      # python3 and ssh-keygen; the archive/driver tests need unzip and 7z;
+      # btrfs-progs and util-linux provide the loop-mounted, compressing
+      # filesystem the test run keeps its large artefacts on.
       - name: Install public build and test dependencies
         shell: bash
         run: |
@@ -117,7 +119,9 @@ jobs:
             unzip \
             p7zip-full \
             busybox-static \
-            openssh-client
+            openssh-client \
+            btrfs-progs \
+            util-linux
 
       # The Python boot-trust tests import the public system sources, so a second
       # public checkout supplies them. This is ordinary public source, not a
@@ -202,6 +206,14 @@ jobs:
       # public inputs. Tests whose fixture needs non-public stock firmware or
       # private historical logs skip only while their whole fixture family is
       # absent; a provided but malformed family still fails its validator.
+      #
+      # The run keeps several multi-GiB zero-filled archives and images alive
+      # at once under the tests' existing cleanup contracts, which is far more
+      # than the runner's free space. They are therefore placed on a private
+      # sparse btrfs loop volume with forced zstd compression: same bytes, same
+      # file lengths, same paths, same real I/O, but physical space is only
+      # paid for non-zero data. No archive format, input, assertion or cleanup
+      # contract is changed, and the volume is owned and removed by this step.
       - name: Run the complete Core test suite
         shell: bash
         run: |
@@ -209,11 +221,61 @@ jobs:
           set -a
           . "${RUNNER_TEMP}/armada-core-test-env.sh"
           set +a
+
+          volume_root="$(mktemp -d "${RUNNER_TEMP}/armada-core-volume.XXXXXXXX")"
+          image="${volume_root}/volume.img"
+          mnt="${volume_root}/mnt"
+          trx="$(mktemp -d "${RUNNER_TEMP}/armada-core-trx.XXXXXXXX")"
+          mounted=0
+          cleanup() {
+            code=$?
+            trap - EXIT
+            case "${volume_root}" in
+              "${RUNNER_TEMP:?}"/?*) ;;
+              *) echo "cleanup error: refusing '${volume_root}'" >&2; exit 1 ;;
+            esac
+            if [ "${mounted}" -eq 1 ]; then
+              if ! sudo umount "${mnt}"; then
+                echo "cleanup error: unmount failed, keeping ${image}" >&2
+                exit 1
+              fi
+              mounted=0
+            fi
+            rm -f "${image}"
+            rmdir "${mnt}" "${volume_root}"
+            exit "${code}"
+          }
+          trap cleanup EXIT
+
+          mkdir "${mnt}"
+          truncate -s 128G "${image}"
+          sudo mkfs.btrfs -q -f "${image}"
+          sudo mount -t btrfs -o loop,compress-force=zstd:1 "${image}" "${mnt}"
+          mounted=1
+          sudo chown "$(id -u):$(id -g)" "${mnt}"
+          export TEST_ARTIFACT_ROOT="${mnt}/artifacts"
+          export EDL_CLIENT_TEST_WORK_ROOT="${mnt}/edl-client"
+          mkdir -p "${TEST_ARTIFACT_ROOT}" "${EDL_CLIENT_TEST_WORK_ROOT}"
+          echo "::group::test volume"
+          findmnt -no TARGET,FSTYPE,OPTIONS "${mnt}"
+          df -h "${mnt}"
+          echo "::endgroup::"
+
+          status=0
           echo "::group::dotnet test FreedomInstaller.Core.Tests"
           dotnet test tests/FreedomInstaller.Core.Tests/FreedomInstaller.Core.Tests.csproj \
             --configuration Release --nologo \
-            -p:BundledBuildInputsProps="${CORE_TEST_PROPS_PATH}"
+            -p:BundledBuildInputsProps="${CORE_TEST_PROPS_PATH}" \
+            --logger trx --results-directory "${trx}" || status=$?
           echo "::endgroup::"
+
+          echo "::group::test volume usage"
+          df -h "${mnt}" || true
+          du -sh --apparent-size "${TEST_ARTIFACT_ROOT}" "${EDL_CLIENT_TEST_WORK_ROOT}" || true
+          du -sh "${TEST_ARTIFACT_ROOT}" "${EDL_CLIENT_TEST_WORK_ROOT}" || true
+          du -h "${image}" || true
+          echo "::endgroup::"
+          exit "${status}"
 
   # Deliberately separate from the ordinary maintenance discovery: these cases
   # execute the real generated cleanup.sh with a real BusyBox, mount tmpfs and
