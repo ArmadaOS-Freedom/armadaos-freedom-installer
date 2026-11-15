@@ -57,7 +57,7 @@ public sealed class EdlRawBootKshimHybridTests
     // ------------------------------------------------------------ 1. the real build path
 
     [Fact]
-    public async Task FullBuild_ProjectWrappedKshimHybrid_RebuildsSignedAospCandidateOverAuthenticatedDescriptor()
+    public async Task FullBuild_ProjectWrappedKshimHybrid_TwoOwnerChain_PreservesOemLeafOverRebuiltCandidate()
     {
         EdlRawGblEnvelopeTests.SharedFixture fx = _fixture;
         string caseDir = NewCaseDirectory(fx);
@@ -145,6 +145,63 @@ public sealed class EdlRawBootKshimHybridTests
         Assert.False(built.Envelope.OemSigned);
         Assert.True(built.Envelope.SignatureVerificationPerformed);
 
+        // ------------------------------------------------ second owner: real preservation chain
+        // The actual GBL helper now runs over the real built candidate. Its footer carries the NEW
+        // payload boundary while the hybrid source's authenticated OEM descriptor still signs the
+        // stock size — the exact shape that failed in the second consumer on the device.
+        string builtCandidateSha = Sha256OfFile(built.CandidateBoot.Path);
+        string effectivePath = Path.Combine(caseDir, "effective.img");
+
+        object preserved = (await InvokeAwaitAsync(
+            PreserveMethod(),
+            built,
+            Claim(hybridPath),
+            effectivePath,
+            CancellationToken.None))!;
+        var preservedLease = Assert.IsAssignableFrom<IDisposable>(preserved);
+        _stagedSources.Add(preservedLease);
+
+        Assert.Equal(partitionLength, new FileInfo(effectivePath).Length);
+
+        // The new footer keeps the built candidate's payload boundary and relocates the original
+        // blob size; the stock payload size is never restored.
+        (long effectiveImageSize, long effectiveBlobOffset, long effectiveBlobSize) =
+            ReadFooter(effectivePath);
+        Assert.Equal(built.Envelope.OriginalImageSize, effectiveImageSize);
+        Assert.Equal(built.Envelope.VbmetaOffset, effectiveBlobOffset);
+        Assert.Equal(sourceBlob.Length, effectiveBlobSize);
+        Assert.NotEqual(signedOldSize, effectiveImageSize);
+
+        // The effective OEM vbmeta is the genuine original, byte for byte and RSA-authentic.
+        byte[] effectiveBlob = ReadRange(effectivePath, effectiveBlobOffset, effectiveBlobSize);
+        Assert.True(effectiveBlob.AsSpan().SequenceEqual(sourceBlob));
+        Assert.Equal(ToHex(SHA256.HashData(sourceBlob)), ToHex(SHA256.HashData(effectiveBlob)));
+        AvbFixture.AssertAuthenticatedSignedBlob(effectiveBlob);
+
+        // Leaf key and rollback fields stay the original signed ones, not the AOSP candidate's.
+        Assert.Equal(VbmetaPublicKeyShaHex(sourceBlob), VbmetaPublicKeyShaHex(effectiveBlob));
+        Assert.NotEqual(VbmetaPublicKeyShaHex(candidateBlob), VbmetaPublicKeyShaHex(effectiveBlob));
+        Assert.Equal(ReadBeU64(sourceBlob, 112), ReadBeU64(effectiveBlob, 112));
+        Assert.Equal(ReadBeU32(sourceBlob, 124), ReadBeU32(effectiveBlob, 124));
+
+        // The stored OEM digest is still the original signed value over the stock body; it is never
+        // reinterpreted as authenticating the new payload.
+        (long effectiveSignedSize, byte[] effectiveSalt, byte[] effectiveDigest) =
+            ParseBootHashDescriptor(effectiveBlob);
+        Assert.Equal(signedOldSize, effectiveSignedSize);
+        Assert.True(effectiveSalt.AsSpan().SequenceEqual(sourceSalt));
+        Assert.True(effectiveDigest.AsSpan().SequenceEqual(sourceDigest));
+        Assert.Equal(ToHex(sourceDigest), SaltedSha256Hex(sourceSalt, fx.NormalOriginal.Path, signedOldSize));
+        Assert.NotEqual(ToHex(effectiveDigest), SaltedSha256Hex(sourceSalt, effectivePath, effectiveImageSize));
+
+        // The physical payload prefix is the built candidate's own bytes, copied unchanged.
+        Assert.Equal(
+            Sha256OfPrefix(built.CandidateBoot.Path, effectiveImageSize),
+            Sha256OfPrefix(effectivePath, effectiveImageSize));
+
+        // Dispose the owned lease while its borrowed source is still alive.
+        preservedLease.Dispose();
+
         // The preserved composite kernel of the input source is untouched byte for byte.
         long kernelBytes = ReadLeU32(hybridHeader, 8);
         Assert.Equal(
@@ -155,6 +212,7 @@ public sealed class EdlRawBootKshimHybridTests
         Assert.Equal(hybridSha, Sha256OfFile(hybridPath));
         Assert.Equal(originalSha, Sha256OfFile(fx.NormalOriginal.Path));
         Assert.Equal(sourceCandidateSha, Sha256OfFile(fx.NormalBuilt.CandidateBoot.Path));
+        Assert.Equal(builtCandidateSha, Sha256OfFile(built.CandidateBoot.Path));
     }
 
     // ------------------------------------------------------------ 2. direct repacker entry
