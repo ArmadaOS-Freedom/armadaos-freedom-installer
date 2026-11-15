@@ -669,43 +669,53 @@ public sealed partial class InternalInstallExistingBackupTests
                 }
             }
 
+            // The outer finally deletes this case's own fresh fixtures on any failure; the inner finally only
+            // disposes the lease, so the assertions right after it still see exactly what that dispose did.
             try
             {
-                Assert.True(
-                    error is null,
-                    $"{kind}: an optional cache marker must never fail the discovery of an intact archive: {error}");
-                Assert.NotNull(lease);
-                BoardRecoveryExtraction extracted = lease!;
-                Assert.NotEqual(invalidDirectory, extracted.DirectoryPath, StringComparer.OrdinalIgnoreCase);
-                Assert.True(File.Exists(Path.Combine(extracted.DirectoryPath, ManifestFileName)));
-                Assert.True(File.Exists(Path.Combine(extracted.DirectoryPath, "misc.bin")));
+                try
+                {
+                    Assert.True(
+                        error is null,
+                        $"{kind}: an optional cache marker must never fail the discovery of an intact archive: {error}");
+                    Assert.NotNull(lease);
+                    BoardRecoveryExtraction extracted = lease!;
+                    Assert.NotEqual(invalidDirectory, extracted.DirectoryPath, StringComparer.OrdinalIgnoreCase);
+                    Assert.True(File.Exists(Path.Combine(extracted.DirectoryPath, ManifestFileName)));
+                    Assert.True(File.Exists(Path.Combine(extracted.DirectoryPath, "misc.bin")));
 
-                Assert.Contains(second.Runner.Reads, read =>
-                    read.Lun == 0 && read.StartSector == second.ArchiveStart && read.SectorCount == second.ArchiveSectors);
-                Assert.Empty(second.Runner.Writes);
-                Assert.Equal(0, second.Runner.ResetCount);
+                    Assert.Contains(second.Runner.Reads, read =>
+                        read.Lun == 0 && read.StartSector == second.ArchiveStart
+                        && read.SectorCount == second.ArchiveSectors);
+                    Assert.Empty(second.Runner.Writes);
+                    Assert.Equal(0, second.Runner.ResetCount);
 
-                string[] fresh = FreshExtractions(material.DurableParent, invalidDirectory);
+                    string[] fresh = FreshExtractions(material.DurableParent, invalidDirectory);
+                    Assert.True(
+                        fresh.Length == 1,
+                        $"{kind}: exactly one fresh fallback extraction was expected, found {fresh.Length}");
+                }
+                finally
+                {
+                    // This lease was never retained, so disposing it removes only the directory it created.
+                    lease?.Dispose();
+                }
+
+                // Checked before any manual cleanup: only the unretained dispose may have removed the fresh
+                // extraction, so a dispose that failed to delete it can never hide behind the delete below.
+                string[] remaining = Directory.GetDirectories(material.DurableParent, "board-recovery-*");
                 Assert.True(
-                    fresh.Length == 1,
-                    $"{kind}: exactly one fresh fallback extraction was expected, found {fresh.Length}");
+                    remaining.Length == 1
+                        && string.Equals(remaining[0], invalidDirectory, StringComparison.OrdinalIgnoreCase),
+                    $"{kind}: the unretained lease must remove only its own extraction and keep the invalid cache");
+                AssertUnchangedInvalidCache(
+                    kind, invalidDirectory, receiptPath, tampered, cachedManifestPath, cachedManifestSha256,
+                    cachedFileCount);
             }
             finally
             {
-                // This lease was never retained, so disposing it removes only the directory it created.
-                lease?.Dispose();
                 DeleteExtractionsExcept(material.DurableParent, invalidDirectory);
             }
-
-            // The unretained lease removed exactly its own extraction; the invalid cache directory is the only one left.
-            string[] remaining = Directory.GetDirectories(material.DurableParent, "board-recovery-*");
-            Assert.True(
-                remaining.Length == 1
-                    && string.Equals(remaining[0], invalidDirectory, StringComparison.OrdinalIgnoreCase),
-                $"{kind}: the unretained lease must remove only its own extraction and keep the invalid cache");
-            AssertUnchangedInvalidCache(
-                kind, invalidDirectory, receiptPath, tampered, cachedManifestPath, cachedManifestSha256,
-                cachedFileCount);
         }
     }
 
