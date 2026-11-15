@@ -262,7 +262,8 @@ public static partial class PackageReader
             version,
             testOnly,
             storage,
-            Convert.ToHexString(SHA256.HashData(rawMetadata)));
+            // Uppercase stays this contract's exact text output; only the digest computation is shared.
+            Sha256Text.Hex(rawMetadata).ToUpperInvariant());
     }
 
     /// <summary>
@@ -549,7 +550,7 @@ public static partial class PackageReader
                 continue;
             }
 
-            if (sha256.Length != Sha256HexLength || !IsHex(sha256))
+            if (!Sha256Text.IsHex(sha256))
             {
                 reasons.Add($"{label} 的 sha256 不是 {Sha256HexLength} 位十六进制字符串。");
                 continue;
@@ -1084,23 +1085,7 @@ public static partial class PackageReader
     }
 
     /// <summary>Exactly 64 characters of lowercase hexadecimal, as used for ostree commits and digests.</summary>
-    private static bool IsLowerSha256Hex(string value)
-    {
-        if (value.Length != Sha256HexLength)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (!(char.IsAsciiDigit(character) || (character >= 'a' && character <= 'f')))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsLowerSha256Hex(string value) => Sha256Text.IsHex(value, lowercaseOnly: true);
 
     private static byte[] ComputeSha256(string path)
     {

@@ -147,8 +147,7 @@ public sealed class OfflineUpdateBootstrapCoordinator
         ArgumentNullException.ThrowIfNull(openScript);
         ArgumentNullException.ThrowIfNull(openBundle);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedBundleSha256);
-        if (expectedBundleSha256.Length != 64 ||
-            expectedBundleSha256.Any(c => !(c is >= '0' and <= '9' or >= 'a' and <= 'f')))
+        if (!Sha256Text.IsHex(expectedBundleSha256, lowercaseOnly: true))
         {
             throw new ArgumentException(
                 "The expected updater bundle SHA-256 must be 64 lowercase hexadecimal characters.",

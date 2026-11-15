@@ -2176,7 +2176,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         }
 
         byte[] manifestBytes = ReadAllBytes(manifestStream, MaximumManifestBytes, cancellationToken);
-        string manifestSha256 = Convert.ToHexString(SHA256.HashData(manifestBytes));
+        string manifestSha256 = Sha256Text.Hex(manifestBytes).ToUpperInvariant();
 
         if (!SameSha(manifestSha256, backup.ManifestSha256))
         {
@@ -4099,7 +4099,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         }
 
         byte[] bytes = buffer.ToArray();
-        sha256 = Convert.ToHexString(SHA256.HashData(bytes));
+        sha256 = Sha256Text.Hex(bytes).ToUpperInvariant();
         return bytes;
     }
 
@@ -4743,12 +4743,9 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             throw new InvalidDataException(subject + " is not a 64 character SHA-256.");
         }
 
-        foreach (char character in value)
+        if (!Sha256Text.IsHex(value))
         {
-            if (!char.IsAsciiHexDigit(character))
-            {
-                throw new InvalidDataException(subject + " is not hexadecimal.");
-            }
+            throw new InvalidDataException(subject + " is not hexadecimal.");
         }
     }
 

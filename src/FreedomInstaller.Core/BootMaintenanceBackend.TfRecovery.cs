@@ -703,11 +703,7 @@ public sealed partial class BootMaintenanceBackend
         return Sha256Hex(buffer.ToArray());
     }
 
-    private static string Sha256Hex(byte[] data)
-    {
-        using var sha = SHA256.Create();
-        return Convert.ToHexString(sha.ComputeHash(data)).ToLowerInvariant();
-    }
+    private static string Sha256Hex(byte[] data) => Sha256Text.Hex(data);
 
     private static TfRollbackJournal OpenTfRollbackJournal(string journalPath)
     {
@@ -1048,20 +1044,7 @@ public sealed partial class BootMaintenanceBackend
             throw new InvalidOperationException($"Rollback journal {field} must be a SHA-256 hex digest.");
     }
 
-    private static bool IsHex64(string value)
-    {
-        foreach (var c in value)
-        {
-            if (c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F')
-            {
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
-    }
+    private static bool IsHex64(string value) => Sha256Text.IsHex(value);
 
     private sealed class TfRollbackJournalData
     {

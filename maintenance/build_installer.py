@@ -15,12 +15,15 @@ Phases
 7. emit MSBuild props + build record (atomic last-success pointers)
 
 After prepare(), the CLI optionally runs `dotnet publish` of the WPF app against
-the freshly generated props file.  A publish requires the paired
---offline-bootstrap-script and --offline-updater-bundle inputs; they are local
-artefacts of the system offline updater bundle build, never downloaded here.
-The pair is copied into the per-run directory before it is validated, and the
-props, the record digests and the publish all read only that snapshot, so an
-edit to the originals cannot change what is embedded.
+the freshly generated props file.  A normal complete publish needs no offline
+bootstrap inputs: the system image already provides the update service and the
+application connects to it directly.  The paired --offline-bootstrap-script and
+--offline-updater-bundle inputs are an advanced legacy option; when either is
+supplied both are required, and the pair is copied into the per-run directory
+before it is validated.  The props, the record digests and the publish all read
+only that snapshot, so an edit to the originals cannot change what is embedded.
+They are local artefacts of the system offline updater bundle build, never
+downloaded here.
 
 Stdlib only. No GitHub API, no auth, no devices, no broad cleanup.
 """
@@ -62,8 +65,9 @@ _PROPERTY_NAMES = (
     "BundledGblRowEfi",
 )
 
-# Optional paired inputs: embedded only when supplied, and required for a
-# single-file publish.  They are built by the system repository's
+# Optional paired legacy inputs: embedded only when supplied.  A single-file
+# publish may omit both; when either is supplied both are required.  They are
+# built by the system repository's
 # build_files/build-offline-updater-bundle.py from a full ARM64 image root and
 # copied into the build environment as ordinary local files; this build never
 # downloads or regenerates them.
@@ -528,10 +532,11 @@ def _stage_offline_asset(prop, source, dest_dir, limit=None):
 def _validate_offline_inputs(script, bundle, work_dir):
     """Stage then validate the optional paired offline-bootstrap inputs.
 
-    Both paths must be supplied together, and each must be an existing,
-    readable regular file of 1..256 MiB: both artefacts are uploaded through
-    the same managed SSH session, so neither may exceed the transport limit
-    the runtime enforces.  The pair is copied into a fresh, isolated run
+    Omitting both is the normal complete build.  When either is supplied, both
+    must be supplied together, and each must be an existing, readable regular
+    file of 1..256 MiB: both artefacts are uploaded through the same managed
+    SSH session, so neither may exceed the transport limit the runtime
+    enforces.  The pair is copied into a fresh, isolated run
     directory with bounded streaming, and only those snapshots are read from
     then on: the manifest, the entry bytes, the props, the record digests and
     the publish all refer to the snapshot, never to the mutable originals.
@@ -797,9 +802,9 @@ def _write_props(path, inputs, offline_updater_version=None):
             raise SystemExit(f"props error: missing input property {prop}")
         value = str(Path(inputs[prop]).resolve())
         lines.append(f"    <{prop}>{_xml_escape(value)}</{prop}>")
-    # The offline bootstrap pair is optional: a prepare-only run may omit it,
-    # while a single-file publish requires both.  Its version is a value, not
-    # a path, and comes from the already validated manifest.
+    # The offline bootstrap pair is always optional: a normal complete run
+    # omits both, while supplying either requires both.  Its version is a
+    # value, not a path, and comes from the already validated manifest.
     for prop in _OFFLINE_PROPERTY_NAMES:
         if prop not in inputs:
             continue
@@ -1160,35 +1165,37 @@ def main(argv=None):
         "--offline-bootstrap-script",
         default=None,
         help=(
-            "Existing armada-offline-bootstrap script built by the system "
-            "build_files/build-offline-updater-bundle.py; required with "
-            "--offline-updater-bundle for a single-file publish."
+            "Optional advanced legacy input: an existing armada-offline-bootstrap "
+            "script built by the system "
+            "build_files/build-offline-updater-bundle.py. Omit it for a normal "
+            "complete build; if supplied, --offline-updater-bundle is required "
+            "as well."
         ),
     )
     parser.add_argument(
         "--offline-updater-bundle",
         default=None,
         help=(
-            "Existing armada-offline-updater.tar.gz bundle built by the system "
-            "build_files/build-offline-updater-bundle.py; required with "
-            "--offline-bootstrap-script for a single-file publish."
+            "Optional advanced legacy input: an existing "
+            "armada-offline-updater.tar.gz bundle built by the system "
+            "build_files/build-offline-updater-bundle.py. Omit it for a normal "
+            "complete build; if supplied, --offline-bootstrap-script is "
+            "required as well."
         ),
     )
     args = parser.parse_args(argv)
 
-    if not args.prepare_only:
-        if not args.output_dir:
-            parser.error("--output-dir is required unless --prepare-only is set")
-        # A single-file publish without the offline bootstrap pair would
-        # silently ship an installer that cannot deploy the updater.  Fail
-        # here, before prepare() starts compiling anything.
-        if not args.offline_bootstrap_script or not args.offline_updater_bundle:
-            parser.error(
-                "single-file publish requires both --offline-bootstrap-script "
-                "and --offline-updater-bundle (the paired local artefacts from "
-                "the system offline updater bundle build); use --prepare-only "
-                "only when you do not intend to publish the single EXE"
-            )
+    if not args.prepare_only and not args.output_dir:
+        parser.error("--output-dir is required unless --prepare-only is set")
+    # Supplying only one half of the optional legacy pair is ambiguous: fail
+    # here, before prepare() reads the manifest, downloads anything or
+    # compiles a tool - for both a full publish and a prepare-only run.
+    # Omitting both is the normal complete build.
+    if bool(args.offline_bootstrap_script) != bool(args.offline_updater_bundle):
+        parser.error(
+            "--offline-bootstrap-script and --offline-updater-bundle must be "
+            "supplied together; omit both for a normal complete build"
+        )
 
     repo_root = Path(_HERE).resolve().parent
     work_dir = Path(args.work_dir).resolve()

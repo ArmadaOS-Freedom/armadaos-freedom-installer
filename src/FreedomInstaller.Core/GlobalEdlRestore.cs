@@ -1043,7 +1043,7 @@ public static class GlobalEdlRestore
         }
 
         byte[] bytes = File.ReadAllBytes(backup.ManifestPath);
-        string sha = Convert.ToHexString(SHA256.HashData(bytes));
+        string sha = Sha256Text.Hex(bytes).ToUpperInvariant();
 
         if (!string.Equals(sha, backup.ManifestSha256, StringComparison.OrdinalIgnoreCase))
         {
@@ -1083,7 +1083,7 @@ public static class GlobalEdlRestore
                 .Append(";total=").Append(Invariant(lun.TotalSectors)).Append('\n');
         }
 
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(body.ToString())));
+        return Sha256Text.Hex(Encoding.UTF8.GetBytes(body.ToString())).ToUpperInvariant();
     }
 
     private static string ComputeConfirmationId(
@@ -1126,7 +1126,7 @@ public static class GlobalEdlRestore
         body.Append("bcb=").Append(bcbOverlaySha256.ToUpperInvariant()).Append('\n');
         body.Append("clearData=true\n");
 
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(body.ToString())));
+        return Sha256Text.Hex(Encoding.UTF8.GetBytes(body.ToString())).ToUpperInvariant();
     }
 
     private static void AppendIdentity(StringBuilder body, GlobalEdlIdentity identity)
@@ -1827,8 +1827,7 @@ public static class GlobalEdlRestore
         using FileStream stream = new(
             path, FileMode.Open, FileAccess.Read, FileShare.Read, CopyBufferBytes, FileOptions.SequentialScan);
 
-        byte[] hash = SHA256.HashData(stream);
-        return Convert.ToHexString(hash);
+        return Sha256Text.HexOfStream(stream).ToUpperInvariant();
     }
 
     private static void SaveJournal(string path, GlobalEdlRestoreJournal journal)

@@ -546,12 +546,9 @@ public static class InternalSlotMaterialReader
         {
             throw Reject(role, "claimed sha256 must be 64 hex characters");
         }
-        foreach (char c in claimed)
+        if (!Sha256Text.IsHex(claimed))
         {
-            if (!char.IsAsciiHexDigit(c))
-            {
-                throw Reject(role, "claimed sha256 is not hexadecimal");
-            }
+            throw Reject(role, "claimed sha256 is not hexadecimal");
         }
         return claimed.ToLowerInvariant();
     }
@@ -1516,8 +1513,7 @@ public static class InternalSlotMaterialReader
     private static ulong ReadUInt64(byte[] data, int offset) =>
         BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(offset, 8));
 
-    private static string Sha256Hex(byte[] data) =>
-        Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+    private static string Sha256Hex(byte[] data) => Sha256Text.Hex(data);
 
     private static InvalidDataException Reject(string role, string message) =>
         new InvalidDataException($"{role}: {message}");

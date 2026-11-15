@@ -76,6 +76,9 @@
     <!-- Same reason: the offline SSH probe's bundle-manifest reader is plain BCL code, so linking it
          lets the harness parsing that binds the coordinator to the real bundle be tested headlessly. -->
     <Compile Include="..\OfflineSshProbe\BundleManifestVersion.cs" Link="BundleManifestVersion.cs" />
+    <!-- Same reason: the SHA-256 text rules are internal to Core, so the focused regression links the
+         exact production source into this assembly instead of widening Core's public surface. -->
+    <Compile Include="..\..\src\FreedomInstaller.Core\Sha256Text.cs" Link="Sha256Text.cs" />
   </ItemGroup>
 
   <ItemGroup>

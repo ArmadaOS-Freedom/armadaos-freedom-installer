@@ -677,7 +677,7 @@ public sealed class OfflineUpdateTransfer
 
     private static string Sha(string value)
     {
-        if (value.Length != 64 || value.Any(c => !(c is >= '0' and <= '9' or >= 'a' and <= 'f')))
+        if (value.Length != 64 || !Sha256Text.IsHex(value, lowercaseOnly: true))
             throw new InvalidDataException("SHA256 必须为 64 位小写十六进制。");
         return value;
     }

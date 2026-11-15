@@ -1115,7 +1115,7 @@ public sealed partial class BootMaintenanceBackend
             writer.WriteEndObject();
         }
 
-        return Convert.ToHexString(SHA256.HashData(buffer.ToArray()));
+        return Sha256Text.Hex(buffer.ToArray()).ToUpperInvariant();
     }
 
     private static async Task<TfStagedFile> StageFileAsync(VerifiedEdlFile claim, string destinationPath, CancellationToken ct)

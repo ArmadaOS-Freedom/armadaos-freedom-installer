@@ -628,14 +628,9 @@ public static partial class PackageImporter
             throw new InvalidDataException($"{label} 必须为 64 位小写十六进制 SHA256。");
         }
 
-        foreach (var ch in sha256)
+        if (!Sha256Text.IsHex(sha256, lowercaseOnly: true))
         {
-            var isDigit = ch is >= '0' and <= '9';
-            var isLowerHex = ch is >= 'a' and <= 'f';
-            if (!isDigit && !isLowerHex)
-            {
-                throw new InvalidDataException($"{label} 包含非小写十六进制字符。");
-            }
+            throw new InvalidDataException($"{label} 包含非小写十六进制字符。");
         }
 
         return sha256;

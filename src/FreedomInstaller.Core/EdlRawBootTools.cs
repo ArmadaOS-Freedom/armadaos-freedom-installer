@@ -27,8 +27,6 @@ public sealed class EdlRawBootTools : IDisposable
 
     private const int HashBufferBytes = 81920;
 
-    private const int Sha256HexLength = 64;
-
     private const long PackerBytes = CompiledToolPins.PackerBytes;
 
     private const string PackerSha256 = CompiledToolPins.PackerSha256;
@@ -305,26 +303,14 @@ public sealed class EdlRawBootTools : IDisposable
     /// </summary>
     private static string HashHeld(FileStream stream, CancellationToken cancellationToken)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(HashBufferBytes);
         try
         {
             stream.Position = 0;
-
-            using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            int read;
-            while ((read = stream.Read(buffer, 0, HashBufferBytes)) > 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                hasher.AppendData(buffer, 0, read);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            return Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
+            return Sha256Text.HexOfStream(stream, cancellationToken);
         }
         finally
         {
             stream.Position = 0;
-            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
@@ -340,23 +326,7 @@ public sealed class EdlRawBootTools : IDisposable
         }
     }
 
-    private static bool IsSha256Hex(string? value)
-    {
-        if (value is null || value.Length != Sha256HexLength)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (!char.IsAsciiHexDigit(character))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsSha256Hex(string? value) => Sha256Text.IsHex(value);
 
     private static InvalidOperationException PinMismatch(string subject) =>
         new(PinMismatchCode + ": the " + subject + " does not match the compiled EDL raw boot tool pin.");

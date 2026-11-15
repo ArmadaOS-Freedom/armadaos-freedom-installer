@@ -717,25 +717,7 @@ public static partial class EdlRawBootBuilder
         throw new InvalidDataException(role + " is still entirely zero");
     }
 
-    private static bool InitBIsSha256Hex(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (char character in value)
-        {
-            if (character is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F'))
-            {
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
-    }
+    private static bool InitBIsSha256Hex(string? value) => Sha256Text.IsHex(value);
 
     private static string InitBRequirePlainFile(string? path, string subject)
     {

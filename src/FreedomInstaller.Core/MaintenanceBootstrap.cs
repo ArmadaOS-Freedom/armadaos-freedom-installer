@@ -311,23 +311,7 @@ public sealed partial class MaintenanceBootstrap
         }
     }
 
-    private static bool IsSha256Digest(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (!Uri.IsHexDigit(character))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsSha256Digest(string? value) => Sha256Text.IsHex(value);
 
     private async Task<IdentitySnapshot> ProveRamIdentityAsync(CancellationToken cancellationToken)
     {
@@ -686,7 +670,7 @@ public sealed partial class MaintenanceBootstrap
 
     private async Task<string> WriteTokenFileAsync(CancellationToken cancellationToken)
     {
-        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        var token = Sha256Text.Hex(RandomNumberGenerator.GetBytes(32));
 
         var transcript = await _console
             .RunCommandAsync(BuildTokenScript(token), TokenMarker, TokenTimeout, cancellationToken)

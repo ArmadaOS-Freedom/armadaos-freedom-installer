@@ -1756,7 +1756,7 @@ public sealed class EdlClient
                 $"expected {expectedBytes}.");
         }
 
-        string sha256 = Convert.ToHexString(SHA256.HashData(verify));
+        string sha256 = Sha256Text.HexOfStream(verify).ToUpperInvariant();
 
         return new EdlReadEvidence(
             geometry,
@@ -1778,7 +1778,7 @@ public sealed class EdlClient
                 $"The verified file '{file.Path}' is {source.Length} bytes, but the claim says {file.Length}.");
         }
 
-        string actual = Convert.ToHexString(SHA256.HashData(source));
+        string actual = Sha256Text.HexOfStream(source).ToUpperInvariant();
         if (!string.Equals(actual, file.Sha256, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
@@ -2003,27 +2003,7 @@ public sealed class EdlClient
         return true;
     }
 
-    private static bool IsSha256Hex(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (char character in value)
-        {
-            bool isHex = character is >= '0' and <= '9'
-                or >= 'a' and <= 'f'
-                or >= 'A' and <= 'F';
-
-            if (!isHex)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsSha256Hex(string? value) => Sha256Text.IsHex(value);
 
     private static string Describe(string[] lines)
     {

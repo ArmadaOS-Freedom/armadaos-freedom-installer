@@ -179,7 +179,7 @@ public static partial class GlobalEdlBackup
             }
         }
 
-        string actualSha = Convert.ToHexString(SHA256.HashData(sectorBytes));
+        string actualSha = Sha256Text.Hex(sectorBytes).ToUpperInvariant();
         if (!string.Equals(actualSha, deviceSha, StringComparison.OrdinalIgnoreCase))
         {
             throw GlobalVabUnconfirmed("the misc probe file digest does not match the device read.");

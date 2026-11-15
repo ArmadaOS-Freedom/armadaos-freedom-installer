@@ -103,7 +103,7 @@ public sealed class OfflineUpdateSshHostTrustStore
     {
         var bytes = Encoding.UTF8.GetBytes(
             host + ":" + port.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        return Sha256Text.Hex(bytes);
     }
 
     private static byte[] Serialize(string host, int port, OfflineUpdateSshKey key)

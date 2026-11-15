@@ -1866,6 +1866,13 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
 
     internal Action<IB001Read>? BeforeFileWrite { get; set; }
 
+    /// <summary>
+    /// Opt-in only: the raw-geometry probe reads exactly LBA 0, count 1 through <c>read-sector</c>, so a test
+    /// that exercises <see cref="EdlClient.ProbeRawGeometryAsync"/> needs the storage_info geometry appended to
+    /// that read's output. The default stays <c>false</c>, and ordinary reads never change their output.
+    /// </summary>
+    internal bool EmitGeometryOnSingleSectorRead { get; set; }
+
     public Task<ProcessResult> RunAsync(ProcessCommand command, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -1968,7 +1975,7 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
 
         long expected = read.SectorCount * IB001SyntheticDevice.SectorSize;
         int exitCode = ReadExitCode?.Invoke(read) ?? 0;
-        string output = E003EdlTestData.ReadSuccess(read.Lun, read.StartSector, read.SectorCount, expected, read.FilePath);
+        string output = ReadOutput(read, expected);
         return Task.FromResult(new ProcessResult(exitCode, output, string.Empty));
     }
 
@@ -1983,8 +1990,21 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
 
         long expected = read.SectorCount * IB001SyntheticDevice.SectorSize;
         int exitCode = ReadExitCode?.Invoke(read) ?? 0;
-        string output = E003EdlTestData.ReadSuccess(read.Lun, read.StartSector, read.SectorCount, expected, read.FilePath);
+        string output = ReadOutput(read, expected);
         return new ProcessResult(exitCode, output, string.Empty);
+    }
+
+    private string ReadOutput(IB001Read read, long expected)
+    {
+        string output = E003EdlTestData.ReadSuccess(
+            read.Lun, read.StartSector, read.SectorCount, expected, read.FilePath);
+
+        if (EmitGeometryOnSingleSectorRead && read.StartSector == 0 && read.SectorCount == 1)
+        {
+            output += "\n" + E003EdlTestData.Geometry(read.Lun, _device.TotalSectors(read.Lun));
+        }
+
+        return output;
     }
 
     /// <summary>

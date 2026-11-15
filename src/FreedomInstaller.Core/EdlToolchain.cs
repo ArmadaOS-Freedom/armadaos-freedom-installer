@@ -677,26 +677,7 @@ namespace FreedomInstaller.Core
             return jsonValue != null && jsonValue.TryGetValue<long>(out value);
         }
 
-        private static bool IsSha256Hex(string value)
-        {
-            if (value.Length != 64)
-            {
-                return false;
-            }
-
-            foreach (var c in value)
-            {
-                var isHex = (c >= '0' && c <= '9') ||
-                            (c >= 'a' && c <= 'f') ||
-                            (c >= 'A' && c <= 'F');
-                if (!isHex)
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
+        private static bool IsSha256Hex(string value) => Sha256Text.IsHex(value);
 
         private static void ValidateOuterAllowlist(
             Dictionary<string, ZipArchiveEntry> outerEntries,

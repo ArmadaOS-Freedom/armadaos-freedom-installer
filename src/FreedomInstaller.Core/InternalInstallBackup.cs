@@ -305,7 +305,7 @@ public static partial class InternalInstallBackup
 
             try
             {
-                string expectedSha = Convert.ToHexString(SHA256.HashData(finalBytes));
+                string expectedSha = Sha256Text.Hex(finalBytes).ToUpperInvariant();
                 if (!string.Equals(manifestSha, expectedSha, StringComparison.OrdinalIgnoreCase))
                 {
                     throw new IOException(

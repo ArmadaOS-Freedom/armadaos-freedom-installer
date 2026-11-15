@@ -64,17 +64,9 @@ internal static class TfRamWire
     internal static bool IsWholeDevicePath(string path) => WholeDevicePathPattern.IsMatch(path);
 
     /// <summary>Exactly 64 lowercase hexadecimal digits: the only accepted bearer token shape.</summary>
-    internal static bool IsLowerHex64(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
+    internal static bool IsLowerHex64(string? value) => Sha256Text.IsHex(value, lowercaseOnly: true);
 
-        return value.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
-    }
-
-    internal static bool IsHex64(string? value) => IsHex(value, 64);
+    internal static bool IsHex64(string? value) => Sha256Text.IsHex(value);
 
     internal static bool IsHex32(string? value) => IsHex(value, 32);
 
@@ -1140,6 +1132,5 @@ public sealed class TfRamCardWriteTarget : ITfCardWriteTarget
         }
     }
 
-    private static string ComputeSha256(byte[] data) =>
-        Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+    private static string ComputeSha256(byte[] data) => Sha256Text.Hex(data);
 }

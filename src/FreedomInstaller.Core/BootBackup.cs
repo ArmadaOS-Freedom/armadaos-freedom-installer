@@ -335,23 +335,7 @@ public static class BootBackup
         }
     }
 
-    private static bool IsSha256Hex(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (!Uri.IsHexDigit(character))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsSha256Hex(string? value) => Sha256Text.IsHex(value);
 
     private static string CreateUniqueBackupDirectory(string destinationRoot)
     {

@@ -30,7 +30,7 @@ public static partial class EdlRawBootBuilder
             || (ranked.Length > 1 && ranked[0].Value.XrefCount == ranked[1].Value.XrefCount))
             throw new InvalidDataException("ABL AVB key is missing, unreferenced or ambiguous.");
         var best = ranked[0];
-        return new AblAvbKeyFacts(best.Key, Convert.ToHexString(SHA256.HashData(pe)),
+        return new AblAvbKeyFacts(best.Key, Sha256Text.Hex(pe).ToUpperInvariant(),
             best.Value.XrefCount, best.Value.RawOffset);
     }
 
@@ -60,7 +60,7 @@ public static partial class EdlRawBootBuilder
         token.ThrowIfCancellationRequested();
 
         var keys = ReadAblAvbKeyCandidates(pe, token);
-        string peSha256 = Convert.ToHexString(SHA256.HashData(pe));
+        string peSha256 = Sha256Text.Hex(pe).ToUpperInvariant();
 
         return keys
             .Where(pair => pair.Value.XrefCount > 0)
@@ -85,7 +85,7 @@ public static partial class EdlRawBootBuilder
             token.ThrowIfCancellationRequested();
             try { AvbNodeValidatePublicKey(candidate.Blob); }
             catch (InvalidDataException) { continue; }
-            string hash = Convert.ToHexString(SHA256.HashData(candidate.Blob));
+            string hash = Sha256Text.Hex(candidate.Blob).ToUpperInvariant();
             if (!keys.TryGetValue(hash, out var prior) || candidate.XrefCount > prior.XrefCount)
                 keys[hash] = candidate;
         }

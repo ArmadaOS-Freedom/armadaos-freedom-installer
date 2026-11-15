@@ -331,10 +331,7 @@ public static class BootSlotControl
         return crc ^ 0xFFFFFFFFu;
     }
 
-    private static string Sha256Hex(ReadOnlySpan<byte> data)
-    {
-        return Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
-    }
+    private static string Sha256Hex(ReadOnlySpan<byte> data) => Sha256Text.Hex(data);
 
     private static string NormalizeSha(string? claimed)
     {

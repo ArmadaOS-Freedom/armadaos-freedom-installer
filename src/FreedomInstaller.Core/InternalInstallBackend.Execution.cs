@@ -1800,27 +1800,7 @@ public sealed partial class InternalInstallBackend
         return true;
     }
 
-    private static bool IsSha256Text(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (char character in value)
-        {
-            bool isHex = character is >= '0' and <= '9'
-                or >= 'a' and <= 'f'
-                or >= 'A' and <= 'F';
-
-            if (!isHex)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsSha256Text(string? value) => Sha256Text.IsHex(value);
 
     private static bool SameSha256(string? left, string? right) =>
         !string.IsNullOrEmpty(left)

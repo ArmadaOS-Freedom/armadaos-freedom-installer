@@ -330,7 +330,7 @@ public static partial class PackageReader
             deviceModel,
             sourceCommit,
             testOnly,
-            Convert.ToHexString(SHA256.HashData(rawMetadata)),
+            Sha256Text.Hex(rawMetadata).ToUpperInvariant(),
             storage,
             profileId,
             hardwareId,

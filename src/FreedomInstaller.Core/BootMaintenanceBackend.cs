@@ -1216,8 +1216,7 @@ public sealed partial class BootMaintenanceBackend : IDisposable
 
         builder.Append("preparationId=").Append(preparationId).Append('\n');
 
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())))
-            .ToLowerInvariant();
+        return Sha256Text.Hex(Encoding.UTF8.GetBytes(builder.ToString()));
     }
 
     // ------------------------------------------------------------------ evidence receipts

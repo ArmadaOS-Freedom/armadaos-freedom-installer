@@ -203,23 +203,5 @@ public sealed class RamInstallSupport : IDisposable
         }
     }
 
-    private static bool IsLowercaseSha256(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (character is >= '0' and <= '9' or >= 'a' and <= 'f')
-            {
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
-    }
+    private static bool IsLowercaseSha256(string? value) => Sha256Text.IsHex(value, lowercaseOnly: true);
 }

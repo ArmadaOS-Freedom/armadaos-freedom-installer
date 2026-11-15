@@ -1126,6 +1126,6 @@ public static class UninstallEvidenceValidator
             writer.WriteEndObject();
         }
 
-        return Convert.ToHexString(SHA256.HashData(buffer.WrittenSpan));
+        return Sha256Text.Hex(buffer.WrittenSpan).ToUpperInvariant();
     }
 }

@@ -623,7 +623,7 @@ public sealed class TfInstallWorkflow : IAsyncDisposable
             },
         };
         byte[] json = JsonSerializer.SerializeToUtf8Bytes(canonical);
-        return Convert.ToHexString(SHA256.HashData(json)).ToLowerInvariant();
+        return Sha256Text.Hex(json);
     }
 
     private static TfInstallStage MapStage(BootMaintenanceOutcome outcome) => outcome switch

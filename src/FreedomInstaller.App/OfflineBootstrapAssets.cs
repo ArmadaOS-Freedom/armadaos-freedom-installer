@@ -7,11 +7,12 @@ using FreedomInstaller.Core;
 namespace FreedomInstaller.App
 {
     /// <summary>
-    /// Reads the build-supplied bootstrap script and updater bundle from the
-    /// application assembly. A normal source build may omit them; a single-file
-    /// publish is rejected by the project target if either input is missing.
-    /// The bundle hash is computed from the embedded bytes, never from the
-    /// remote device.
+    /// Reads the optional legacy build-supplied bootstrap script and updater
+    /// bundle from the application assembly. A normal complete build omits
+    /// both: installed systems already provide the update service and the app
+    /// connects to the native updater directly. When either input is supplied
+    /// the project requires both. The bundle hash is computed from the embedded
+    /// bytes, never from the remote device.
     /// </summary>
     internal static class OfflineBootstrapAssets
     {
