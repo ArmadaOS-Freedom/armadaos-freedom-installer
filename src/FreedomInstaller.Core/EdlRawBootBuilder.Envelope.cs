@@ -130,7 +130,43 @@ public static partial class EdlRawBootBuilder
         VerifiedEdlFile packedRaw,
         long maxRawBytes,
         string outputPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ScheduleEnvelopeAsync(
+            sourceBoot,
+            packedRaw,
+            maxRawBytes,
+            outputPath,
+            acceptAuthenticatedKshimSource: false,
+            cancellationToken);
+
+    // Narrow build-only entry for a source that already carries the project
+    // kshim composite. The existing preservation helper keeps the new composite
+    // payload geometry in the footer while the embedded vbmeta still
+    // authenticates the previous leaf, so the strict footer equality cannot
+    // apply. The same strict repack core runs unchanged; only the source
+    // descriptor size is taken from the authenticated blob. BuildCoreAsync
+    // selects this entry only from the recovered material.IsKshim fact.
+    internal static Task<EdlRawBootEnvelope> RepackKshimHybridEnvelopeAsync(
+        VerifiedEdlFile sourceBoot,
+        VerifiedEdlFile packedRaw,
+        long maxRawBytes,
+        string outputPath,
+        CancellationToken cancellationToken = default) =>
+        ScheduleEnvelopeAsync(
+            sourceBoot,
+            packedRaw,
+            maxRawBytes,
+            outputPath,
+            acceptAuthenticatedKshimSource: true,
+            cancellationToken);
+
+    private static Task<EdlRawBootEnvelope> ScheduleEnvelopeAsync(
+        VerifiedEdlFile sourceBoot,
+        VerifiedEdlFile packedRaw,
+        long maxRawBytes,
+        string outputPath,
+        bool acceptAuthenticatedKshimSource,
+        CancellationToken cancellationToken)
     {
         if (sourceBoot is null)
         {
@@ -162,7 +198,15 @@ public static partial class EdlRawBootBuilder
         string targetPath = Path.GetFullPath(outputPath);
 
         return Task.Run(
-            () => RepackEnvelopeCore(sourceBoot, packedRaw, sourcePath, rawPath, maxRawBytes, targetPath, cancellationToken),
+            () => RepackEnvelopeCore(
+                sourceBoot,
+                packedRaw,
+                sourcePath,
+                rawPath,
+                maxRawBytes,
+                targetPath,
+                acceptAuthenticatedKshimSource,
+                cancellationToken),
             cancellationToken);
     }
 
@@ -173,6 +217,7 @@ public static partial class EdlRawBootBuilder
         string rawPath,
         long maxRawBytes,
         string targetPath,
+        bool acceptAuthenticatedKshimSource,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -188,7 +233,8 @@ public static partial class EdlRawBootBuilder
             VerifyClaim(raw, packedRaw, "packed raw", cancellationToken);
 
             long partitionSize = source.Length;
-            SourceMetadata metadata = ReadSourceMetadata(source, partitionSize, cancellationToken);
+            SourceMetadata metadata = ReadSourceMetadata(
+                source, partitionSize, cancellationToken, acceptAuthenticatedKshimSource);
 
             long rawLength = raw.Length;
             ValidatePackedRaw(raw, rawLength, maxRawBytes);
@@ -445,7 +491,11 @@ public static partial class EdlRawBootBuilder
         }
     }
 
-    private static SourceMetadata ReadSourceMetadata(FileStream source, long partitionSize, CancellationToken cancellationToken)
+    private static SourceMetadata ReadSourceMetadata(
+        FileStream source,
+        long partitionSize,
+        CancellationToken cancellationToken,
+        bool acceptAuthenticatedKshimSource = false)
     {
         if (partitionSize < BootHeaderBytes || partitionSize % PageSize != 0)
         {
@@ -530,12 +580,19 @@ public static partial class EdlRawBootBuilder
             throw new InvalidDataException("source boot vbmeta range exceeds the footer start");
         }
 
-        ParsedVbmeta vbmeta = ParseVbmeta(
-            source,
-            (long)vbmetaOffset,
-            (long)vbmetaSize,
-            (long)originalImageSize,
-            cancellationToken);
+        ParsedVbmeta vbmeta = acceptAuthenticatedKshimSource
+            ? ParseAuthenticatedKshimSourceVbmeta(
+                source,
+                partitionSize,
+                vbmetaOffset,
+                vbmetaSize,
+                cancellationToken)
+            : ParseVbmeta(
+                source,
+                (long)vbmetaOffset,
+                (long)vbmetaSize,
+                (long)originalImageSize,
+                cancellationToken);
 
         return new SourceMetadata
         {
@@ -543,6 +600,48 @@ public static partial class EdlRawBootBuilder
             Vbmeta = vbmeta,
             VbmetaSha256 = vbmeta.BlobSha256,
         };
+    }
+
+    // A source wrapped by the project's own preservation helper keeps the new
+    // composite payload geometry in the footer while the embedded vbmeta still
+    // signs the previous leaf. The signed size therefore comes from the
+    // authenticated blob, never from the footer: the shared bounded RSA leaf
+    // reader authenticates the whole blob against its embedded key, the
+    // descriptor size is read from that authenticated blob through the shared
+    // signed-size reader, is bounded by the physical partition body, and the
+    // strict parser then re-validates the whole vbmeta against it. Every
+    // header/footer bound above still ran; nothing is retried or relaxed.
+    private static ParsedVbmeta ParseAuthenticatedKshimSourceVbmeta(
+        FileStream source,
+        long partitionSize,
+        ulong footerVbmetaOffset,
+        ulong footerVbmetaSize,
+        CancellationToken cancellationToken)
+    {
+        AvbNodeMetadata authenticated = AvbNodeReadFooterLeafMetadata(
+            source, partitionSize, cancellationToken);
+
+        if (authenticated.VbmetaOffset != (long)footerVbmetaOffset
+            || authenticated.VbmetaSize != (long)footerVbmetaSize)
+        {
+            throw new InvalidDataException(
+                "authenticated kshim source metadata does not match the source footer geometry");
+        }
+
+        long signedSize = CurrentBootSignedImageSize(authenticated);
+        long partitionBody = partitionSize - AvbFooterBytes;
+        if (signedSize < BootHeaderBytes || signedSize > partitionBody)
+        {
+            throw new InvalidDataException(
+                "authenticated kshim source descriptor image size is outside the physical partition body");
+        }
+
+        return ParseVbmeta(
+            source,
+            (long)footerVbmetaOffset,
+            (long)footerVbmetaSize,
+            signedSize,
+            cancellationToken);
     }
 
     private static void ValidatePackedRaw(FileStream raw, long rawLength, long maxRawBytes)

@@ -147,9 +147,6 @@ public static partial class EdlRawBootBuilder
                 throw new InvalidDataException("GBL source built boot does not carry the pinned AOSP public key.");
             }
 
-            byte[] originalFooter = new byte[AvbFooterBytes];
-            ReadExactly(originalStream, originalFooter, partitionLength - AvbFooterBytes, AvbFooterBytes);
-
             byte[] sourceFooter = new byte[AvbFooterBytes];
             ReadExactly(sourceCandidate, sourceFooter, partitionLength - AvbFooterBytes, AvbFooterBytes);
 
@@ -184,9 +181,17 @@ public static partial class EdlRawBootBuilder
                 throw new InvalidDataException("GBL original signed metadata does not fit before the final footer.");
             }
 
+            // A hybrid source's footer carries the new physical payload size, so
+            // the strict parser is fed the size the authenticated OEM descriptor
+            // itself signs, never the rewritten footer value.
+            long originalImageSize = CurrentBootSignedImageSize(originalMeta);
+            if (originalImageSize <= 0 || originalImageSize > partitionLength - AvbFooterBytes)
+            {
+                throw new InvalidDataException("GBL original signed image size is outside the partition bounds.");
+            }
+
             // The original descriptor parser is applied to the genuine stock
             // stream only; its digest is deliberately stale for the new payload.
-            long originalImageSize = (long)ReadBeU64(originalFooter, 12);
             var originalParsed = ParseVbmeta(
                 originalStream,
                 originalMeta.VbmetaOffset,
