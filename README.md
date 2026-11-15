@@ -1,58 +1,61 @@
-# ArmadaOS Freedom 安装助手
+# ArmadaOS Freedom Installer
 
-面向 Windows x64 的 ArmadaOS Freedom 安装与维护工具，支持简体中文、英语及明暗主题。作者：**单翼 / danyi**。
+**English** · [简体中文](README.zh-CN.md)
 
-**免费软件，谨防被骗。**
+**Install ArmadaOS Freedom on your tablet, with tools for backup, maintenance, and recovery when you need them.**
 
-[系统仓库](https://github.com/ArmadaOS-Freedom/armadaos-freedom) · [哔哩哔哩](https://space.bilibili.com/258786) · [GitHub](https://github.com/mydanyi)
+ArmadaOS Freedom Installer is the desktop companion to [ArmadaOS Freedom](https://github.com/ArmadaOS-Freedom/armadaos-freedom). It brings installation, offline upgrades, backups, and maintenance together for supported ARM Android tablets.
 
-## 功能
+The app runs on **Windows x64** and **Apple silicon macOS**, with English and Simplified Chinese interfaces and light and dark themes. Feature availability differs by platform and device.
 
-- 安装到内部存储。
-- 安卓更新前准备、安卓更新后修复。
-- 卸载 Linux、归还安卓空间。
-- 9008 全局备份、9008 全局恢复。
+**This installer is free. Beware of scams.**
 
-首次使用先完成运行环境与驱动检测，再连接平板。环境页分别检查 ADB、Fastboot 与 Qualcomm 9008 驱动，缺失或绑定异常时可使用随附驱动安装或修复。可选的全局备份位于环境检测之后，也可从功能首页进入；仅允许尚未安装 Linux 的原始布局，不备份 userdata、rawdump、metadata 的内容，保留分区表。全局恢复有独立入口。
+## Main features
 
-四代 **TB322FC** 与五代 **TB323FU** 分别使用各自的设备配置与 9008 工具。程序自动识别型号，连接多台设备时需选择目标。所有 Y700 平板均使用**长边 USB-C 接口**连接电脑。
+- **Install Freedom**: Follow the assistant to install the system to the tablet's internal storage.
+- **Upgrade offline**: Use a matching update package to upgrade a tablet already running Freedom.
+- **Maintain Android boot support**: Prepare for an Android update and repair afterward.
+- **Uninstall Linux**: Remove Linux and return its storage space to Android.
+- **Back up and recover**: Dedicated Qualcomm 9008 / EDL backup and restore tools.
 
-小新 Pad Pro GT **TB710FU**（SM8650）支持型号识别、独立的 9008 工具配置、只读校验（含全局备份）和安装到内部存储；维护、卸载与全局恢复的写入路线尚未开放，程序会在进入 9008 或写入之前停止。安装要求平板已刷入 ZUXOS 1.5.04.495 免解锁启动链（两个槽位的 vbmeta 顶层为 AOSP 测试密钥签名，并把 boot 链到同一把密钥）：安装只重新签名并写入 boot，vbmeta、vbmeta_system 和 recovery 保持不变。这台平板的引导程序在进入 fastboot 时会掉进 900E 崩溃转储模式，所以第 1 步不进 fastboot，锁定状态和当前槽位改从安卓属性读取。经 ADB 识别时，安卓系统要报告 `TB710FU` 型号，或在 `ro.product.bootimage.model` 里报告（刷了移植系统，如 HyperOS 移植包）。全局备份要求 LUN0 仍是原始分区布局（userdata 未缩小、没有 `ARMADA_*` 分区）。
+## Supported devices
 
-TF 卡安装暂不开放。Windows 安装器不再携带旧 Linux 维护工具包，内部安装使用 9008 直接写入分区镜像。
+| Device | Model | Current support |
+|---|---|---|
+| Lenovo Legion Y700 Gen 4 | TB322FC | Internal installation; maintenance, uninstall, backup and restore on Windows |
+| Lenovo Legion Y700 Gen 5 | TB323FU | Internal installation; maintenance, uninstall, backup and restore on Windows |
+| Lenovo Xiaoxin Pad Pro GT | TB710FU | Internal installation; global backup and read-only checks on Windows |
 
-另有 macOS（Apple 芯片）版：界面、文字与 Windows 版相同，目前只提供“安装到内部存储”，其余功能卡片保留但不可用。9008 通过 libusb 直接访问，不需要安装驱动；adb 和 fastboot 随程序内置（Google 官方 macOS 版 platform-tools），不需要另外安装。支持的型号与 Windows 版相同（四代、五代与 TB710FU）。构建方法见[从源码构建](docs/build.md#macos-版)。
+**Windows** offers the installation and maintenance features above. **macOS currently provides internal installation only.** TB710FU maintenance, uninstall, and global restore are not available. System installation to a TF / microSD card is not currently offered.
 
-## 内部安装
+Firmware and boot-chain requirements depend on the model. See the [device guides](https://github.com/ArmadaOS-Freedom/armadaos-freedom#device-support) and follow the installer's checks. Offline upgrades require a compatible Freedom system, update service, and package; global backup requires the original partition layout before Linux installation.
 
-1. **检查平板**：读取型号、固件、连接与引导状态，按所选路线完成必要检查。
-2. **备份数据**：选择电脑文件夹，备份本机 A/B 引导、分区表及必要恢复资料；也可选择已有备份，经设备与内容校验后复用。
-3. **分配空间**：读取实际分区表，选择系统安装包与空间比例。安卓至少 16 GiB，Linux 至少 64 GiB，并满足包声明的空间要求；另留尾部 2 GiB 恢复区。
-4. **确认安装**：分别构建并写入 A/B 引导，写入 Linux 与恢复镜像，逐项回读校验后重启，默认进入 Linux。
+## Getting started
 
-照片、应用数据等个人文件需自行备份。安装、重新分区及卸载初始化会清空相关个人文件。普通安装备份不包含 super、userdata、rawdump、metadata 的内容；需要安装前系统级恢复材料时，可使用独立的全局备份功能。
+Prepare the installer for your computer and the matching system package, which is supplied separately. Complete the environment checks, connect the tablet, and follow the assistant for the task you want to perform. **Y700 Gen 4 and Gen 5 must use the USB-C port on the tablet's long edge.**
 
-“安装完成”表示写入、回读校验和重启请求完成，不依赖安卓初始化后的 USB 调试授权，也不代替系统启动结果确认。安装日志可以展开或收起。
+**Installation, repartitioning, and uninstall initialization erase the affected personal data. Back up photos and app data separately.** Recovery backups do not contain a complete copy of your personal files.
 
-A/B 两槽分别核验各自的 AVB 签名和父子密钥关系，支持同一设备中混用 RSA 2048、4096、8192 位源密钥。需要重新签名的路线会重新计算元数据布局，并在生成 boot 后核验完整的引导签名链；锁定设备仍须满足对应启动链的信任要求。准备失败或更换方案后会清理本轮生成的临时镜像，保留日志和正式备份；已经开始写入的恢复材料保留。
+## Development
 
-两个物理引导候选始终启动**同一份** Linux 部署。正常情况下两槽分别使用本槽的 Android 材料构建；工厂空的槽位改用当前槽的材料，只写项目引导，不补齐该槽的 Android 系统。原厂 Android 载荷和签名保持不变，安装器不写槽位选择或成功标记——活动、选中和成功槽位由 Android 自行维护。离线升级遵循同一 `bootPolicy` 契约，详见[安装包与恢复区约定](docs/package-contract.md#离线升级启动策略)。
+<details>
+<summary>Building from source</summary>
 
-## 系统包与恢复区
+See the [build guide](docs/build.md) for the Windows and macOS build steps and required components.
 
-系统镜像由[系统仓库的 9008 打包流水线](https://github.com/ArmadaOS-Freedom/armadaos-freedom/blob/main/docs/edl-package.zh-CN.md)生成，单独选择导入，不嵌入安装器 EXE。共用系统内容在统一包中只保存一份，型号差异文件分别存放。分卷文件放在同一目录，选择第一卷。
+</details>
 
-安装器按当前平板的备份生成 `ARMADA_BACKUP`，固定 **2 GiB（2048 MiB）**。它是专用恢复镜像，包含头信息、gzip 压缩的 tar 资料、填充及启动器设置区，并非 ext4、FAT 或普通空白分区。显示写入或回读 2 GiB，不代表压缩后的备份仍有 2 GiB。
+## Community and feedback
 
-0.7.4 新建恢复镜像采用 v3：最后 64 KiB 按启动器协议预留，备份校验与可变启动设置分开处理。旧 v2 恢复镜像仍可校验；已有平板不会仅因打开新版程序而自动升级该分区。启动器端是否支持保存设置取决于对应型号的实现，不能把一个型号的支持范围套给另一个型号。
+Report problems through [Issues](https://github.com/ArmadaOS-Freedom/armadaos-freedom-installer/issues), including your tablet model, computer OS, installer version, the operation that failed, and relevant logs.
 
-## 构建
+- **Author and Chinese-speaking community**: [Danyi on Bilibili](https://space.bilibili.com/258786).
+- **Main QQ fan group**: 487945399
+- **Second QQ fan group**: 332038419
+- **International contact**: [mydanyi@qq.com](mailto:mydanyi@qq.com)
 
-修改版底层工具源码在 `tools/`，必要的厂商预编译文件在 `vendor/`。完整构建会编译本仓库工具源码并从官方来源取得其他组件，不依赖维护者另行发布的依赖合集。具体命令及版本关系见[构建说明](docs/build.md)。
-## 开发
+Related projects: [ArmadaOS Freedom](https://github.com/ArmadaOS-Freedom/armadaos-freedom) · [Organization homepage](https://github.com/ArmadaOS-Freedom)
 
-- [构建说明](docs/build.md)
-- [安装包与恢复区约定](docs/package-contract.md)
-- [统一包结构](docs/bundle-contract.md)
+## License
 
-版本：**0.8.0**。源码按 [GPL-3.0](LICENSE) 提供；第三方组件保留各自许可证和声明，详见 `docs/`。驱动、设备加载器等外部构建素材的许可不由本仓库许可证替代。
+Source code is provided under [GPL-3.0](LICENSE). Third-party components, drivers, and device loaders retain their own licenses and notices.
