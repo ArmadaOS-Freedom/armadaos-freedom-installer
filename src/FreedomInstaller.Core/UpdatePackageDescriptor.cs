@@ -18,6 +18,12 @@ public sealed partial class UpdatePackageDescriptor
         "TB710FU",
     };
 
+    private static readonly HashSet<string> OfflineUpgradeModelsSet = new(StringComparer.Ordinal)
+    {
+        "TB322FC",
+        "TB323FU",
+    };
+
     private static readonly HashSet<string> OperationsSet = new(StringComparer.Ordinal)
     {
         "install",
@@ -346,6 +352,12 @@ public sealed partial class UpdatePackageDescriptor
         if (operation is null || !_operations.Contains(operation))
         {
             throw new InvalidDataException("operation is not declared by this package");
+        }
+
+        if (string.Equals(operation, "offline-upgrade", StringComparison.Ordinal)
+            && !OfflineUpgradeModelsSet.Contains(model))
+        {
+            throw new InvalidDataException("offline-upgrade is not supported for this model");
         }
 
         if (installerVersion is null)
