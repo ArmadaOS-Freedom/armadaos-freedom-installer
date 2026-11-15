@@ -42,6 +42,7 @@ _RECORD_INPUTS = (
     ("EDL_RAW_UNPACKER_PATH", "BundledEdlRawUnpacker"),
     ("EDL_TOOLCHAIN_TEST_BUNDLE_PATH", "BundledEdlArchive"),
     ("EDL_TOOLCHAIN_G5_TEST_BUNDLE_PATH", "BundledEdlG5Archive"),
+    ("EDL_TOOLCHAIN_TB710FU_TEST_BUNDLE_PATH", "BundledEdlTb710fuArchive"),
     ("ANDROID_DRIVER_TEST_ARCHIVE", "BundledAndroidDriverArchive"),
     ("QUALCOMM_DRIVER_TEST_ARCHIVE", "BundledQualcommDriverArchive"),
 )

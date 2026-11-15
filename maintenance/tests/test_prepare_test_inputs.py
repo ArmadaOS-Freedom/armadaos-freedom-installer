@@ -3,7 +3,10 @@
 
 Only the pure input-mapping and validation helpers are exercised; the real
 prepare()/CMake run is a CI step, not a unit test.  Nothing here restates the
-build record schema beyond the public key names the mapper consumes.
+build record schema beyond the public key names the mapper consumes, except the
+TB710FU bundle whose public variable and record key are pinned literally: the
+toolchain tests skip when that variable is unset, so a mapping omission must
+fail here instead of quietly dropping a suite.
 """
 
 import shutil
@@ -62,6 +65,44 @@ class ComposeEnvironmentTests(unittest.TestCase):
             root = Path(temporary)
             record, native = self._fixture(root)
             Path(record["inputs"]["BundledEdlG5Archive"]).unlink()
+
+            with self.assertRaises(SystemExit):
+                prepare_test_inputs.compose_environment(record, native, root / "work")
+
+    def test_tb710fu_bundle_is_exported_alongside_g4_and_g5(self):
+        # Literal variable and record key: the TB710FU toolchain tests read
+        # EDL_TOOLCHAIN_TB710FU_TEST_BUNDLE_PATH and skip when it is unset, so
+        # an omission here silently removes that suite from the run.
+        self.assertIn(
+            ("EDL_TOOLCHAIN_TB710FU_TEST_BUNDLE_PATH", "BundledEdlTb710fuArchive"),
+            prepare_test_inputs._RECORD_INPUTS)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record, native = self._fixture(root)
+            bundle = _touch(root / "freedom-tb710fu.zip", b"PK\x03\x04")
+            record["inputs"]["BundledEdlTb710fuArchive"] = bundle
+
+            environment = prepare_test_inputs.compose_environment(record, native, root / "work")
+
+            exported = environment["EDL_TOOLCHAIN_TB710FU_TEST_BUNDLE_PATH"]
+            self.assertEqual(str(Path(bundle).resolve()), exported)
+            self.assertTrue(Path(exported).is_file())
+
+    def test_absent_tb710fu_record_input_aborts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record, native = self._fixture(root)
+            del record["inputs"]["BundledEdlTb710fuArchive"]
+
+            with self.assertRaises(SystemExit) as raised:
+                prepare_test_inputs.compose_environment(record, native, root / "work")
+            self.assertIn("EDL_TOOLCHAIN_TB710FU_TEST_BUNDLE_PATH", str(raised.exception))
+
+    def test_missing_tb710fu_generated_file_aborts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record, native = self._fixture(root)
+            Path(record["inputs"]["BundledEdlTb710fuArchive"]).unlink()
 
             with self.assertRaises(SystemExit):
                 prepare_test_inputs.compose_environment(record, native, root / "work")
