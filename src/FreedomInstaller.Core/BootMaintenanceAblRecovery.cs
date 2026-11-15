@@ -319,7 +319,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         if (stream.Length != claim.Length) throw new InvalidDataException("repair-abl-source-changed");
         var bytes = new byte[checked((int)claim.Length)];
         await stream.ReadExactlyAsync(bytes, ct).ConfigureAwait(false);
-        if (!Same(Convert.ToHexString(SHA256.HashData(bytes)), claim.Sha256))
+        if (!Same(Sha256Text.Hex(bytes).ToUpperInvariant(), claim.Sha256))
             throw new InvalidDataException("repair-abl-source-changed");
         return bytes;
     }

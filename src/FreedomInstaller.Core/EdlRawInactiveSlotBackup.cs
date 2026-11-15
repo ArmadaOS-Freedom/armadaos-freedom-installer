@@ -24,8 +24,6 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
 {
     private const int ScanBufferBytes = 81920;
 
-    private const int Sha256HexBytes = 64;
-
     private readonly FileStream _bootStream;
 
     private readonly FileStream _vendorBootStream;
@@ -357,7 +355,7 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
         }
 
         string actual = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
-        if (!string.Equals(actual, claim.Sha256.ToLowerInvariant(), StringComparison.Ordinal))
+        if (!Sha256Text.EqualsHex(actual, claim.Sha256))
         {
             throw new InvalidDataException(role + " SHA-256 differs from its claim");
         }
@@ -378,25 +376,7 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
         return true;
     }
 
-    private static bool IsSha256Hex(string? value)
-    {
-        if (value is null || value.Length != Sha256HexBytes)
-        {
-            return false;
-        }
-
-        foreach (char character in value)
-        {
-            if (character is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F'))
-            {
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
-    }
+    private static bool IsSha256Hex(string? value) => Sha256Text.IsHex(value);
 
     private static string RequirePlainFile(string? path, string subject)
     {

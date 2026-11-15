@@ -302,6 +302,5 @@ public static class CurrentBootSlot
         return true;
     }
 
-    private static string Sha256Hex(ReadOnlySpan<byte> span)
-        => Convert.ToHexString(SHA256.HashData(span)).ToLowerInvariant();
+    private static string Sha256Hex(ReadOnlySpan<byte> span) => Sha256Text.Hex(span);
 }

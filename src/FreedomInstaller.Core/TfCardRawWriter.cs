@@ -308,23 +308,7 @@ public static class TfCardRawWriter
         }
     }
 
-    private static bool IsHex64(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (var c in value)
-        {
-            if (!Uri.IsHexDigit(c))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsHex64(string? value) => Sha256Text.IsHex(value);
 
     private static void ValidatePartitionRanges(TfCardLayoutPlan layout, int sectorSize)
     {

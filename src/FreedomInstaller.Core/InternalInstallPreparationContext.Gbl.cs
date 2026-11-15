@@ -381,8 +381,7 @@ internal sealed partial class InternalInstallPreparationContext
 
     private sealed record GblAblBytes(VerifiedEdlFile Bound, byte[] Raw, byte[] Pe);
 
-    private static string GblSha256Hex(ReadOnlySpan<byte> bytes) =>
-        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+    private static string GblSha256Hex(ReadOnlySpan<byte> bytes) => Sha256Text.Hex(bytes).ToUpperInvariant();
 
     private static GblAblBytes ReadGblAblBytes(string role, VerifiedEdlFile bound, List<HeldClaim> claims, CancellationToken ct)
     {

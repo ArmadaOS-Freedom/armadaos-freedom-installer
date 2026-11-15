@@ -252,9 +252,8 @@ public sealed partial class BootMaintenanceBackend
             var baseConfirmation = ComputeTfConfirmationSha256(
                 ctx.EvidenceNonce, TfBootOperation.Final, finalPlan, ctx.FactOrigin,
                 ctx.Current, ctx.Original, currentSlot, ctx.SlotFacts.ControlSha256, stagedReport.Sha256, ordered);
-            var confirmationId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-                string.Concat(baseConfirmation, ":", journalSha, ":", tempConfirmationId))))
-                .ToLowerInvariant();
+            var confirmationId = Sha256Text.Hex(Encoding.UTF8.GetBytes(
+                string.Concat(baseConfirmation, ":", journalSha, ":", tempConfirmationId)));
 
             // ---- Step 8a: persist the full original-bound recovery journal BEFORE any Final
             // write. The old temporary journal only covers the active-slot A intents; the Final

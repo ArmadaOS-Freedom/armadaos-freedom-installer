@@ -2500,12 +2500,11 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             path, FileMode.Open, FileAccess.Read, FileShare.Read,
             FileBufferBytes, FileOptions.SequentialScan))
         {
-            return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+            return Sha256Text.HexOfStream(stream);
         }
     }
 
-    private static string Sha256Bytes(byte[] bytes) =>
-        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    private static string Sha256Bytes(byte[] bytes) => Sha256Text.Hex(bytes);
 
     // -----------------------------------------------------------------
     // Process bridge
@@ -2628,16 +2627,9 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             throw new InvalidOperationException(what + " is not a 64-character hex SHA-256.");
         }
 
-        foreach (char character in value)
+        if (!Sha256Text.IsHex(value))
         {
-            bool hex = (character >= '0' && character <= '9')
-                || (character >= 'a' && character <= 'f')
-                || (character >= 'A' && character <= 'F');
-
-            if (!hex)
-            {
-                throw new InvalidOperationException(what + " is not a hexadecimal SHA-256.");
-            }
+            throw new InvalidOperationException(what + " is not a hexadecimal SHA-256.");
         }
     }
 

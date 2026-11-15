@@ -8,11 +8,12 @@ using System.Threading;
 
 namespace FreedomInstaller.Core;
 
-public static class BoardRecoveryBackup
+public static partial class BoardRecoveryBackup
 {
     private const long ImageBytes = 2L << 30;
     private const int HeaderBytes = 65536;
     private const int ManifestLimit = 8 << 20;
+    private const string RecoveryManifestName = "armada-recovery-manifest.json";
 
     /// <summary>
     /// Discovers the board recovery material and returns a lease over the uniquely new extraction directory
@@ -44,13 +45,18 @@ public static class BoardRecoveryBackup
                 "Multiple recovery partitions were found.",
                 "The recovery partition has invalid identity or size.");
             if (partition is null) return null;
+            var borrowed = await TryBorrowDirectoryAsync(
+                client, client.Toolchain.Model, client.Toolchain.HardwareId, partition, table, durableParent, work, token)
+                .ConfigureAwait(false);
+            if (borrowed is not null) return borrowed;
             var image = await client.ReadAsync(0, partition.StartSector, partition.SectorCount,
                 Path.Combine(work, "recovery.img"), token).ConfigureAwait(false);
             if (image.Length != ImageBytes)
                 throw new InvalidDataException("The board recovery capture is incomplete.");
-            var directory = await ExtractAsync(
+            var material = await ExtractCoreAsync(
                 image.FilePath, client.Toolchain.Model, partition.PartUuid, durableParent, token).ConfigureAwait(false);
-            return new BoardRecoveryExtraction(directory, durableParent);
+            return new BoardRecoveryExtraction(
+                material.Directory, durableParent, BuildCacheReceipt(material), material.RecoveryManifestPayload);
         }
         finally
         {
@@ -80,15 +86,19 @@ public static class BoardRecoveryBackup
         Directory.CreateDirectory(work);
         try
         {
+            var borrowed = await TryBorrowRecoveryAsync(client, current, partition, durableParent, work, token)
+                .ConfigureAwait(false);
+            if (borrowed is not null) return borrowed;
             var path = Path.Combine(work, "recovery.img");
             var capture = await client.ReadAsync(0, partition.StartSector, partition.SectorCount, path, token).ConfigureAwait(false);
             if (capture.Length != ImageBytes)
                 throw new InvalidDataException("The board recovery capture is incomplete.");
-            var directory = await ExtractAsync(path, current.Model, partition.PartUuid, durableParent, token).ConfigureAwait(false);
+            var material = await ExtractCoreAsync(path, current.Model, partition.PartUuid, durableParent, token).ConfigureAwait(false);
 
             // The extraction is owned as soon as it exists: any failure before the successful handoff below
             // releases the opened backup locks first and then removes only this newly created directory.
-            var extraction = new BoardRecoveryExtraction(directory, durableParent);
+            var extraction = new BoardRecoveryExtraction(
+                material.Directory, durableParent, BuildCacheReceipt(material), material.RecoveryManifestPayload);
             InternalBackupSet? recovered = null;
             try
             {
@@ -120,17 +130,27 @@ public static class BoardRecoveryBackup
 
     internal static void ValidateSource(InternalBackupSet current, InternalBackupSet recovery)
     {
-        if (!ReferenceEquals(current.Binding, recovery.Binding) || current.Model != recovery.Model
-            || !string.Equals(current.HardwareId, recovery.HardwareId, StringComparison.OrdinalIgnoreCase))
+        if (!ReferenceEquals(current.Binding, recovery.Binding))
             throw new InvalidDataException("Recovery material belongs to another device.");
-        for (var lun = 0; lun < 6; lun++)
+        ValidateLun0Layout(current.Model, current.HardwareId, current.Tables[0], recovery);
+        for (var lun = 1; lun < 6; lun++)
         {
-            var before = recovery.Tables[lun];
-            var now = current.Tables[lun];
-            if (before.SectorSize != now.SectorSize || before.DiskBytes != now.DiskBytes
-                || !string.Equals(before.DiskGuid, now.DiskGuid, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Recovery material belongs to a different storage layout.");
+            ValidateDiskPair(current.Tables[lun], recovery.Tables[lun]);
         }
+    }
+
+    /// <summary>
+    /// Applies the same identity, LUN0 disk and factory-layout gate to the current capture, using only the
+    /// caller's freshly parsed LUN0 table. The cache borrower uses it before it hands a retained directory back,
+    /// so a borrowed directory is never accepted for a device whose recovery layout has changed.
+    /// </summary>
+    internal static void ValidateLun0Layout(
+        string model, string hardwareId, GptTable currentLun0, InternalBackupSet recovery)
+    {
+        if (!string.Equals(model, recovery.Model, StringComparison.Ordinal)
+            || !string.Equals(hardwareId, recovery.HardwareId, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Recovery material belongs to another device.");
+        ValidateDiskPair(currentLun0, recovery.Tables[0]);
         var original = recovery.Tables[0];
         var userdata = original.Partitions.SingleOrDefault(p => p.Name == "userdata");
         if (userdata is null || checked(userdata.StartSector + userdata.SectorCount) != checked(original.LastUsableSector + 1)
@@ -138,7 +158,7 @@ public static class BoardRecoveryBackup
             throw new InvalidDataException("Recovery material does not contain a factory userdata layout.");
         foreach (var before in original.Partitions)
         {
-            var now = current.Tables[0].Partitions.SingleOrDefault(p => p.Number == before.Number);
+            var now = currentLun0.Partitions.SingleOrDefault(p => p.Number == before.Number);
             if (now is null || now.Name != before.Name
                 || !string.Equals(now.PartUuid, before.PartUuid, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(now.TypeGuid, before.TypeGuid, StringComparison.OrdinalIgnoreCase)
@@ -147,6 +167,13 @@ public static class BoardRecoveryBackup
                 || (before.Name == "userdata" && now.SectorCount > before.SectorCount))
                 throw new InvalidDataException("Recovery material does not match the current vendor partitions.");
         }
+    }
+
+    private static void ValidateDiskPair(GptTable now, GptTable before)
+    {
+        if (before.SectorSize != now.SectorSize || before.DiskBytes != now.DiskBytes
+            || !string.Equals(before.DiskGuid, now.DiskGuid, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Recovery material belongs to a different storage layout.");
     }
 
     /// <summary>
@@ -171,11 +198,16 @@ public static class BoardRecoveryBackup
         return partition;
     }
 
-    internal static Task<string> ExtractAsync(
+    internal static async Task<string> ExtractAsync(
         string imagePath, string model, string expectedPartitionUuid, string durableParent, CancellationToken token)
-        => Task.Run(() => Extract(imagePath, model, expectedPartitionUuid, durableParent, token), token);
+        => (await ExtractCoreAsync(imagePath, model, expectedPartitionUuid, durableParent, token).ConfigureAwait(false))
+            .Directory;
 
-    private static string Extract(
+    internal static Task<BoardRecoveryMaterial> ExtractCoreAsync(
+        string imagePath, string model, string expectedPartitionUuid, string durableParent, CancellationToken token)
+        => Task.Run(() => ExtractCore(imagePath, model, expectedPartitionUuid, durableParent, token), token);
+
+    private static BoardRecoveryMaterial ExtractCore(
         string imagePath, string model, string expectedPartitionUuid, string durableParent, CancellationToken token)
     {
         RequireParent(durableParent);
@@ -189,9 +221,8 @@ public static class BoardRecoveryBackup
         image.Position = 0;
         var headerBytes = new byte[HeaderBytes];
         image.ReadExactly(headerBytes);
-        using var header = JsonDocument.Parse(headerBytes);
-        if (header.RootElement.GetProperty("schemaVersion").GetInt32() == 3
-            && Guid.Parse(header.RootElement.GetProperty("configPartitionUuid").GetString()!) != expectedUuid)
+        var header = InternalInstallArtifacts.ParseBoardArchiveHeader(headerBytes, model);
+        if (header.SchemaVersion == 3 && header.ConfigPartitionUuid != expectedUuid)
             throw new InvalidDataException("The archive launcher descriptor names a different recovery partition.");
 
         var entries = recovery.GetProperty("entries").EnumerateArray().ToDictionary(
@@ -200,13 +231,26 @@ public static class BoardRecoveryBackup
         Directory.CreateDirectory(directory);
         var staged = new Dictionary<string, string>(StringComparer.Ordinal);
         var manifestPath = Path.Combine(directory, "backup-manifest.json");
+        byte[] recoveryManifest;
         try
         {
             image.Position = HeaderBytes;
             using (var gzip = new GZipStream(image, CompressionMode.Decompress, leaveOpen: true))
             using (var tar = new TarReader(gzip))
             {
-                _ = tar.GetNextEntry() ?? throw new InvalidDataException("Missing recovery manifest.");
+                var manifestEntry = tar.GetNextEntry() ?? throw new InvalidDataException("Missing recovery manifest.");
+                var manifestStream = manifestEntry.DataStream;
+                if (manifestEntry.EntryType != TarEntryType.RegularFile || manifestStream is null
+                    || !string.Equals(manifestEntry.Name, RecoveryManifestName, StringComparison.Ordinal)
+                    || manifestEntry.Length != HeaderBytes)
+                    throw new InvalidDataException("The archive does not carry the fixed recovery manifest entry.");
+                recoveryManifest = new byte[HeaderBytes];
+                manifestStream.ReadExactly(recoveryManifest);
+                if (!string.Equals(
+                        Sha256Text.Hex(recoveryManifest).ToUpperInvariant(),
+                        header.RecoveryManifestSha256,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("The recovery manifest does not hash to its declared SHA-256.");
                 foreach (var claim in entries)
                 {
                     token.ThrowIfCancellationRequested();
@@ -231,7 +275,7 @@ public static class BoardRecoveryBackup
                 }
             }
             var manifestBytes = File.ReadAllBytes(manifestPath);
-            var manifestHash = Convert.ToHexString(SHA256.HashData(manifestBytes));
+            var manifestHash = Sha256Text.Hex(manifestBytes).ToUpperInvariant();
             if (!string.Equals(manifestHash, recovery.GetProperty("pcBackupManifestSha256").GetString(), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The archived PC manifest hash is inconsistent.");
             var manifestNode = JsonNode.Parse(manifestBytes) ?? throw new InvalidDataException("Missing PC manifest.");
@@ -245,7 +289,7 @@ public static class BoardRecoveryBackup
                 using var rewritten = new FileStream(manifestPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
                 rewritten.Write(manifestBytes);
                 rewritten.Flush(true);
-                manifestHash = Convert.ToHexString(SHA256.HashData(manifestBytes));
+                manifestHash = Sha256Text.Hex(manifestBytes).ToUpperInvariant();
             }
             using var manifest = JsonDocument.Parse(manifestBytes);
             var destinations = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -272,7 +316,15 @@ public static class BoardRecoveryBackup
                 sidecar.Write(Encoding.ASCII.GetBytes(manifestHash + "\n"));
                 sidecar.Flush(true);
             }
-            return directory;
+            return new BoardRecoveryMaterial(
+                directory,
+                model,
+                header.ConfigPartitionUuid.ToString("D"),
+                Sha256Text.Hex(headerBytes).ToUpperInvariant(),
+                header.RecoveryManifestSha256,
+                recovery.GetProperty("pcBackupManifestSha256").GetString()
+                    ?? throw new InvalidDataException("The archive names no PC manifest hash."),
+                recoveryManifest);
         }
         catch
         {
@@ -324,23 +376,51 @@ public sealed class BoardRecoveryExtraction : IDisposable
 
     private readonly string _directoryPath;
     private readonly string _parentPath;
+    private readonly byte[]? _cacheReceipt;
+    private readonly byte[]? _cacheManifest;
     private int _state;
 
     /// <summary>Factory-only constructor; the directory must already be the unique one this factory created.</summary>
     internal BoardRecoveryExtraction(string directoryPath, string parentPath)
+        : this(directoryPath, parentPath, cacheReceipt: null, cacheManifest: null)
+    {
+    }
+
+    /// <summary>
+    /// Factory-only constructor for a fresh extraction that may persist its bounded cache proof once the caller
+    /// validates the handoff with <see cref="Retain"/>. Nothing is written before that call.
+    /// </summary>
+    internal BoardRecoveryExtraction(
+        string directoryPath, string parentPath, byte[]? cacheReceipt, byte[]? cacheManifest)
     {
         _directoryPath = Path.GetFullPath(directoryPath);
         _parentPath = Path.GetFullPath(parentPath);
+        _cacheReceipt = cacheReceipt;
+        _cacheManifest = cacheManifest;
     }
+
+    /// <summary>
+    /// A lease over a directory this factory did not create in this call. It is born retained and non-owned, so
+    /// neither <see cref="Dispose"/> nor any later handoff failure can delete it.
+    /// </summary>
+    internal static BoardRecoveryExtraction Borrowed(string directoryPath, string parentPath) =>
+        new BoardRecoveryExtraction(directoryPath, parentPath) { _state = Retained };
 
     /// <summary>Absolute path of the uniquely new extraction directory this lease owns.</summary>
     public string DirectoryPath => _directoryPath;
 
     /// <summary>
-    /// Marks the extraction as successfully handed over so <see cref="Dispose"/> keeps it durable. Idempotent and
-    /// without effect after <see cref="Dispose"/>.
+    /// Marks the extraction as successfully handed over so <see cref="Dispose"/> keeps it durable and, for a fresh
+    /// extraction, persists the bounded cache proof. Idempotent and without effect after <see cref="Dispose"/>.
     /// </summary>
-    public void Retain() => Interlocked.CompareExchange(ref _state, Retained, Owned);
+    public void Retain()
+    {
+        if (Interlocked.CompareExchange(ref _state, Retained, Owned) != Owned) return;
+        if (_cacheReceipt is not null && _cacheManifest is not null)
+        {
+            BoardRecoveryBackup.TryWriteCacheProof(_directoryPath, _cacheReceipt, _cacheManifest);
+        }
+    }
 
     /// <summary>
     /// Releases the lease. An unretained owned extraction is deleted; a retained one is left untouched.

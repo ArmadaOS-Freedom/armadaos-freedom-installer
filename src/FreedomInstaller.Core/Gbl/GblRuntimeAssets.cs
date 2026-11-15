@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -178,7 +177,7 @@ internal static class GblRuntimeAssets
 
         ct.ThrowIfCancellationRequested();
 
-        var actualSha256 = Convert.ToHexString(SHA256.HashData(bytes));
+        var actualSha256 = Sha256Text.Hex(bytes).ToUpperInvariant();
         if (!string.Equals(actualSha256, expectedSha256, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(

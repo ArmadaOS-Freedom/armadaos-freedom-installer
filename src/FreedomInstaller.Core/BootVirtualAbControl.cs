@@ -235,7 +235,7 @@ public static class BootVirtualAbControl
         }
 
         // Evidence even when the format turns out invalid.
-        string messageSha256 = Convert.ToHexString(SHA256.HashData(message)).ToLowerInvariant();
+        string messageSha256 = Sha256Text.Hex(message);
 
         (BootVirtualAbState state, bool formatValid, int? sourceSlot) = ParseMessageBytes(message);
 

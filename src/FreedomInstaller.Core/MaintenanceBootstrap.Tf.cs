@@ -152,7 +152,7 @@ public sealed partial class MaintenanceBootstrap
                 InstallSupportRole,
                 InstallSupportRemoteFileName,
                 archive.LongLength,
-                Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant());
+                Sha256Text.Hex(archive));
 
             await TransferRoleAsync(
                     InstallSupportRole,

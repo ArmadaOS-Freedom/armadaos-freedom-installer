@@ -253,7 +253,6 @@ public static class InternalInstallArtifacts
     private const int EntryNameBytes = 72;
 
     private static readonly byte[] ZeroChunk = new byte[CopyBufferBytes];
-    private static readonly char[] Sha256HexChars = "0123456789abcdefABCDEF".ToCharArray();
     private static readonly DateTimeOffset FixedTarTimestamp =
         new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
@@ -2223,73 +2222,17 @@ public static class InternalInstallArtifacts
         var headerBytes = new byte[BoardHeaderBytes];
         ReadExactly(image, headerBytes, 0, headerBytes.Length, "the board image header");
 
-        using var header = ParseJson(headerBytes, "board image header");
-        var root = header.RootElement;
-        if (root.ValueKind != JsonValueKind.Object)
-        {
-            throw new InvalidDataException("The board image header is not a JSON object.");
-        }
-
-        long schemaVersion = RequireInt64(root, "schemaVersion");
-        if (schemaVersion is not (2 or 3))
-            throw new InvalidDataException("The board image header is not schema version 2 or 3.");
-        long payloadLimit = schemaVersion == 3 ? BootSettingsRegion.Offset : BoardArchiveBytes;
-        Guid configPartitionUuid = Guid.Empty;
-        if (schemaVersion == 3)
-        {
-            string uuid = RequireString(root, "configPartitionUuid");
-            if (RequireInt64(root, "configRegionOffset") != BootSettingsRegion.Offset ||
-                RequireInt64(root, "configRegionBytes") != BootSettingsRegion.Bytes ||
-                RequireInt64(root, "configBoardId") != BootSettingsRegion.BoardId(model) ||
-                !Guid.TryParse(uuid, out configPartitionUuid) || configPartitionUuid == Guid.Empty ||
-                uuid != configPartitionUuid.ToString("D"))
-                throw new InvalidDataException("The launcher settings region has a different layout or identity.");
-        }
-
-        if (!string.Equals(RequireString(root, "kind"), BoardImageKind, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("The board image header names a different kind.");
-        }
-
-        if (RequireInt64(root, "imageBytes") != BoardArchiveBytes
-            || RequireInt64(root, "headerBytes") != BoardHeaderBytes
-            || RequireInt64(root, "payloadOffset") != BoardHeaderBytes)
-        {
-            throw new InvalidDataException("The board image header declares a different fixed geometry.");
-        }
-
-        if (!string.Equals(RequireString(root, "compression"), "gzip", StringComparison.Ordinal)
-            || !string.Equals(RequireString(root, "tarFormat"), "ustar", StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("The board image header declares a different compression or tar format.");
-        }
-
-        var compressedBytes = RequireInt64(root, "compressedBytes");
-        if (compressedBytes <= 0 || compressedBytes > payloadLimit - BoardHeaderBytes)
-        {
-            throw new InvalidDataException(
-                $"The board image declares {compressedBytes} compressed bytes, outside the payload window.");
-        }
-
-        var uncompressedTarBytes = RequireInt64(root, "uncompressedTarBytes");
-        if (uncompressedTarBytes < ArchiveTerminatorBytes || uncompressedTarBytes % TarBlockBytes != 0)
-        {
-            throw new InvalidDataException("The board image declares an impossible uncompressed tar length.");
-        }
-
-        var installationIdText = RequireString(root, "installationId");
-        if (!Guid.TryParse(installationIdText, out var installationId)
-            || !string.Equals(installationIdText, installationId.ToString("D"), StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("The board image header carries no canonical installation id.");
-        }
-
-        var planSha256 = RequireString(root, "planSha256");
-        RequireSha256(planSha256, "planSha256");
-        var manifestSha256 = RequireString(root, "recoveryManifestSha256");
-        RequireSha256(manifestSha256, "recoveryManifestSha256");
-        var compressedSha256 = RequireString(root, "compressedSha256");
-        RequireSha256(compressedSha256, "compressedSha256");
+        var parsedHeader = ParseBoardArchiveHeader(headerBytes, model);
+        long schemaVersion = parsedHeader.SchemaVersion;
+        long payloadLimit = parsedHeader.PayloadLimit;
+        Guid configPartitionUuid = parsedHeader.ConfigPartitionUuid;
+        var compressedBytes = parsedHeader.CompressedBytes;
+        var uncompressedTarBytes = parsedHeader.UncompressedTarBytes;
+        var installationIdText = parsedHeader.InstallationIdText;
+        var installationId = parsedHeader.InstallationId;
+        var planSha256 = parsedHeader.PlanSha256;
+        var manifestSha256 = parsedHeader.RecoveryManifestSha256;
+        var compressedSha256 = parsedHeader.CompressedSha256;
 
         token.ThrowIfCancellationRequested();
 
@@ -2603,6 +2546,96 @@ public static class InternalInstallArtifacts
         return manifestElement;
     }
 
+    /// <summary>
+    /// Validates the fixed 64 KiB outer board header as pure data: schema, launcher-settings geometry, board
+    /// identity, fixed image geometry, compression/tar format, compressed window, tar length, installation id
+    /// and every declared SHA-256. The full archive verifier below uses exactly this parser before it hashes the
+    /// compressed window, inflates the gzip member, walks the tar and scans the zero padding; the cache reader
+    /// reuses it on the live 64 KiB header read, so both consumers agree byte for byte.
+    /// </summary>
+    internal static BoardArchiveHeader ParseBoardArchiveHeader(byte[] headerBytes, string model)
+    {
+        using var header = ParseJson(headerBytes, "board image header");
+        var root = header.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("The board image header is not a JSON object.");
+        }
+
+        long schemaVersion = RequireInt64(root, "schemaVersion");
+        if (schemaVersion is not (2 or 3))
+            throw new InvalidDataException("The board image header is not schema version 2 or 3.");
+        long payloadLimit = schemaVersion == 3 ? BootSettingsRegion.Offset : BoardArchiveBytes;
+        Guid configPartitionUuid = Guid.Empty;
+        if (schemaVersion == 3)
+        {
+            string uuid = RequireString(root, "configPartitionUuid");
+            if (RequireInt64(root, "configRegionOffset") != BootSettingsRegion.Offset ||
+                RequireInt64(root, "configRegionBytes") != BootSettingsRegion.Bytes ||
+                RequireInt64(root, "configBoardId") != BootSettingsRegion.BoardId(model) ||
+                !Guid.TryParse(uuid, out configPartitionUuid) || configPartitionUuid == Guid.Empty ||
+                uuid != configPartitionUuid.ToString("D"))
+                throw new InvalidDataException("The launcher settings region has a different layout or identity.");
+        }
+
+        if (!string.Equals(RequireString(root, "kind"), BoardImageKind, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("The board image header names a different kind.");
+        }
+
+        if (RequireInt64(root, "imageBytes") != BoardArchiveBytes
+            || RequireInt64(root, "headerBytes") != BoardHeaderBytes
+            || RequireInt64(root, "payloadOffset") != BoardHeaderBytes)
+        {
+            throw new InvalidDataException("The board image header declares a different fixed geometry.");
+        }
+
+        if (!string.Equals(RequireString(root, "compression"), "gzip", StringComparison.Ordinal)
+            || !string.Equals(RequireString(root, "tarFormat"), "ustar", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("The board image header declares a different compression or tar format.");
+        }
+
+        var compressedBytes = RequireInt64(root, "compressedBytes");
+        if (compressedBytes <= 0 || compressedBytes > payloadLimit - BoardHeaderBytes)
+        {
+            throw new InvalidDataException(
+                $"The board image declares {compressedBytes} compressed bytes, outside the payload window.");
+        }
+
+        var uncompressedTarBytes = RequireInt64(root, "uncompressedTarBytes");
+        if (uncompressedTarBytes < ArchiveTerminatorBytes || uncompressedTarBytes % TarBlockBytes != 0)
+        {
+            throw new InvalidDataException("The board image declares an impossible uncompressed tar length.");
+        }
+
+        var installationIdText = RequireString(root, "installationId");
+        if (!Guid.TryParse(installationIdText, out var installationId)
+            || !string.Equals(installationIdText, installationId.ToString("D"), StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("The board image header carries no canonical installation id.");
+        }
+
+        var planSha256 = RequireString(root, "planSha256");
+        RequireSha256(planSha256, "planSha256");
+        var manifestSha256 = RequireString(root, "recoveryManifestSha256");
+        RequireSha256(manifestSha256, "recoveryManifestSha256");
+        var compressedSha256 = RequireString(root, "compressedSha256");
+        RequireSha256(compressedSha256, "compressedSha256");
+
+        return new BoardArchiveHeader(
+            schemaVersion,
+            configPartitionUuid,
+            payloadLimit,
+            compressedBytes,
+            uncompressedTarBytes,
+            installationIdText,
+            installationId,
+            planSha256,
+            manifestSha256,
+            compressedSha256);
+    }
+
     private static void VerifyZeroPadding(Stream image, long startOffset, long endOffset, CancellationToken token)
     {
         image.Position = startOffset;
@@ -2710,7 +2743,7 @@ public static class InternalInstallArtifacts
 
     private static void RequireSha256(string value, string name)
     {
-        if (value.Length != 64 || value.AsSpan().IndexOfAnyExcept(Sha256HexChars) >= 0)
+        if (!Sha256Text.IsHex(value))
         {
             throw new InvalidDataException($"The board image JSON field '{name}' is not a SHA-256.");
         }
@@ -2792,15 +2825,7 @@ public static class InternalInstallArtifacts
     private static string HashStream(FileStream stream)
     {
         stream.Position = 0;
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[CopyBufferBytes];
-        int read;
-        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-        {
-            hash.AppendData(buffer, 0, read);
-        }
-
-        return Convert.ToHexString(hash.GetHashAndReset());
+        return Sha256Text.HexOfStream(stream).ToUpperInvariant();
     }
 
     private static string HashFile(string path, CancellationToken token, long expectedLength)
@@ -2856,7 +2881,8 @@ public static class InternalInstallArtifacts
         throw new IOException("Could not create a unique artifact directory below the chosen parent.");
     }
 
-    private static string Sha256Hex(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
+    /// <summary>Uppercase hex stays this file's exact text output; only the digest computation is shared.</summary>
+    private static string Sha256Hex(byte[] bytes) => Sha256Text.Hex(bytes).ToUpperInvariant();
 
     private static bool HexEquals(string? left, string? right) =>
         left is not null && right is not null && string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
@@ -2939,6 +2965,19 @@ public static class InternalInstallArtifacts
 
     // -------------------------------------------------------------------- nested types
 
+    /// <summary>The validated values of the fixed outer board header, shared by both archive consumers.</summary>
+    internal sealed record BoardArchiveHeader(
+        long SchemaVersion,
+        Guid ConfigPartitionUuid,
+        long PayloadLimit,
+        long CompressedBytes,
+        long UncompressedTarBytes,
+        string InstallationIdText,
+        Guid InstallationId,
+        string PlanSha256,
+        string RecoveryManifestSha256,
+        string CompressedSha256);
+
     /// <summary>The verified evidence of one captured input file.</summary>
     internal sealed class VerifiedCapture
     {
@@ -2964,7 +3003,7 @@ public static class InternalInstallArtifacts
             SectorSize = sectorSize;
             Bytes = bytes;
             Length = bytes.Length;
-            Sha256 = Convert.ToHexString(SHA256.HashData(bytes));
+            Sha256 = Sha256Text.Hex(bytes).ToUpperInvariant();
         }
 
         internal string Role { get; }

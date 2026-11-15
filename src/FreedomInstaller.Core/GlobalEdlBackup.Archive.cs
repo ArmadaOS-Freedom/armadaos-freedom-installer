@@ -108,7 +108,7 @@ public static partial class GlobalEdlBackup
             byte[] manifestBytes = await ReadBoundedFileAsync(manifestPath, MaxManifestBytes, token).ConfigureAwait(false);
             byte[] sidecarBytes = await ReadBoundedFileAsync(sidecarPath, DigestChars, token).ConfigureAwait(false);
 
-            string manifestHash = Convert.ToHexString(SHA256.HashData(manifestBytes));
+            string manifestHash = Sha256Text.Hex(manifestBytes).ToUpperInvariant();
             RequireSidecar(sidecarBytes, manifestHash);
 
             GlobalEdlManifest manifest = DeserializeManifest(manifestBytes);
@@ -506,7 +506,7 @@ public static partial class GlobalEdlBackup
         string manifestPath = Path.Combine(resolved, ManifestFileName);
         await WriteAtomicAsync(manifestPath, bytes, token).ConfigureAwait(false);
 
-        byte[] digestBytes = Encoding.ASCII.GetBytes(Convert.ToHexString(SHA256.HashData(bytes)));
+        byte[] digestBytes = Encoding.ASCII.GetBytes(Sha256Text.Hex(bytes).ToUpperInvariant());
         await WriteAtomicAsync(Path.Combine(resolved, SidecarFileName), digestBytes, token).ConfigureAwait(false);
     }
 

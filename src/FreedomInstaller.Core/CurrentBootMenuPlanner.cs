@@ -205,24 +205,11 @@ public sealed class CurrentBootMenuPlan : IDisposable
             throw new ArgumentException("The current boot slot must be 'a' or 'b'.", nameof(currentSlot));
         }
 
-        if (string.IsNullOrEmpty(backupManifestSha256) || backupManifestSha256.Length != 64)
+        if (!Sha256Text.IsHex(backupManifestSha256))
         {
             throw new ArgumentException(
                 "The backup manifest SHA-256 must be a 64-character hex digest.",
                 nameof(backupManifestSha256));
-        }
-
-        foreach (char hexDigit in backupManifestSha256)
-        {
-            bool isHex = (hexDigit >= '0' && hexDigit <= '9') ||
-                (hexDigit >= 'a' && hexDigit <= 'f') ||
-                (hexDigit >= 'A' && hexDigit <= 'F');
-            if (!isHex)
-            {
-                throw new ArgumentException(
-                    "The backup manifest SHA-256 must be a 64-character hex digest.",
-                    nameof(backupManifestSha256));
-            }
         }
 
         _directoryPath = directoryPath;

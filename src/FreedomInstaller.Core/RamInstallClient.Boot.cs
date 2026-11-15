@@ -499,23 +499,7 @@ public sealed partial class RamInstallClient
         }
     }
 
-    private static bool IsHexSha256(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (char character in value)
-        {
-            if (!Uri.IsHexDigit(character))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsHexSha256(string? value) => Sha256Text.IsHex(value);
 
     private static async Task VerifyMaterialFileAsync(
         FileStream content,

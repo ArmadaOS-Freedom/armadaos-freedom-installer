@@ -641,7 +641,7 @@ public static partial class GlobalEdlBackup
             destination.Flush(true);
         }
 
-        return Convert.ToHexString(SHA256.HashData(buffer));
+        return Sha256Text.Hex(buffer).ToUpperInvariant();
     }
 
     private static byte[] CaptureReadAllBytes(string path, long expectedLength)
@@ -706,14 +706,9 @@ public static partial class GlobalEdlBackup
             throw new InvalidDataException(what + ": SHA-256 is missing or malformed.");
         }
 
-        for (int index = 0; index < value.Length; index++)
+        if (!Sha256Text.IsHex(value))
         {
-            char c = value[index];
-            bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-            if (!hex)
-            {
-                throw new InvalidDataException(what + ": SHA-256 is not hexadecimal.");
-            }
+            throw new InvalidDataException(what + ": SHA-256 is not hexadecimal.");
         }
 
         return value.ToUpperInvariant();

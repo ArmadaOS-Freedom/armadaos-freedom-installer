@@ -47,8 +47,6 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
 
     private const string MetadataFileName = "package.json";
 
-    private const int Sha256HexLength = 64;
-
     /// <summary>Bounded streaming-hash chunk: 81920 bytes, the BCL default copy buffer size.</summary>
     private const int HashStreamBufferBytes = 81920;
 
@@ -336,7 +334,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
 
         var raw = ReadAllBytes(_manifestStream, cancellationToken);
-        var fingerprint = Convert.ToHexString(SHA256.HashData(raw));
+        var fingerprint = Sha256Text.Hex(raw).ToUpperInvariant();
         if (!string.Equals(fingerprint, ManifestFingerprint, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
@@ -446,7 +444,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
             manifestStream = new FileStream(metadataPath, FileMode.Open, FileAccess.Read, FileShare.Read);
 
             var rawMetadata = ReadAllBytes(manifestStream, cancellationToken);
-            var manifestFingerprint = Convert.ToHexString(SHA256.HashData(rawMetadata));
+            var manifestFingerprint = Sha256Text.Hex(rawMetadata).ToUpperInvariant();
 
             if (!string.Equals(manifestFingerprint, requiredFingerprint, StringComparison.OrdinalIgnoreCase))
             {
@@ -833,7 +831,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
             + "\"payloads\":[" + payloads + "]"
             + "}";
 
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+        return Sha256Text.Hex(Encoding.UTF8.GetBytes(canonical)).ToUpperInvariant();
     }
 
     // ---------------------------------------------------------------- selection and identity
@@ -957,22 +955,12 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
     /// </summary>
     private static string HashStream(FileStream stream, CancellationToken cancellationToken)
     {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[HashStreamBufferBytes];
-
         try
         {
             stream.Position = 0;
 
-            int read;
-            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                hash.AppendData(buffer, 0, read);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            return Convert.ToHexString(hash.GetHashAndReset());
+            // The captured fact is uppercase text, so only the digest computation is shared.
+            return Sha256Text.HexOfStream(stream, cancellationToken).ToUpperInvariant();
         }
         finally
         {
@@ -980,23 +968,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         }
     }
 
-    private static bool IsSha256Hex(string? value)
-    {
-        if (value is null || value.Length != Sha256HexLength)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (!char.IsAsciiHexDigit(character))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsSha256Hex(string? value) => Sha256Text.IsHex(value);
 
     private static string Quote(string? value)
     {
@@ -1189,7 +1161,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
             manifestStream = new FileStream(metadataPath, FileMode.Open, FileAccess.Read, FileShare.Read);
 
             var rawMetadata = ReadAllBytes(manifestStream, cancellationToken);
-            var manifestFingerprint = Convert.ToHexString(SHA256.HashData(rawMetadata));
+            var manifestFingerprint = Sha256Text.Hex(rawMetadata).ToUpperInvariant();
 
             if (!string.Equals(manifestFingerprint, claimedFingerprint, StringComparison.OrdinalIgnoreCase))
             {
@@ -2242,7 +2214,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
             + "\"deployment\":{" + deploymentFields + "}"
             + "}";
 
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+        return Sha256Text.Hex(Encoding.UTF8.GetBytes(canonical)).ToUpperInvariant();
     }
 
     private static string DirectStorageFields(PackageStorage storage) =>

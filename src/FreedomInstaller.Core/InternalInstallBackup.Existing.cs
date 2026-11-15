@@ -1407,27 +1407,7 @@ public static partial class InternalInstallBackup
         return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool ExistingIsSha256Hex(string? value)
-    {
-        if (value is null || value.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (char character in value)
-        {
-            bool isHex = character is >= '0' and <= '9'
-                or >= 'a' and <= 'f'
-                or >= 'A' and <= 'F';
-
-            if (!isHex)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool ExistingIsSha256Hex(string? value) => Sha256Text.IsHex(value);
 
     // ------------------------------------------------------------------ nested state
 

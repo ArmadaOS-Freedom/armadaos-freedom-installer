@@ -705,21 +705,11 @@ public sealed class MaintenanceBundle : IMaintenanceBundle
         }
 
         var text = value.GetString();
-        if (text is null || text.Length != 64)
+        if (text is null || !Sha256Text.IsHex(text))
         {
             throw new MaintenanceException(
                 MaintenanceErrorCode.InvalidManifest,
                 "Every entry must declare a 64-hex 'sha256' digest.");
-        }
-
-        foreach (var character in text)
-        {
-            if (!Uri.IsHexDigit(character))
-            {
-                throw new MaintenanceException(
-                    MaintenanceErrorCode.InvalidManifest,
-                    "Every entry must declare a 64-hex 'sha256' digest.");
-            }
         }
 
         return text.ToLowerInvariant();

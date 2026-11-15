@@ -142,7 +142,7 @@ public static partial class EdlRawBootBuilder
         Buffer.BlockCopy(modulus, 0, blob, 8, AvbRsaModulusBytes);
         Buffer.BlockCopy(rrBytes, 0, blob, 8 + AvbRsaModulusBytes, AvbRsaModulusBytes);
 
-        if (!string.Equals(Convert.ToHexString(SHA256.HashData(blob)), AvbPublicKeySha256, StringComparison.Ordinal))
+        if (!string.Equals(Sha256Text.Hex(blob).ToUpperInvariant(), AvbPublicKeySha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException("the derived AVB public key blob does not match the fixed AOSP test key");
         }
@@ -306,7 +306,7 @@ public static partial class EdlRawBootBuilder
             throw new InvalidDataException("candidate vbmeta public key size field is not 4096 bits");
         }
 
-        if (!string.Equals(Convert.ToHexString(SHA256.HashData(publicKey)), AvbPublicKeySha256, StringComparison.Ordinal))
+        if (!string.Equals(Sha256Text.Hex(publicKey).ToUpperInvariant(), AvbPublicKeySha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException("candidate vbmeta public key is not the fixed AOSP test key");
         }
@@ -338,7 +338,7 @@ public static partial class EdlRawBootBuilder
     {
         return modulus.Length == AvbRsaModulusBytes
             && string.Equals(
-                Convert.ToHexString(SHA256.HashData(modulus)),
+                Sha256Text.Hex(modulus).ToUpperInvariant(),
                 AvbModulusSha256,
                 StringComparison.Ordinal);
     }

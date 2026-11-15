@@ -121,7 +121,7 @@ public sealed class RamInstallRequest
                 nameof(expectedTable));
         }
 
-        _requestSha256 = Convert.ToHexString(SHA256.HashData(_requestBytes)).ToLowerInvariant();
+        _requestSha256 = Sha256Text.Hex(_requestBytes);
     }
 
     /// <summary>
@@ -565,8 +565,6 @@ public sealed class RamInstallSeed
 /// </summary>
 internal static class RamInstallValidation
 {
-    private const int Sha256HexLength = 64;
-
     private const string OriginPrefix = "ostree-image-signed:docker://ghcr.io/armadaos-freedom/armadaos-freedom:";
     private const string LegacyOriginPrefix = "ostree-image-signed:docker://ghcr.io/mydanyi/armadaos-freedom:";
 
@@ -635,25 +633,8 @@ internal static class RamInstallValidation
         return guid.ToString("D");
     }
 
-    public static bool IsLowerSha256(string? value)
-    {
-        if (value is null || value.Length != Sha256HexLength)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (character is >= '0' and <= '9' or >= 'a' and <= 'f')
-            {
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
-    }
+    /// <summary>Exactly 64 lowercase hexadecimal SHA-256 text, as required by this contract.</summary>
+    public static bool IsLowerSha256(string? value) => Sha256Text.IsHex(value, lowercaseOnly: true);
 
     public static string RequireLowerSha256(string? value, string parameterName)
     {
