@@ -50,7 +50,10 @@ public sealed class TfBootRoundTripTests : IClassFixture<Gen5EdlToolchainFixture
         _g5 = g5;
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot,
+        RequiredFixtureVariables.TfNativePackagePath)]
     public async Task Tf_temporary_then_final_roundtrip_over_real_public_factories()
     {
         RequiredEnv("EDL_TOOLCHAIN_G5_TEST_BUNDLE_PATH");

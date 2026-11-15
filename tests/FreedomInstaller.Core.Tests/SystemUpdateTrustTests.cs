@@ -25,7 +25,9 @@ public sealed partial class SystemUpdateTrustTests : IClassFixture<SystemUpdateT
         _fx = fx;
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task Aosp_Unlocked_Succeeds_WithDistinctPreservedSlotBases_AndUnchangedInputs()
     {
         var snapshot = CaptureSnapshot(_fx.AospA, _fx.AospB, efisp: null);
@@ -73,7 +75,9 @@ public sealed partial class SystemUpdateTrustTests : IClassFixture<SystemUpdateT
         AssertSnapshotUnchanged(snapshot);
     }
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData(BootloaderState.Locked)]
     [InlineData(BootloaderState.Unknown)]
     [InlineData(BootloaderState.Unlocked)]
@@ -122,7 +126,9 @@ public sealed partial class SystemUpdateTrustTests : IClassFixture<SystemUpdateT
         AssertSnapshotUnchanged(snapshot);
     }
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData(BootloaderState.Locked)]
     [InlineData(BootloaderState.Unknown)]
     public async Task Aosp_LockedOrUnknown_RejectsOemAblKeyMismatch(BootloaderState lockState)
@@ -139,7 +145,9 @@ public sealed partial class SystemUpdateTrustTests : IClassFixture<SystemUpdateT
         Assert.Contains("ABL AVB key", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task MixedModes_AndEfispViolations_AreRefused()
     {
         InvalidDataException mixedEx = await Assert.ThrowsAsync<InvalidDataException>(() =>
@@ -203,7 +211,9 @@ public sealed partial class SystemUpdateTrustTests : IClassFixture<SystemUpdateT
         Assert.Contains("tail", tailEx.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task AvbChainViolations_ChildMismatch_CorruptedRootSignature_AndWrongBootChain_AreRefused()
     {
         using var otherKey = RSA.Create(4096);
@@ -270,7 +280,9 @@ public sealed partial class SystemUpdateTrustTests : IClassFixture<SystemUpdateT
         Assert.Contains("boot leaf key", bootChainEx.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task UnrecognizedXblBudget_AndNonKshimStockBoot_AreRefused()
     {
         string badXblPath = _fx.NewCaseFilePath("xbl-unrecognized.elf");
@@ -298,7 +310,9 @@ public sealed partial class SystemUpdateTrustTests : IClassFixture<SystemUpdateT
         Assert.Contains("K shim", stockBootEx.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task Aosp_BootPayloadPaddingCorruption_AndBadClaimSha_AreRefused()
     {
         string mutatedBootPath = _fx.NewCaseFilePath("boot-a-padding-mutated.img");
@@ -343,7 +357,9 @@ public sealed partial class SystemUpdateTrustTests : IClassFixture<SystemUpdateT
                 CancellationToken.None));
     }
 
-    [Fact]
+    [RequiredFixturesFact(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     public async Task GuardClauses_Model_Enum_NullClaims_AndPreCanceledToken_ThrowExpectedExceptions()
     {
         await Assert.ThrowsAsync<ArgumentException>(() =>

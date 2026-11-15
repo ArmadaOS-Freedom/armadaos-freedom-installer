@@ -80,3 +80,197 @@ jobs:
       # C#-exported fixtures and CAP_SYS_ADMIN for its mount cases.
       - name: Run public maintenance unit tests
         run: python3 -B maintenance/run_unit_tests.py
+
+  core-tests-linux:
+    name: Complete Core tests (Linux, public generated inputs)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.401'
+
+      # Dependencies of the checked-in build scripts: tools/build-boot-packers.sh
+      # cross-compiles the Windows PE pins with mingw-w64; the native Linux
+      # oracle needs cmake + a host C compiler; the Core process tests need
+      # python3 and ssh-keygen; the archive/driver tests need unzip and 7z.
+      - name: Install public build and test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            gcc-mingw-w64-x86-64-posix \
+            binutils-mingw-w64-x86-64 \
+            pkg-config \
+            libusb-1.0-0-dev \
+            libssl-dev \
+            python3 \
+            unzip \
+            p7zip-full \
+            busybox-static \
+            openssh-client
+
+      # The Python boot-trust tests import the public system sources, so a second
+      # public checkout supplies them. This is ordinary public source, not a
+      # private fixture: no submodules and no optional large artefacts are
+      # fetched, and the tests read the files in place without modifying them.
+      - name: Checkout public system source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ArmadaOS-Freedom/armadaos-freedom
+          ref: main
+          path: public-system-source
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Check the public system source layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_root="${GITHUB_WORKSPACE}/public-system-source"
+          test -f "${source_root}/system_files/usr/lib/armada/updates/boot_trust.py"
+          echo "ARMADA_SYSTEM_SOURCE_PATH=${source_root}" >> "${GITHUB_ENV}"
+
+      # Downloads the pinned public inputs and builds both the Windows PE pins
+      # and a separate native Linux ELF oracle. It also emits the props file and
+      # an environment file mapping each generated artefact to the variable the
+      # Core tests require. A missing mandatory input fails this step.
+      - name: Prepare public test inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B maintenance/prepare_test_inputs.py \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --work-dir "${RUNNER_TEMP}/armada-core-test-inputs" \
+            --env-file "${RUNNER_TEMP}/armada-core-test-env.sh" \
+            --summary-json "${RUNNER_TEMP}/armada-core-test-inputs.json"
+
+      # The CLI and Python trust tests execute the current BootTool, so build it
+      # from this checkout with the same props as the Core tests. This is a
+      # public, generatable input: the DLL and its apphost come from source, not
+      # from a private fixture, and both are checked before the test run.
+      - name: Build the BootTool for the CLI and Python tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          . "${RUNNER_TEMP}/armada-core-test-env.sh"
+          set +a
+          dotnet build src/FreedomInstaller.BootTool/FreedomInstaller.BootTool.csproj \
+            --configuration Release --nologo \
+            -p:UseAppHost=true \
+            -p:BundledBuildInputsProps="${CORE_TEST_PROPS_PATH}"
+          boot_tool="${GITHUB_WORKSPACE}/src/FreedomInstaller.BootTool/bin/Release/net10.0/armada-boot-tool.dll"
+          apphost="${GITHUB_WORKSPACE}/src/FreedomInstaller.BootTool/bin/Release/net10.0/armada-boot-tool"
+          test -s "${boot_tool}"
+          test -x "${apphost}"
+          echo "BOOT_TOOL_DLL=${boot_tool}" >> "${GITHUB_ENV}"
+
+      # The CLI deliberately trusts only the two fixed installation paths below,
+      # so the verified native Linux ELFs exported by "Prepare public test inputs"
+      # are installed there on this ephemeral runner. They are the public built
+      # binaries (never the Windows PE pins and never symlinks), and no CLI check
+      # or test is relaxed. This is runner setup, not a production deployment.
+      - name: Install the native kshim ELFs at the trusted paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          . "${RUNNER_TEMP}/armada-core-test-env.sh"
+          set +a
+          sudo install -d -m 0755 /usr/libexec/armada/kshim-tools
+          sudo install -m 0755 "${EDL_RAW_LINUX_PACKER_PATH}" \
+            /usr/libexec/armada/kshim-tools/MultiBootKernelPatcher
+          sudo install -m 0755 "${EDL_RAW_LINUX_UNPACKER_PATH}" \
+            /usr/libexec/armada/kshim-tools/UnpackTool
+          test -x /usr/libexec/armada/kshim-tools/MultiBootKernelPatcher
+          test -x /usr/libexec/armada/kshim-tools/UnpackTool
+          test ! -L /usr/libexec/armada/kshim-tools/MultiBootKernelPatcher
+          test ! -L /usr/libexec/armada/kshim-tools/UnpackTool
+
+      # No maintainer filter: ordinary Core tests run against the generated
+      # public inputs. Tests whose fixture needs non-public stock firmware or
+      # private historical logs skip only while their whole fixture family is
+      # absent; a provided but malformed family still fails its validator.
+      - name: Run the complete Core test suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          . "${RUNNER_TEMP}/armada-core-test-env.sh"
+          set +a
+          echo "::group::dotnet test FreedomInstaller.Core.Tests"
+          dotnet test tests/FreedomInstaller.Core.Tests/FreedomInstaller.Core.Tests.csproj \
+            --configuration Release --nologo \
+            -p:BundledBuildInputsProps="${CORE_TEST_PROPS_PATH}"
+          echo "::endgroup::"
+
+  # Deliberately separate from the ordinary maintenance discovery: these cases
+  # execute the real generated cleanup.sh with a real BusyBox, mount tmpfs and
+  # need CAP_SYS_ADMIN in a disposable privileged container.
+  tf-bootstrap-lifecycle:
+    name: TF bootstrap lifecycle (privileged disposable container)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: mcr.microsoft.com/dotnet/sdk:10.0.401
+      options: --privileged
+    env:
+      TF_BOOTSTRAP_CONTAINER_TEST: '1'
+      TF_BOOTSTRAP_FIXTURE_EXPORT_DIR: /evidence/tf-fixtures
+      TF_BOOTSTRAP_REAL_BUSYBOX: /usr/bin/busybox
+      # Unique to this run inside the disposable container, created below and
+      # never deleted by the workflow; the harness owns its own cleanup.
+      TF_BOOTSTRAP_TEST_WORK: /evidence/tf-work-${{ github.run_id }}-${{ github.run_attempt }}
+      TEST_ARTIFACT_ROOT: /evidence/artifacts
+      EDL_CLIENT_TEST_WORK_ROOT: /evidence/edl-client
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the real BusyBox and Python harness runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends busybox-static python3
+          test -x /usr/bin/busybox
+
+      # TfBootstrapScriptTests writes the actual launcher.sh and cleanup.sh it
+      # generates from the production bootstrap into /evidence, together with
+      # the real support archive. Nothing is simulated by the workflow.
+      - name: Export the actual TF scripts from the C# test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${TF_BOOTSTRAP_FIXTURE_EXPORT_DIR}" \
+            "${TEST_ARTIFACT_ROOT}" "${EDL_CLIENT_TEST_WORK_ROOT}"
+          dotnet test tests/FreedomInstaller.Core.Tests/FreedomInstaller.Core.Tests.csproj \
+            --configuration Release --nologo \
+            -p:BundledAvbSigningKey="${GITHUB_WORKSPACE}/vendor/aosp/testkey_rsa4096.pem" \
+            --filter 'FullyQualifiedName~TfBootstrapScriptTests'
+          test -s "${TF_BOOTSTRAP_FIXTURE_EXPORT_DIR}/launcher.sh"
+          test -s "${TF_BOOTSTRAP_FIXTURE_EXPORT_DIR}/cleanup.sh"
+
+      # The nine existing lifecycle cases, unchanged. They refuse to run unless
+      # TF_BOOTSTRAP_CONTAINER_TEST=1, /.dockerenv exists and every fixture is
+      # real; the mount cases report BLOCKED rather than passing if the
+      # container lacks CAP_SYS_ADMIN.
+      - name: Run the nine TF cleanup lifecycle cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${TF_BOOTSTRAP_TEST_WORK}"
+          python3 -B maintenance/tests/test_bootstrap_lifecycle.py -v

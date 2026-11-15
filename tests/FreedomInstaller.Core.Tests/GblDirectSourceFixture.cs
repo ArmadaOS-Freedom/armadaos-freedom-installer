@@ -464,7 +464,9 @@ public sealed class GblDirectSourceFixtureTests
     private const string XblSha256 =
         "737E87430B19A0D83D885DE207584A77711B5F26F1852FFD381DAEEE2A8893F9";
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData("PRC")]
     [InlineData("ROW")]
     public void ExposesRawSyntheticInputsForReadySession(string region)

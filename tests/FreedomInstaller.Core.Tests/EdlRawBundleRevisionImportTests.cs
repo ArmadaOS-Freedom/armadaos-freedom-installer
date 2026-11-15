@@ -25,6 +25,7 @@ public sealed class EdlRawBundleRevisionImportTests
     private const string BundleId = "armadaos-freedom";
     private const string KernelSource = "common/kernel";
     private const string MarkerPrefix = "only-";
+    private const string RuntimeMarker = "ARMADA_LINUX_MIRROR_V1";
     private const string BundleStem = "raw-edl.zip";
 
     [Theory]
@@ -260,9 +261,16 @@ public sealed class EdlRawBundleRevisionImportTests
             recipe["diagnosticBootArgs"] = normal + EdlRawFixture.DiagnosticSuffix;
 
             var runtime = package.ReadFile(EdlRawFixture.RuntimeFile);
+            // The model-distinct mutation must keep the fixture's leading current-mirror marker
+            // intact: the package reader requires it, and the hashes below are recomputed from
+            // these exact bytes.
+            var marker = Encoding.ASCII.GetBytes(RuntimeMarker);
+            Assert.True(marker.Length + model.Length < runtime.Length);
+            Assert.Equal(marker, runtime.AsSpan(0, marker.Length).ToArray());
+
             var prefix = Encoding.UTF8.GetBytes("runtime:" + model);
-            Assert.True(prefix.Length < runtime.Length);
-            prefix.CopyTo(runtime, 0);
+            Assert.True(marker.Length + prefix.Length < runtime.Length);
+            prefix.CopyTo(runtime, marker.Length);
             Assert.Equal(4194304, runtime.Length);
             package.WriteFile(EdlRawFixture.RuntimeFile, runtime);
 

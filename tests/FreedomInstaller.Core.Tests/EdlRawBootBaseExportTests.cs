@@ -107,7 +107,7 @@ public sealed class EdlRawBootBaseExportTests
         }
     }
 
-    // -------------------------------------------------------- export bridge
+    // ------------------------------------------------------- export entry
 
     private static async Task<InternalSlotMaterial> ExportAsync(
         string slot,
@@ -119,14 +119,8 @@ public sealed class EdlRawBootBaseExportTests
         string outputPath,
         CancellationToken token = default)
     {
-        MethodInfo method = typeof(InternalSlotMaterialReader).GetMethod(
-            "AnalyzeAndExportBaseAsync", PrivateStatic)
-            ?? throw new InvalidOperationException("AnalyzeAndExportBaseAsync not found");
-        var task = (Task<InternalSlotMaterial>)method.Invoke(null, new object?[]
-        {
-            slot, currentBoot, vendorBoot, initBoot, abl, xblConfig, outputPath, token,
-        })!;
-        return await task;
+        return await InternalSlotMaterialReader.AnalyzeAndExportBaseAsync(
+            slot, currentBoot, vendorBoot, initBoot, abl, xblConfig, outputPath, token);
     }
 
     // ------------------------------------------------- fixture helper bridge

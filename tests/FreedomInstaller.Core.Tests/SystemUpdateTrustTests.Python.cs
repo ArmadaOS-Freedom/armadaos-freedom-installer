@@ -176,7 +176,9 @@ for slot in ('a', 'b'):
 print(json.dumps({'ok': True, 'mode': report['mode'], 'model': report['physical']['model'], 'lockState': report['lockState']}))
 ";
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData(false, "TB322FC", "unlocked")]
     [InlineData(false, "TB323FU", "unlocked")]
     [InlineData(true, "TB323FU", "locked")]
@@ -239,7 +241,9 @@ print(json.dumps({'ok': True, 'mode': report['mode'], 'model': report['physical'
         AssertSnapshotUnchanged(snapshot);
     }
 
-    [Theory]
+    [RequiredFixturesTheory(
+        RequiredFixtureVariables.G5PublicAblPath,
+        RequiredFixtureVariables.G5LoaderFixtureRoot)]
     [InlineData("aosp-unknown", "unknown", "ABL AVB key", false)]
     [InlineData("source-changed", "unlocked", "sources.slots.a.boot", true)]
     [InlineData("physical-changed", "unlocked", "physical boot slots changed during trust inspection", true)]
