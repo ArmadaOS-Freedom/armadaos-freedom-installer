@@ -86,11 +86,20 @@ public partial class MainWindow
                     }
                     if (!connected)
                     {
+                        BoardRecoveryExtraction? extraction = null;
                         try
                         {
-                            source = await BoardRecoveryBackup.ReadDirectoryAsync(client, parent, TemporaryWorkRoot, token);
-                            if (source is not null)
-                                await BindUninstallRecoveryIdentityAsync(client, source, token);
+                            extraction = await BoardRecoveryBackup.ReadDirectoryAsync(client, parent, TemporaryWorkRoot, token);
+                            if (extraction is not null)
+                            {
+                                await BindUninstallRecoveryIdentityAsync(client, extraction.DirectoryPath, token);
+                                extraction.Retain();
+                                source = extraction.DirectoryPath;
+                            }
+                            else
+                            {
+                                source = null;
+                            }
                             _boardRecoveryDiscoveredDirectory = source;
                         }
                         catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException or InvalidDataException)
@@ -98,6 +107,13 @@ public partial class MainWindow
                             source = null;
                             _boardRecoveryDiscoveredDirectory = null;
                             AppendLocalizedLog(M("Dynamic.RecoverySource.BoardInvalid", error.Message));
+                        }
+                        finally
+                        {
+                            // Only a successful bind retained the extraction; every failure or cancellation has
+                            // already released the backup locks inside the bind helper before this lease removes
+                            // exactly the directory this call created.
+                            extraction?.Dispose();
                         }
                     }
                     if (source is null)

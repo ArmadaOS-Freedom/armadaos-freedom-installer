@@ -68,6 +68,7 @@ public partial class MainWindow
     /// <summary>
     /// 追加一条日志。时间戳只在追加时取一次（HH:mm:ss），切换语言不会改时间，
     /// 超过 <see cref="MaxLogRows"/> 时连行带登记一起移除，绝不留没有对应行的登记。
+    /// 界面只保留最近若干行，落盘却是整场会话：每一行在产生时单独追加进日志文件。
     /// </summary>
     internal void AppendLocalizedLog(UiMessage message)
     {
@@ -134,8 +135,9 @@ public partial class MainWindow
             LogEmptyText.Visibility = Visibility.Collapsed;
         }
 
-        // 工作会话已经存在时，这一行以不可变快照进入后台队列；会话尚未建立时不做任何声明，只在关闭窗口时再尝试。
-        QueueWorkLogPersistence();
+        // 落盘只收这一行：会话已建立时立即排进追加队列，否则留在本窗口待写列表里等会话绑定。
+        // 语言切换只重渲染界面，文件保留这一行产生时的文本。
+        AppendWorkLogLine(entry.Row.Text);
     }
 
     /// <summary>
