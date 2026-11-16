@@ -261,6 +261,14 @@ public sealed class OfflineUpdateSshConnection : IOfflineUpdateConnection
     {
         if (sshExecutable is null)
         {
+            if (OperatingSystem.IsMacOS())
+            {
+                // macOS ships OpenSSH in the sealed system volume.
+                const string macPath = "/usr/bin/ssh";
+                if (!File.Exists(macPath))
+                    throw new IOException($"The macOS OpenSSH client was not found at the expected location ('{macPath}'); supply SshExecutable.");
+                return macPath;
+            }
             if (!OperatingSystem.IsWindows())
                 throw new IOException("No default OpenSSH executable is available on this platform; supply SshExecutable explicitly.");
             var path = Path.Combine(
