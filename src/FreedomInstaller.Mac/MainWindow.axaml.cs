@@ -105,6 +105,7 @@ public partial class MainWindow : Window
             : HomePage.IsVisible ? HomePage
             : GlobalRecoveryPage.IsVisible ? GlobalRecoveryPage
             : OfflineUpgradePage.IsVisible ? OfflineUpgradePage
+            : BootMaintenancePage.IsVisible ? BootMaintenancePage
             : WorkflowScrollViewer;
         AboutVersionText.Text = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? string.Empty;
         AboutCopyStatus.IsVisible = false;
@@ -129,6 +130,7 @@ public partial class MainWindow : Window
         SupportPage.IsVisible = ReferenceEquals(view, SupportPage);
         GlobalRecoveryPage.IsVisible = ReferenceEquals(view, GlobalRecoveryPage);
         OfflineUpgradePage.IsVisible = ReferenceEquals(view, OfflineUpgradePage);
+        BootMaintenancePage.IsVisible = ReferenceEquals(view, BootMaintenancePage);
         var wizard = ReferenceEquals(view, WorkflowScrollViewer);
         WorkflowScrollViewer.IsVisible = wizard;
         WorkflowSidebar.IsVisible = wizard;
@@ -170,16 +172,20 @@ public partial class MainWindow : Window
 
         switch ((sender as Control)?.Tag as string)
         {
-            case "global-backup" when !HasInternalInstallDeviceSession:
+            case "global-backup" when !HasInternalInstallDeviceSession && !HasBootMaintenanceDeviceSession:
                 ShowGlobalRecoveryPage(GlobalRecoveryMode.Backup);
                 break;
-            case "global-restore" when !HasInternalInstallDeviceSession:
+            case "global-restore" when !HasInternalInstallDeviceSession && !HasBootMaintenanceDeviceSession:
                 ShowGlobalRecoveryPage(GlobalRecoveryMode.Restore);
                 break;
             case "offline-upgrade" when !HasLiveDeviceSession:
                 ShowOfflineUpgradePage();
                 break;
-            case "install" when !HasGlobalRecoveryProtectedState:
+            // Android 更新前准备 / 更新后修复：与 WPF 的 "prepare" / "repair" 标签相同；另一页面持有 9008 会话时不进入。
+            case "prepare" or "repair" when !HasInternalInstallDeviceSession && !HasGlobalRecoveryProtectedState:
+                ShowBootMaintenancePage((string)((Control)sender!).Tag!);
+                break;
+            case "install" when !HasGlobalRecoveryProtectedState && !HasBootMaintenanceDeviceSession:
                 ShowView(WorkflowScrollViewer);
                 NavigateInternalInstallStep(_internalInstallStep);
                 break;
@@ -370,6 +376,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        // The boot-maintenance page holds (or may hold) a 9008 session or an unresolved outcome: its own close gate,
+        // like the WPF window's maintenance branch of the internal install closing handler.
+        if (await OnBootMaintenanceClosingAsync(e))
+        {
+            return;
+        }
+
         if (_busy)
         {
             // A device step is still running: step 1's fastboot round-trip, the 9008 entry before any client
@@ -495,6 +508,7 @@ public partial class MainWindow : Window
         }
 
         DisposeGlobalRecoveryOnClose();
+        DisposeBootMaintenanceOnClose();
         DisposeInternalInstall();
     }
 
