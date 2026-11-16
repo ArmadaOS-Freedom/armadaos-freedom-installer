@@ -35,6 +35,7 @@ public partial class MainWindow : Window
         _l.Apply();
         ApplyTheme();
         InitializeComponent();
+        InitializeOfflineUpgradeView();
         UpdateThemeToggle();
         RenderInternalInstallPlaceholders();
         Closing += OnWindowClosing;
@@ -90,6 +91,7 @@ public partial class MainWindow : Window
         _preferences.Language = _l.IsEnglish ? "zh-CN" : "en";
         _preferences.Save();
         _l.SetLanguage(_preferences.Language);
+        RerenderOfflineUpgradeLog();
     }
 
     private void OnShowSupport(object? sender, RoutedEventArgs e)
@@ -102,6 +104,7 @@ public partial class MainWindow : Window
         _pageBeforeSupport = EnvironmentPage.IsVisible ? EnvironmentPage
             : HomePage.IsVisible ? HomePage
             : GlobalRecoveryPage.IsVisible ? GlobalRecoveryPage
+            : OfflineUpgradePage.IsVisible ? OfflineUpgradePage
             : WorkflowScrollViewer;
         AboutVersionText.Text = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? string.Empty;
         AboutCopyStatus.IsVisible = false;
@@ -125,6 +128,7 @@ public partial class MainWindow : Window
         HomePage.IsVisible = ReferenceEquals(view, HomePage);
         SupportPage.IsVisible = ReferenceEquals(view, SupportPage);
         GlobalRecoveryPage.IsVisible = ReferenceEquals(view, GlobalRecoveryPage);
+        OfflineUpgradePage.IsVisible = ReferenceEquals(view, OfflineUpgradePage);
         var wizard = ReferenceEquals(view, WorkflowScrollViewer);
         WorkflowScrollViewer.IsVisible = wizard;
         WorkflowSidebar.IsVisible = wizard;
@@ -171,6 +175,9 @@ public partial class MainWindow : Window
                 break;
             case "global-restore" when !HasInternalInstallDeviceSession:
                 ShowGlobalRecoveryPage(GlobalRecoveryMode.Restore);
+                break;
+            case "offline-upgrade" when !HasLiveDeviceSession:
+                ShowOfflineUpgradePage();
                 break;
             case "install" when !HasGlobalRecoveryProtectedState:
                 ShowView(WorkflowScrollViewer);
@@ -293,6 +300,15 @@ public partial class MainWindow : Window
     private async void OnWindowClosing(object? sender, WindowClosingEventArgs e)
     {
         if (_closeConfirmed)
+        {
+            return;
+        }
+
+        // The offline upgrade page goes first, like the WPF window's own closing handler for it: its exchanges run
+        // as busy work, so the generic busy refusal below would otherwise keep an SSH session from ever closing.
+        // It cancels the running exchange, disconnects, releases the imported package (saved session records stay)
+        // and then closes the window itself.
+        if (await OnOfflineUpgradeClosingAsync(e))
         {
             return;
         }

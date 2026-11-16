@@ -627,6 +627,17 @@
                                 </StackPanel>
                             </Grid>
                         </Button>
+                        <Button Tag="offline-upgrade" Click="OnSelectOperation" Theme="{StaticResource FunctionCard}" Margin="0,0,12,12">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <Border Grid.Column="0" Classes="FunctionCardIcon">
+                                    <Path Data="M 12 3 V 15 M 7 10 L 12 15 L 17 10 M 5 20 H 19" Width="18" Height="18" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.8" />
+                                </Border>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="{DynamicResource Static.Function.OfflineUpdate.Title}" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource InkBrush}" TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Static.Function.OfflineUpdate.Desc}" FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                </StackPanel>
+                            </Grid>
+                        </Button>
                         <Button IsEnabled="False" Theme="{StaticResource FunctionCard}" Margin="0,0,12,12">
                             <Grid ColumnDefinitions="Auto,*">
                                 <Border Grid.Column="0" Classes="FunctionCardIcon">
@@ -833,6 +844,161 @@
                                 </StackPanel>
                             </ScrollViewer>
                         </Expander>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ================= 离线升级（与 WPF 窗口的 OfflineUpgradeView 一致；控件名加 Offline 前缀） ================= -->
+            <ScrollViewer x:Name="OfflineUpgradePage"
+                          Grid.Column="0"
+                          Grid.ColumnSpan="3"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          IsVisible="False"
+                          Padding="0,0,14,0"
+                          Margin="0,0,0,12">
+                <StackPanel>
+                    <Button x:Name="OfflineBackButton" Theme="{StaticResource GhostButton}" Content="{DynamicResource Static.OfflineUpdate.Back}" Click="OnOfflineUpgradeBackAsync" HorizontalAlignment="Left" Margin="0,0,0,10" />
+                    <TextBlock Text="{DynamicResource Static.OfflineUpdate.Title}" Classes="H1Text" />
+                    <TextBlock Text="{DynamicResource Static.OfflineUpdate.Desc}" Classes="BodyInkText" TextWrapping="Wrap" Margin="0,4,0,14" />
+
+                    <Border Classes="CardBorder" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.SectionConnection}" Classes="H2Text" />
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.ConnectionHelper}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,4,0,10" />
+
+                            <TextBlock x:Name="OfflineTransportLabel" Text="{DynamicResource Static.OfflineUpdate.Transport}" Classes="FieldLabelText" Margin="0,0,0,4" />
+                            <ComboBox x:Name="OfflineTransportCombo" SelectedIndex="0" SelectionChanged="OnOfflineConnectionSelectionChanged" HorizontalAlignment="Stretch" Margin="0,0,0,10">
+                                <ComboBoxItem x:Name="OfflineTransportUsbItem" Content="{DynamicResource Static.OfflineUpdate.TransportUsb}" />
+                                <ComboBoxItem x:Name="OfflineTransportWifiItem" Content="{DynamicResource Static.OfflineUpdate.TransportWifi}" />
+                            </ComboBox>
+
+                            <TextBlock x:Name="OfflineUsbAddressHint" Text="{DynamicResource Static.OfflineUpdate.UsbAddressHint}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,0,0,10" />
+
+                            <StackPanel x:Name="OfflineWifiAddressPanel" IsVisible="False" Margin="0,0,0,10">
+                                <Grid ColumnDefinitions="110,*,110,*">
+                                    <TextBlock x:Name="OfflineWifiAddressLabel" Text="{DynamicResource Static.OfflineUpdate.WifiAddress}" Classes="FieldLabelText" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBox x:Name="OfflineHostBox" Grid.Column="1" Theme="{StaticResource InputTextBox}" Margin="0,0,14,0" />
+                                    <TextBlock x:Name="OfflinePortLabel" Grid.Column="2" Text="{DynamicResource Static.OfflineUpdate.Port}" Classes="FieldLabelText" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBox x:Name="OfflinePortBox" Grid.Column="3" Theme="{StaticResource InputTextBox}" Text="22" />
+                                </Grid>
+                            </StackPanel>
+
+                            <TextBlock x:Name="OfflineCredentialLabel" Text="{DynamicResource Static.OfflineUpdate.Credential}" Classes="FieldLabelText" Margin="0,0,0,4" />
+                            <ComboBox x:Name="OfflineCredentialCombo" SelectedIndex="0" SelectionChanged="OnOfflineConnectionSelectionChanged" HorizontalAlignment="Stretch" Margin="0,0,0,10">
+                                <ComboBoxItem x:Name="OfflineCredentialDefaultItem" Content="{DynamicResource Static.OfflineUpdate.CredentialDefault}" />
+                                <ComboBoxItem x:Name="OfflineCredentialCustomItem" Content="{DynamicResource Static.OfflineUpdate.CredentialCustom}" />
+                                <ComboBoxItem x:Name="OfflineCredentialKeyItem" Content="{DynamicResource Static.OfflineUpdate.CredentialKey}" />
+                            </ComboBox>
+
+                            <TextBlock x:Name="OfflineDefaultAccountText" Text="{DynamicResource Static.OfflineUpdate.DefaultAccountSummary}" Classes="FieldValueText" TextWrapping="Wrap" Margin="0,0,0,10" />
+
+                            <StackPanel x:Name="OfflineManualUserNamePanel" IsVisible="False">
+                                <TextBlock x:Name="OfflineUserLabel" Text="{DynamicResource Static.OfflineUpdate.User}" Classes="FieldLabelText" Margin="0,0,0,4" />
+                                <TextBox x:Name="OfflineUserBox" Theme="{StaticResource InputTextBox}" />
+                            </StackPanel>
+
+                            <StackPanel x:Name="OfflineCustomPasswordPanel" IsVisible="False">
+                                <TextBlock x:Name="OfflinePasswordLabel" Text="{DynamicResource Static.OfflineUpdate.Password}" Classes="FieldLabelText" Margin="0,10,0,4" />
+                                <TextBox x:Name="OfflinePasswordBox" Theme="{StaticResource InputTextBox}" PasswordChar="●" MaxLength="512" />
+                                <TextBlock Text="{DynamicResource Static.OfflineUpdate.PasswordPrivacy}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,4,0,0" />
+                            </StackPanel>
+
+                            <StackPanel x:Name="OfflineKeyFieldsPanel" IsVisible="False">
+                                <TextBlock x:Name="OfflineUsbKeyEnrollmentHint" Text="{DynamicResource Static.OfflineUpdate.UsbKeyEnrollmentHint}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,10,0,10" />
+                                <TextBlock x:Name="OfflineWifiKeyEnrollmentHint" Text="{DynamicResource Static.OfflineUpdate.WifiKeyEnrollmentHint}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,10,0,10" IsVisible="False" />
+                                <TextBlock x:Name="OfflineKeyPathLabel" Text="{DynamicResource Static.OfflineUpdate.KeyPath}" Classes="FieldLabelText" Margin="0,0,0,4" />
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBox x:Name="OfflineKeyPathBox" Theme="{StaticResource InputTextBox}" Margin="0,0,8,0" />
+                                    <Button x:Name="OfflineBrowseKeyButton" Grid.Column="1" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.BrowseKey}" Click="OnBrowseOfflineKey" />
+                                </Grid>
+                                <TextBlock Text="{DynamicResource Static.OfflineUpdate.KeyPrivacy}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,4,0,8" />
+                                <TextBlock x:Name="OfflineKnownHostsLabel" Text="{DynamicResource Static.OfflineUpdate.KnownHosts}" Classes="FieldLabelText" Margin="0,0,0,4" />
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBox x:Name="OfflineKnownHostsBox" Theme="{StaticResource InputTextBox}" Margin="0,0,8,0" />
+                                    <Button x:Name="OfflineBrowseHostsButton" Grid.Column="1" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.BrowseHosts}" Click="OnBrowseOfflineKnownHosts" />
+                                </Grid>
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button x:Name="OfflineConnectButton" Theme="{StaticResource PrimaryButton}" Content="{DynamicResource Static.OfflineUpdate.ConnectTablet}" Click="OnConnectOfflineTabletAsync" Margin="0,0,8,0" />
+                                <Button x:Name="OfflineDisconnectButton" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.Disconnect}" Click="OnDisconnectOfflineSshAsync" IsEnabled="False" />
+                            </StackPanel>
+
+                            <StackPanel x:Name="OfflinePairingPanel" IsVisible="False" Margin="0,10,0,0">
+                                <TextBlock Text="{DynamicResource Static.OfflineUpdate.PairingHeading}" Classes="H2Text" Margin="0,0,0,4" />
+                                <TextBlock Text="{DynamicResource Static.OfflineUpdate.PairingInstructions}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,0,0,8" />
+                                <TextBlock x:Name="OfflinePairingHostText" Classes="CaptionText" TextWrapping="Wrap" Margin="0,0,0,8" />
+                                <TextBlock Text="{DynamicResource Static.OfflineUpdate.PairingCommand}" Classes="FieldLabelText" Margin="0,0,0,4" />
+                                <TextBox x:Name="OfflinePairingCommandBox" Theme="{StaticResource InputTextBox}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="55" MaxHeight="95" />
+                                <Button x:Name="OfflineCopyPairingCommandButton" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.CopyPairingCommand}" Click="OnCopyOfflinePairingCommand" HorizontalAlignment="Left" Margin="0,8,0,10" />
+                                <TextBlock Text="{DynamicResource Static.OfflineUpdate.PairingReceipt}" Classes="FieldLabelText" Margin="0,0,0,4" />
+                                <TextBox x:Name="OfflinePairingReceiptBox" Theme="{StaticResource InputTextBox}" MaxLength="4096" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" MaxHeight="105" TextChanged="OnOfflinePairingReceiptChanged" Margin="0,0,0,8" />
+                                <Button x:Name="OfflineConfirmPairingButton" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.ConfirmPairing}" Click="OnConfirmOfflinePairingAsync" HorizontalAlignment="Left" IsEnabled="False" />
+                            </StackPanel>
+
+                            <TextBlock x:Name="OfflineDeviceText" Text="{DynamicResource Static.OfflineUpdate.DevicePending}" Classes="FieldValueText" TextWrapping="Wrap" Margin="0,10,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="CardBorder" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.SectionPackage}" Classes="H2Text" />
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.PackageHelp}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,4,0,8" />
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.PackagePath}" Classes="FieldLabelText" Margin="0,0,0,4" />
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBox x:Name="OfflinePackagePathBox" Theme="{StaticResource InputTextBox}" IsReadOnly="True" Margin="0,0,8,0" />
+                                <Button x:Name="OfflineBrowsePackageButton" Grid.Column="1" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.BrowsePackage}" Click="OnBrowseOfflinePackage" />
+                            </Grid>
+                            <Button x:Name="OfflineValidatePackageButton" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.ValidatePackage}" Click="OnValidateOfflinePackageAsync" HorizontalAlignment="Left" Margin="0,8,0,0" />
+                            <TextBlock x:Name="OfflinePackageText" Text="{DynamicResource Static.OfflineUpdate.PackagePending}" Classes="FieldValueText" TextWrapping="Wrap" Margin="0,8,0,0" />
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.Session}" Classes="FieldLabelText" Margin="0,10,0,4" />
+                            <ComboBox x:Name="OfflineSessionCombo" SelectionChanged="OnOfflineSessionSelectionChanged" HorizontalAlignment="Stretch" IsEnabled="False" />
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.SessionHelper}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,4,0,8" />
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="OfflineRefreshButton" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.Refresh}" Click="OnRefreshOfflineStatusAsync" Margin="0,0,8,0" />
+                                <Button x:Name="OfflinePrepareButton" Theme="{StaticResource PrimaryButton}" Content="{DynamicResource Static.OfflineUpdate.Prepare}" Click="OnPrepareOfflineUpgradeAsync" IsEnabled="False" />
+                            </StackPanel>
+                            <!-- 与 WPF 一致：只为已核实的失败准备显示，单独确认后开新会话，从不重试失败的记录。 -->
+                            <Button x:Name="OfflineStartReplacementSessionButton" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.StartReplacementSession}" Click="OnStartReplacementOfflineSessionAsync" IsEnabled="False" IsVisible="False" HorizontalAlignment="Left" Margin="0,8,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="CardBorder" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.SectionConfirm}" Classes="H2Text" />
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.PrepareHelp}" Classes="CaptionText" TextWrapping="Wrap" Margin="0,4,0,8" />
+                            <CheckBox x:Name="OfflineConfirmCheck" Theme="{StaticResource RiskCheckBox}" IsCheckedChanged="OnOfflineConfirmChanged" IsEnabled="False">
+                                <TextBlock Text="{DynamicResource Static.OfflineUpdate.Confirm}" TextWrapping="Wrap" />
+                            </CheckBox>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button x:Name="OfflineExecuteButton" Theme="{StaticResource PrimaryButton}" Content="{DynamicResource Static.OfflineUpdate.Execute}" Click="OnExecuteOfflineUpgradeAsync" IsEnabled="False" Margin="0,0,8,0" />
+                                <Button x:Name="OfflineStopWaitingButton" Theme="{StaticResource SecondaryButton}" Content="{DynamicResource Static.OfflineUpdate.StopWaiting}" Click="OnStopWaitingOfflineUpgrade" IsEnabled="False" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="CardBorder" Background="{DynamicResource SurfaceAltBrush}">
+                        <StackPanel>
+                            <TextBlock x:Name="OfflineStateText" Text="{DynamicResource Static.OfflineUpdate.StatePending}" Classes="BodyInkText" TextWrapping="Wrap" />
+                            <Button x:Name="OfflineRestartToVerifyButton" Theme="{StaticResource PrimaryButton}" Content="{DynamicResource Static.OfflineUpdate.RestartToVerify}" Click="OnRestartToVerifyOfflineUpgradeAsync" IsEnabled="False" HorizontalAlignment="Left" Margin="0,10,0,0" />
+                            <ProgressBar x:Name="OfflineTransferProgress" Minimum="0" Maximum="100" Value="0" Height="8" Margin="0,8,0,4" />
+                            <TextBlock x:Name="OfflineProgressText" Classes="CaptionText" Text="0%" />
+                            <TextBlock Text="{DynamicResource Static.OfflineUpdate.RecoveryPath}" Classes="FieldLabelText" Margin="0,8,0,2" />
+                            <TextBlock x:Name="OfflineRecoveryPathText" Text="{DynamicResource Static.OfflineUpdate.RecoveryPending}" Classes="FieldValueText" TextWrapping="Wrap" />
+                            <Expander x:Name="OfflineDetailsExpander" Theme="{StaticResource SectionExpander}" IsExpanded="False" Margin="0,8,0,0">
+                                <Expander.Header>
+                                    <TextBlock Text="{DynamicResource Static.OfflineUpdate.Details}" Classes="H2Text" />
+                                </Expander.Header>
+                                <TextBlock x:Name="OfflineDetailsText" Text="{DynamicResource Static.OfflineUpdate.DetailsPending}" Classes="BodyText" TextWrapping="Wrap" />
+                            </Expander>
+                            <Expander x:Name="OfflineLogExpander" Theme="{StaticResource SectionExpander}" IsExpanded="False" Margin="0,6,0,0">
+                                <Expander.Header>
+                                    <TextBlock Text="{DynamicResource Static.OfflineUpdate.Log}" Classes="H2Text" />
+                                </Expander.Header>
+                                <TextBox x:Name="OfflineLogText" Theme="{StaticResource InputTextBox}" IsReadOnly="True" MaxHeight="200" TextWrapping="Wrap" AcceptsReturn="True" />
+                            </Expander>
+                        </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>

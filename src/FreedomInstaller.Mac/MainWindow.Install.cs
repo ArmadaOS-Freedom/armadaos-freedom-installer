@@ -271,6 +271,7 @@ public partial class MainWindow
             && CanReleaseInternalInstallBackend;
         InternalInstallExitMaintenanceButton.IsEnabled = idle;
         RefreshGlobalRecoveryActions();
+        RefreshOfflineUpgradeActions();
     }
 
     private async Task RunBusyAsync(Func<CancellationToken, Task> work)
