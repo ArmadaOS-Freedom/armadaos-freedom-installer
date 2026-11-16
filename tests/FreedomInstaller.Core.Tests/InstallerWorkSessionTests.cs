@@ -29,6 +29,91 @@ public sealed class InstallerWorkSessionTests
     }
 
     [Fact]
+    public void ConfirmingOneAttemptKeepsOtherAttemptRecovery()
+    {
+        string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
+        var session = new InstallerWorkSession(root);
+        string a = Path.Combine(session.DirectoryPath, "attempt-a"), b = Path.Combine(session.DirectoryPath, "attempt-b");
+        Directory.CreateDirectory(a); Directory.CreateDirectory(b);
+        File.WriteAllText(Path.Combine(a, "recovery.img"), "a-only-recovery");
+        File.WriteAllText(Path.Combine(a, "verification.json"), "{\"attempt\":\"a\"}");
+        File.WriteAllText(Path.Combine(b, "recovery.img"), "b-verified");
+        File.WriteAllText(Path.Combine(b, "verification.json"), "{\"attempt\":\"b\"}");
+        Guid tokenA = session.BeginRecoveryBackup(), tokenB = session.BeginRecoveryBackup();
+        Assert.True(session.HasUnverifiedRecoveryBackups);
+        session.ConfirmRecoveryBackup(tokenB);
+        Assert.True(session.HasUnverifiedRecoveryBackups);
+        session.Complete(false);
+        Assert.True(Directory.Exists(session.DirectoryPath));
+        Assert.Equal("a-only-recovery", File.ReadAllText(Path.Combine(a, "recovery.img")));
+        Assert.True(File.Exists(Path.Combine(b, "recovery.img")));
+        session.ConfirmRecoveryBackup(tokenA);
+        Assert.False(session.HasUnverifiedRecoveryBackups);
+        session.Complete(false);
+        Assert.False(Directory.Exists(session.DirectoryPath));
+        Assert.True(File.Exists(Path.Combine(session.RecordsDirectory, "attempt-a", "verification.json")));
+        Assert.True(File.Exists(Path.Combine(session.RecordsDirectory, "attempt-b", "verification.json")));
+        Assert.False(File.Exists(Path.Combine(session.RecordsDirectory, "attempt-a", "recovery.img")));
+        Assert.False(File.Exists(Path.Combine(session.RecordsDirectory, "attempt-b", "recovery.img")));
+        try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+    }
+
+    [Fact]
+    public void UnknownAndRepeatedConfirmDoNotClearOtherAttempt()
+    {
+        string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
+        var session = new InstallerWorkSession(root);
+        string keep = Path.Combine(session.DirectoryPath, "keep");
+        Directory.CreateDirectory(keep);
+        File.WriteAllText(Path.Combine(keep, "recovery.img"), "pending");
+        File.WriteAllText(Path.Combine(keep, "verification.json"), "{\"attempt\":\"keep\"}");
+        Guid token = session.BeginRecoveryBackup();
+        session.ConfirmRecoveryBackup(Guid.NewGuid());
+        Assert.True(session.HasUnverifiedRecoveryBackups);
+        session.ConfirmRecoveryBackup(token);
+        Assert.False(session.HasUnverifiedRecoveryBackups);
+        session.ConfirmRecoveryBackup(token);
+        Assert.False(session.HasUnverifiedRecoveryBackups);
+        session.BeginRecoveryBackup();
+        session.ConfirmRecoveryBackup(token);
+        Assert.True(session.HasUnverifiedRecoveryBackups);
+        session.Complete(false);
+        Assert.True(Directory.Exists(keep));
+        Assert.True(File.Exists(Path.Combine(keep, "recovery.img")));
+        try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+    }
+
+    [Fact]
+    public void FailedAttemptSurvivesLaterSuccessAndZeroPendingRespectsExplicitPreserve()
+    {
+        string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
+        var session = new InstallerWorkSession(root);
+        string failed = Path.Combine(session.DirectoryPath, "failed"), later = Path.Combine(session.DirectoryPath, "later");
+        Directory.CreateDirectory(failed); Directory.CreateDirectory(later);
+        File.WriteAllText(Path.Combine(failed, "recovery.img"), "failed-attempt");
+        File.WriteAllText(Path.Combine(failed, "verification.json"), "{\"attempt\":\"failed\"}");
+        File.WriteAllText(Path.Combine(later, "recovery.img"), "later-verified");
+        File.WriteAllText(Path.Combine(later, "verification.json"), "{\"attempt\":\"later\"}");
+        Guid failedToken = session.BeginRecoveryBackup();
+        Guid laterToken = session.BeginRecoveryBackup();
+        session.ConfirmRecoveryBackup(laterToken);
+        Assert.True(session.HasUnverifiedRecoveryBackups);
+        session.Complete(false);
+        Assert.True(File.Exists(Path.Combine(failed, "recovery.img")));
+        Assert.True(File.Exists(Path.Combine(later, "recovery.img")));
+        session.ConfirmRecoveryBackup(failedToken);
+        session.Complete(true);
+        Assert.True(Directory.Exists(session.DirectoryPath));
+        session.Complete(false);
+        Assert.False(Directory.Exists(session.DirectoryPath));
+        Assert.True(File.Exists(Path.Combine(session.RecordsDirectory, "failed", "verification.json")));
+        Assert.True(File.Exists(Path.Combine(session.RecordsDirectory, "later", "verification.json")));
+        Assert.False(File.Exists(Path.Combine(session.RecordsDirectory, "failed", "recovery.img")));
+        Assert.False(File.Exists(Path.Combine(session.RecordsDirectory, "later", "recovery.img")));
+        try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+    }
+
+    [Fact]
     public void PreparationCleanupRejectsLinkedAncestors()
     {
         string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));

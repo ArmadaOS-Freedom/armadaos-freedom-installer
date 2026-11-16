@@ -2086,6 +2086,36 @@
                                 </Expander>
                             </StackPanel>
 
+                            <!--
+                                内部安装自动备份面板：没有备份位置选择，也不需要单独交互步骤。
+                                状态与进度直接绑定到既有 InternalInstallBackupStatusText / VerifiedText /
+                                ProgressBar，因此已有的真实进度、取消与错误文案全部照常生效。
+                            -->
+                            <Border x:Name="InternalInstallAutomaticBackupPanel"
+                                    Style="{StaticResource CardBorder}"
+                                    Visibility="Collapsed"
+                                    Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="{DynamicResource Static.InternalInstall.Backup.AutomaticDescription}"
+                                               Style="{StaticResource BodyText}"
+                                               TextWrapping="Wrap" />
+                                    <ProgressBar Minimum="0"
+                                                 Maximum="100"
+                                                 Height="6"
+                                                 Margin="0,10,0,0"
+                                                 Value="{Binding Value, ElementName=InternalInstallBackupProgressBar, Mode=OneWay}"
+                                                 IsIndeterminate="{Binding IsIndeterminate, ElementName=InternalInstallBackupProgressBar, Mode=OneWay}" />
+                                    <TextBlock Style="{StaticResource BodyInkText}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,8,0,0"
+                                               Text="{Binding Text, ElementName=InternalInstallBackupStatusText}" />
+                                    <TextBlock Style="{StaticResource CaptionText}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,4,0,0"
+                                               Text="{Binding Text, ElementName=InternalInstallBackupVerifiedText}" />
+                                </StackPanel>
+                            </Border>
+
                             <TextBlock x:Name="InternalInstallCheckProgressText"
                                        Style="{StaticResource BodyInkText}"
                                        Margin="0,12,0,0"

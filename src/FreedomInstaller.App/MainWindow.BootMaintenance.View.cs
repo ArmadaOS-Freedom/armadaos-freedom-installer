@@ -124,12 +124,17 @@ public partial class MainWindow
             ? "Dynamic.BootMaintenance.Repair.BackupCoverage"
             : "Static.InternalInstall.Backup.Coverage");
 
-        // 卸载或修复隐藏内部第 1 步，并把 03/04 重排为 02/03；其他模式恢复显示与原始序号。
-        var hideBackup = IsModernUserdataUninstallMode || IsRepairInstallationMode;
+        // 卸载或修复隐藏内部第 1 步，并把 03/04 重排为 02/03；内部安装同样隐藏该步，
+        // 因为它的自动备份在检查页进行。其他模式恢复显示与原始序号。
+        var hideBackup = IsModernUserdataUninstallMode || IsRepairInstallationMode
+            || IsInternalInstallMode;
         InternalInstallNavBackup.Visibility = hideBackup ? Visibility.Collapsed : Visibility.Visible;
         SharedWorkflowThirdStepNumber.Text = hideBackup ? "02" : "03";
         SharedWorkflowConfirmStepNumber.Text = hideBackup ? "03" : "04";
         var uninstall = IsModernUserdataUninstallMode;
+
+        InternalInstallAutomaticBackupPanel.Visibility = IsInternalInstallMode
+            ? Visibility.Visible : Visibility.Collapsed;
 
         if (IsBootMaintenanceMode)
         {

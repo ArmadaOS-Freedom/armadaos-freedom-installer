@@ -6,10 +6,13 @@ using System.Windows.Controls;
 namespace FreedomInstaller.App;
 
 /// <summary>
-/// 「安装到内部存储」专用的四步向导：连接检测、系统备份、空间分配、确认安装。
+/// 「安装到内部存储」专用的可见三步向导：连接检测、空间分配、确认安装；
+/// 系统备份在检测与空间分配之间自动完成，不占独立可见步骤。
 /// <para>
-/// 第 0 步只有在真实自动检查成功、平板确认返回安卓并且身份信息完整时，才允许进入备份页；
-/// 备份页按实际型号与完整固件选择可信配置，匹配后才进入 9008。备份、空间规划、确认与执行
+/// 第 0 步只有在真实自动检查成功、平板确认返回安卓并且身份信息完整时，才允许前进；
+/// 内部安装的备份按实际型号与完整固件选择可信配置，匹配后才进入 9008，
+/// 内部安装保留 UI 步骤索引 0/2/3（对应可见步骤 01 检测、02 空间、03 确认），
+/// 其中索引 1 不参与内部安装流程。备份、空间规划、确认与执行
 /// 各自只认对应 Core 工厂的真实结果与风险确认，绝不从导航或界面状态推断完成。
 /// </para>
 /// <para>
@@ -20,22 +23,25 @@ namespace FreedomInstaller.App;
 /// </summary>
 public partial class MainWindow
 {
-    /// <summary>当前四步向导所在的步骤，仅表示界面位置，不代表任何设备结论。</summary>
+    /// <summary>当前三步向导所在的步骤，仅表示界面位置，不代表任何设备结论。</summary>
     private int _internalInstallStep;
     private bool _internalInstallBoardBackupDetected;
 
     /// <summary>程序化勾选侧栏步骤时抑制 Checked 事件，避免导航处理递归调用。</summary>
     private bool _suppressInternalInstallNav;
 
-    /// <summary>当前操作是否为新版内部存储安装：只有首页的 install 卡片进入四步向导。</summary>
+    /// <summary>当前操作是否为新版内部存储安装：只有首页的 install 卡片进入三步向导。</summary>
     private bool IsInternalInstallMode =>
         string.Equals(CurrentModeTag(), "install", System.StringComparison.Ordinal);
 
     /// <summary>
-    /// 唯一的前进门槛。第 0 步永远可以进入；第 1 步只认真实检查给出的正面结论
-    /// （<see cref="HasCheckedInternalInstallDevice"/>）；第 2 步（分配空间）只认工厂实际返回的
-    /// <see cref="InternalBackupSet"/>；第 3 步只认 <see cref="InternalInstallArtifacts.PrepareAsync"/>
-    /// 实际返回、与当前系统包和当前整 GiB 选择一致的方案对象，以及真实工厂实际返回的
+    /// 唯一的前进门槛。内部安装使用 UI 步骤索引 0/1/2/3：索引 0（可见 01 检测）永远可以进入；
+    /// 索引 1 对内部安装不可进入（备份无独立页面，由检测页「下一步」自动触发）；
+    /// 索引 2（可见 02 空间）只认真实检查给出的正面结论
+    /// （<see cref="HasCheckedInternalInstallDevice"/>）与工厂实际返回的
+    /// <see cref="InternalBackupSet"/> 自动备份结果；索引 3（可见 03 确认）只认
+    /// <see cref="InternalInstallArtifacts.PrepareAsync"/> 实际返回、与当前系统包和当前整 GiB
+    /// 选择一致的方案对象，以及真实工厂实际返回的
     /// <see cref="InternalInstallBackend"/>。
     /// </summary>
     private bool CanEnterInternalInstallStep(int step)
@@ -49,7 +55,9 @@ public partial class MainWindow
         return step switch
         {
             0 => true,
-            1 => HasCheckedInternalInstallDevice,
+            // 内部安装不再有独立的交互备份页：自动备份在检查页由「下一步」触发，
+            // 因此侧栏 / 页面 API 都不允许重新打开逻辑第 1 步（其他共享模式保持原语义）。
+            1 => !IsInternalInstallMode && HasCheckedInternalInstallDevice,
             2 => _internalInstallBackup is not null && HasCheckedInternalInstallDevice,
             3 => _internalInstallBackend is not null
                 && _internalInstallArtifacts is not null
@@ -219,18 +227,20 @@ public partial class MainWindow
 
         InternalInstallCheckPage.Visibility =
             _internalInstallStep == 0 ? Visibility.Visible : Visibility.Collapsed;
-        InternalInstallBackupPage.Visibility =
-            _internalInstallStep == 1 ? Visibility.Visible : Visibility.Collapsed;
+        InternalInstallBackupPage.Visibility = Visibility.Collapsed;
         InternalInstallCapacityPage.Visibility =
             _internalInstallStep == 2 ? Visibility.Visible : Visibility.Collapsed;
         InternalInstallConfirmPage.Visibility =
             _internalInstallStep == 3 ? Visibility.Visible : Visibility.Collapsed;
 
-        // 安装分支隐藏维护专属的来源 / 确认 / 进入 9008 面板，并恢复复用已有备份的勾选。
+        // 安装分支隐藏维护专属的来源 / 确认 / 进入 9008 面板；内部安装不再提供单独的
+        // 备份页与备份位置选择，自动备份在检查页进行。其他共享模式保持原控件可用。
         BootMaintenanceSourcesPage.Visibility = Visibility.Collapsed;
         BootMaintenanceConfirmPage.Visibility = Visibility.Collapsed;
         BootMaintenanceEntryPanel.Visibility = Visibility.Collapsed;
-        InternalInstallBackupUseExistingCheck.Visibility = Visibility.Visible;
+        InternalInstallBackupUseExistingCheck.Visibility = IsInternalInstallMode
+            ? Visibility.Collapsed : Visibility.Visible;
+        // 自动备份说明 / 状态 / 进度的可见性在共享导航渲染中按内部安装模式统一设置。
     }
 
     /// <summary>只重写侧栏勾选，不碰页面；用于程序化渲染与拒绝导航后的状态恢复。</summary>
@@ -393,15 +403,15 @@ public partial class MainWindow
         NextButton.Visibility =
             _internalInstallStep < 3 ? Visibility.Visible : Visibility.Collapsed;
 
-        // 第 3 步（分配空间）的「下一步」会真正准备主机侧方案，所以它使用与准备入口相同的输入门槛；
-        // 其余步骤仍只按各自的既有证明判断。
+        // 第 0 步只有真实检查通过才启用「下一步」；该按钮会等待真实自动备份（含平板尾部恢复镜像
+        // 的准备）完成后才导航到分配空间。第 2 步仍按自己的真实输入门槛判断。
         NextButton.IsEnabled = !_busy
             && _internalInstallStep < 3
-            && (_internalInstallStep == 2
-                ? HasInternalInstallAllocationInputs
-                : CanEnterInternalInstallStep(_internalInstallStep + 1)
-                    || (_internalInstallStep == 1 && checkedDevice && _internalInstallBoardBackupDetected
-                        && !_internalInstallBackupUseExisting));
+            && (_internalInstallStep == 0
+                ? checkedDevice
+                : _internalInstallStep == 2
+                    ? HasInternalInstallAllocationInputs
+                    : CanEnterInternalInstallStep(_internalInstallStep + 1));
         ActionButton.Visibility = Visibility.Collapsed;
         ActionButton.IsEnabled = false;
 

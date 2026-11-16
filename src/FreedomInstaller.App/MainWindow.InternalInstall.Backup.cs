@@ -40,9 +40,17 @@ public partial class MainWindow
     /// 该属性只读取已存在的会话，绝不在刷新 / 渲染路径中创建会话。
     /// </summary>
     private string? InternalInstallWorkParent =>
-        IsInternalInstallMode && _internalInstallBackupUseExisting
+        IsInternalInstallMode
             ? _workSession?.DirectoryPath
             : _internalInstallBackupParent;
+
+    /// <summary>
+    /// 当前内部安装活动备份的 <see cref="Guid"/> 令牌（<see langword="null"/> 表示无活动备份），
+    /// 而非窗口级保留布尔值。释放活动备份仅清除此 UI 令牌，绝不会确认或移除
+    /// <see cref="InstallerWorkSession"/> 中对应的待处理记录；只有实际完成的安装才会在会话中确认自己的令牌，
+    /// 任何其他未验证记录都会继续保护清理操作。
+    /// </summary>
+    private Guid? _internalInstallActiveBackupAttempt;
 
     /// <summary>是否复用用户已有的只读备份目录；只由复选框与浏览按钮写入，不是任何完成证据。</summary>
     private bool _internalInstallBackupUseExisting;
@@ -417,19 +425,22 @@ public partial class MainWindow
         var storedAndroid = IsSharedNonInternalDeviceMode && !HasCheckedInternalInstallDevice
             ? CurrentAndroidForBackup
             : _internalInstallDeviceCheck?.Android;
-        var parent = _internalInstallBackupParent;
+        // 内部安装没有交互备份页：自动分支的工作父目录只取环境准备已建立的临时会话，
+        // 绝不要求、也不写入用户选择的备份位置；绝不回退到系统临时目录或触发目录选择。
+        var internalAutoBranch = IsInternalInstallMode;
+        string? parent = internalAutoBranch ? null : _internalInstallBackupParent;
         if (useBoardBackup)
         {
-            if (!IsInternalInstallMode || !_internalInstallBoardBackupDetected) return;
-            if (string.IsNullOrWhiteSpace(parent))
-            {
-                parent = DefaultRecoveryOutputDirectory();
-                ApplyInternalInstallBackupParent(parent);
-            }
+            if (!internalAutoBranch || !_internalInstallBoardBackupDetected) return;
         }
 
-        // 共享模式只允许全新备份：复用已有备份一律内部安装模式专用；TF 卡安装保持全新。
-        var useExisting = !useBoardBackup && !IsSharedNonInternalDeviceMode && _internalInstallBackupUseExisting;
+        // 共享模式只允许全新备份；内部安装也不再提供交互式复用已有备份，
+        // 复用模式（及其已有备份目录）只保留给来自旧内部安装流程的显式状态，
+        // 但内部自动分支一律按全新临时会话处理。
+        var useExisting = !internalAutoBranch
+            && !useBoardBackup
+            && !IsSharedNonInternalDeviceMode
+            && _internalInstallBackupUseExisting;
         var existingDirectory = _internalInstallBackupExistingDirectory;
 
         // 非内部模式按共享事实门槛判定；内部安装保持原有完整检查门槛。
@@ -443,9 +454,32 @@ public partial class MainWindow
         }
 
         // 复用模式完全忽略用户新的备份位置：工作父目录只能来自环境准备建立的会话。
+        // 内部安装自动分支同样只使用临时会话根目录（其恢复资料在关闭时受保留标志保护）；
         // 新建 / 共享模式仍要求一个真实存在的电脑备份父目录。
         string parentPath;
-        if (useExisting)
+        if (internalAutoBranch)
+        {
+            try
+            {
+                parentPath = TemporaryWorkRoot;
+            }
+            catch (Exception exception) when (exception is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or ArgumentException
+                or NotSupportedException
+                or System.Security.SecurityException)
+            {
+                SetInternalInstallBackupStatus(
+                    M(
+                        "Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceUnavailable",
+                        exception.Message));
+                SetInternalInstallBackupVerified(
+                    M("Dynamic.InternalInstall.Backup.FailedNote"));
+                return;
+            }
+        }
+        else if (useExisting)
         {
             if (string.IsNullOrWhiteSpace(existingDirectory) || !Directory.Exists(existingDirectory))
             {
@@ -584,6 +618,14 @@ public partial class MainWindow
 
         // 上一份备份对象与其派生结果先作废；客户端、工具链与 9008 证据保持原样。
         ReleaseInternalInstallBackupObject();
+
+        // 内部安装自动备份真正开始时先报告「正在自动备份」；每次尝试在真实读/捕获之前
+        // 于既有工作会话中登记自己的令牌。关闭时任一未确认令牌都会保留临时会话里的恢复资料。
+        if (internalAutoBranch)
+        {
+            _internalInstallActiveBackupAttempt = _workSession?.BeginRecoveryBackup();
+            InternalInstallAutomaticBackupPanel.Visibility = Visibility.Visible;
+        }
         ClearInternalInstallRetainedBackupEvidence();
         RenderInternalInstallBackupDetail();
         SetInternalInstallBackupProgressIndeterminate(true);
@@ -1206,6 +1248,8 @@ public partial class MainWindow
         _internalInstallRecoverySource?.Dispose();
         _internalInstallRecoverySource = null;
         _boardRecoveryAttemptManifest = null;
+
+        _internalInstallActiveBackupAttempt = null;
 
         var backup = _internalInstallBackup;
         _internalInstallBackup = null;

@@ -489,6 +489,15 @@ public partial class MainWindow
         // 先记录已提示的确认 ID，再弹窗；语言或主题重绘不会再次触发这个提示。
         _internalInstallCompletedNotificationId = confirmationId;
 
+        // 只有真实安装完成结局才允许确认本次备份尝试；
+        // 其他任何返回（取消、失败、未知写入）都继续保留尚未确认落盘的恢复资料。
+        // 该令牌是唯一用于本次活动备份的令牌，确认它不会清除其他备份尝试的记录。
+        if (_internalInstallActiveBackupAttempt is Guid attempt)
+        {
+            _workSession?.ConfirmRecoveryBackup(attempt);
+            _internalInstallActiveBackupAttempt = null;
+        }
+
         MessageBox.Show(
             this,
             T("Dynamic.InternalInstall.Execution.Completion.Body"),

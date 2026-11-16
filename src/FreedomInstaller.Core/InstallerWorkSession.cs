@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace FreedomInstaller.Core;
@@ -15,8 +16,24 @@ public sealed class InstallerWorkSession
         Directory.CreateDirectory(DirectoryPath);
     }
 
+    private readonly HashSet<Guid> _unverifiedRecoveryBackups = new();
+
     public string DirectoryPath { get; }
     public string RecordsDirectory { get; }
+
+    /// <summary>True while any begun automatic backup attempt has not been confirmed by the execution side.</summary>
+    public bool HasUnverifiedRecoveryBackups => _unverifiedRecoveryBackups.Count > 0;
+
+    /// <summary>Registers a distinct unverified backup attempt and returns its token.</summary>
+    public Guid BeginRecoveryBackup()
+    {
+        var token = Guid.NewGuid();
+        _unverifiedRecoveryBackups.Add(token);
+        return token;
+    }
+
+    /// <summary>Confirms only the supplied attempt. Unknown or already-confirmed tokens clear nothing.</summary>
+    public void ConfirmRecoveryBackup(Guid token) => _unverifiedRecoveryBackups.Remove(token);
 
     public void DiscardPreparation(string path, bool preserveRecovery)
     {
@@ -35,7 +52,7 @@ public sealed class InstallerWorkSession
 
     public void Complete(bool preserveRecovery)
     {
-        if (preserveRecovery || !Directory.Exists(DirectoryPath)) return;
+        if (preserveRecovery || HasUnverifiedRecoveryBackups || !Directory.Exists(DirectoryPath)) return;
         // Save readable receipts before removing images, readbacks and extracted tools.
         CopyReports(new DirectoryInfo(DirectoryPath));
         DeleteOwnedTree(new DirectoryInfo(DirectoryPath));
