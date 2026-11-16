@@ -178,7 +178,8 @@ public partial class MainWindow : Window
         SaveWorkLogOnClose();
         bool preserveWork = HasUnconfirmedBootMaintenanceWrite || HasUnknownBootMaintenanceReset
             || HasUnresolvedModernUserdataUninstallState
-            || (HasInternalInstallExecutionStarted && !IsCompletedInternalInstallExecution);
+            || (HasInternalInstallExecutionStarted && !IsCompletedInternalInstallExecution)
+            || _internalInstallAutoBackupPendingPreserve;
 
         // 全局救援：只释放本页自有托管对象，不删除用户备份或证据目录。
         DisposeGlobalRecoveryOnClose();
@@ -486,13 +487,25 @@ public partial class MainWindow : Window
 
         if (IsInternalInstallMode)
         {
-            // 第 3 步（分配空间）的「下一步」需要先完成一次真实主机侧准备；其余内部步骤仍是纯导航。
-            if (_internalInstallStep == 1 && _internalInstallBackup is null
-                && _internalInstallBoardBackupDetected && !_internalInstallBackupUseExisting)
+            // 第 0 步（检查平板）的「下一步」先等待真实自动备份：只有真实检查仍有效、且真实返回了
+            // 备份对象时才导航到第 2 步（分配空间）。自动分支会自动检测板载恢复并保留原始恢复资料；
+            // 用户在临时工作目录的备份不提供任何位置选择，也不创建第二个 EDL 会话。
+            if (_internalInstallStep == 0)
             {
-                await BackupInternalInstallCoreAsync(useBoardBackup: true);
-                if (_internalInstallBackup is null) return;
+                if (!HasCheckedInternalInstallDevice) return;
+
+                if (_internalInstallBackup is null)
+                {
+                    await BackupInternalInstallCoreAsync(useBoardBackup: _internalInstallBoardBackupDetected);
+                }
+
+                if (_internalInstallBackup is null || !HasCheckedInternalInstallDevice) return;
+
+                NavigateInternalInstallStep(2);
+                return;
             }
+
+            // 第 3 步（分配空间）的「下一步」需要先完成一次真实主机侧准备；其余内部步骤仍是纯导航。
             if (_internalInstallStep == 2)
             {
                 await PrepareInternalInstallConfirmationAsync();
@@ -549,6 +562,14 @@ public partial class MainWindow : Window
 
         if (IsInternalInstallMode)
         {
+            // 内部安装第 2 步（分配空间）的「上一步」回到第 0 步检查平板；
+            // 自动备份已真实完成的证据保留，不重置，也不重新暴露备份页。
+            if (_internalInstallStep == 2)
+            {
+                NavigateInternalInstallStep(0);
+                return;
+            }
+
             NavigateInternalInstallStep(_internalInstallStep - 1);
             return;
         }

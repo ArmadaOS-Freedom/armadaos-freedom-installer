@@ -489,6 +489,10 @@ public partial class MainWindow
         // 先记录已提示的确认 ID，再弹窗；语言或主题重绘不会再次触发这个提示。
         _internalInstallCompletedNotificationId = confirmationId;
 
+        // 只有真实安装完成结局才允许清除自动备份的临时会话保留标志；
+        // 其他任何返回（取消、失败、未知写入）都继续保留尚未确认落盘的恢复资料。
+        _internalInstallAutoBackupPendingPreserve = false;
+
         MessageBox.Show(
             this,
             T("Dynamic.InternalInstall.Execution.Completion.Body"),

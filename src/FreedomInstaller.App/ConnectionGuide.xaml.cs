@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -33,6 +34,8 @@ public partial class ConnectionGuide : UserControl
 
     private int _guideStep;
 
+    private bool _isGuideExpanded = true;
+
     private Storyboard? _sceneStoryboard;
 
     public ConnectionGuide()
@@ -45,6 +48,7 @@ public partial class ConnectionGuide : UserControl
 
         // 构造时只摆静态姿态（1 / 3，图 1 的最终高亮），动画等真正可见后再启动。
         ApplyStep(0, animate: false);
+        ApplyGuideExpanded();
     }
 
     /// <summary>当前图示步骤（0..2），只影响本控件，不牵动主流程。</summary>
@@ -52,7 +56,7 @@ public partial class ConnectionGuide : UserControl
 
     private void OnGuideLoaded(object sender, RoutedEventArgs e)
     {
-        if (IsVisible)
+        if (IsVisible && _isGuideExpanded)
         {
             StartSceneStoryboard();
         }
@@ -66,8 +70,8 @@ public partial class ConnectionGuide : UserControl
 
     private void OnGuideIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        // 折叠（例如收起「连接准备」面板）时停掉，展开时重新播放当前图。
-        if (e.NewValue is true)
+        // 折叠（例如收起「连接准备」面板）时停掉；重新可见且未收起时重播当前图。
+        if (e.NewValue is true && _isGuideExpanded)
         {
             StartSceneStoryboard();
         }
@@ -92,6 +96,38 @@ public partial class ConnectionGuide : UserControl
         // 重播只重放当前这张图：页码、选中步骤、应用与设备状态都不变。
         StopSceneStoryboard();
         StartSceneStoryboard();
+    }
+
+    private void OnGuideCollapseClick(object sender, RoutedEventArgs e)
+    {
+        _isGuideExpanded = !_isGuideExpanded;
+        ApplyGuideExpanded();
+
+        if (_isGuideExpanded)
+        {
+            // 展开时允许重新播放当前图（若被系统动画关闭或折叠期间被屏蔽则保持静止）。
+            StartSceneStoryboard();
+        }
+        else
+        {
+            StopSceneStoryboard();
+        }
+    }
+
+    private void ApplyGuideExpanded()
+    {
+        // 收起时只隐藏正文，标题/切换按钮保留；图选中的步骤状态不变，展开后仍显示原图。
+        GuideBody.Visibility = _isGuideExpanded ? Visibility.Visible : Visibility.Collapsed;
+
+        GuideCollapseButton.SetResourceReference(
+            ContentControl.ContentProperty,
+            _isGuideExpanded ? "Static.Guide.Collapse" : "Static.Guide.Expand");
+        GuideCollapseButton.SetResourceReference(
+            AutomationProperties.NameProperty,
+            _isGuideExpanded ? "Static.Guide.Collapse" : "Static.Guide.Expand");
+        GuideCollapseButton.SetResourceReference(
+            FrameworkElement.ToolTipProperty,
+            _isGuideExpanded ? "Static.Guide.Collapse" : "Static.Guide.Expand");
     }
 
     private void SwitchToStep(int step)
@@ -134,7 +170,7 @@ public partial class ConnectionGuide : UserControl
         PreviousPictureButton.IsEnabled = _guideStep > 0;
         NextPictureButton.IsEnabled = _guideStep < StepCount - 1;
 
-        if (animate)
+        if (animate && _isGuideExpanded)
         {
             StartSceneStoryboard();
         }
@@ -144,8 +180,8 @@ public partial class ConnectionGuide : UserControl
     {
         StopSceneStoryboard();
 
-        // 未加载 / 不可见（父面板收起）或系统关闭了动画：停在 XAML 里的最终静态姿态即可。
-        if (!IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation)
+        // 未加载 / 不可见（父面板收起）/ 本控件收起，或系统关闭了动画：停在 XAML 里的最终静态姿态即可。
+        if (!IsLoaded || !IsVisible || !_isGuideExpanded || !SystemParameters.ClientAreaAnimation)
         {
             return;
         }

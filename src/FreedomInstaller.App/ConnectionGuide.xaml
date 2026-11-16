@@ -131,6 +131,46 @@
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
 
+        <!-- ===== 标题栏收起/展开按钮（本控件自带，重新挂到安装页也不丢） ===== -->
+        <Style x:Key="GuideCollapseButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="CollapseChrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{DynamicResource StrokeBrush}"
+                                BorderThickness="1"
+                                CornerRadius="9"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CollapseChrome" Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+                                <Setter TargetName="CollapseChrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="CollapseChrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="GuideTitleText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+
     </UserControl.Resources>
 
     <Border Background="{DynamicResource SurfaceBrush}"
@@ -138,7 +178,32 @@
             BorderThickness="1"
             CornerRadius="12"
             Padding="12">
-        <Grid>
+        <DockPanel>
+            <!-- ================= 标题 / 收起展开（始终可见，折叠后仍保留） ================= -->
+            <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="GuideHeaderTitle"
+                           Grid.Column="0"
+                           Style="{StaticResource GuideTitleText}"
+                           Text="{DynamicResource Static.Global.ConnectionGuideTitle}"
+                           AutomationProperties.Name="{DynamicResource Static.Global.ConnectionGuideTitle}" />
+
+                <Button x:Name="GuideCollapseButton"
+                        Grid.Column="1"
+                        Style="{StaticResource GuideCollapseButton}"
+                        Click="OnGuideCollapseClick"
+                        VerticalAlignment="Center"
+                        Margin="8,0,0,0"
+                        AutomationProperties.Name="{DynamicResource Static.Guide.Collapse}"
+                        ToolTip="{DynamicResource Static.Guide.Collapse}"
+                        Content="{DynamicResource Static.Guide.Collapse}" />
+            </Grid>
+
+            <Grid x:Name="GuideBody">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -445,11 +510,11 @@
                                 IsHitTestVisible="False"
                                 Visibility="Collapsed">
 
-                            <!-- 笔记本电脑（矢量示意） -->
-                            <Border Canvas.Left="26"
-                                    Canvas.Top="44"
-                                    Width="152"
-                                    Height="88"
+                            <!-- 笔记本电脑（矢量示意，左侧） -->
+                            <Border Canvas.Left="28"
+                                    Canvas.Top="48"
+                                    Width="150"
+                                    Height="86"
                                     Background="{DynamicResource SurfaceBrush}"
                                     BorderBrush="{DynamicResource StrokeBrush}"
                                     BorderThickness="2"
@@ -461,17 +526,25 @@
                                 </StackPanel>
                             </Border>
 
-                            <Path Canvas.Left="10"
-                                  Canvas.Top="136"
-                                  Width="184"
+                            <Path Canvas.Left="12"
+                                  Canvas.Top="138"
+                                  Width="182"
                                   Height="14"
-                                  Data="M 18 0 L 166 0 L 184 14 L 0 14 Z"
+                                  Data="M 18 0 L 164 0 L 182 14 L 0 14 Z"
                                   Fill="{DynamicResource SurfaceAltBrush}"
                                   Stroke="{DynamicResource StrokeBrush}"
                                   StrokeThickness="1.5" />
 
-                            <!-- USB 线：从平板底部插头向下，再向左接回电脑 -->
-                            <Path Data="M 493 183 L 493 197 Q 493 206 484 206 L 224 206 Q 206 206 206 188 L 206 117 L 194 117"
+                            <TextBlock Canvas.Left="28" Canvas.Top="160"
+                                       Width="150"
+                                       Text="{DynamicResource Static.Guide.ConnectComputer}"
+                                       FontSize="11.5"
+                                       Foreground="{DynamicResource MutedBrush}"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap" />
+
+                            <!-- USB-C 线：从平板底部中央向下，再沿平板下方折向左接回电脑 -->
+                            <Path Data="M 490 196 L 490 202 Q 490 210 480 210 L 220 210 Q 206 210 206 196 L 206 126 L 194 126"
                                   Stroke="{DynamicResource AccentBrush}"
                                   StrokeThickness="3.5"
                                   StrokeStartLineCap="Round"
@@ -479,142 +552,139 @@
                                   Fill="Transparent" />
 
                             <!-- 电脑侧插头 -->
-                            <Border Canvas.Left="178" Canvas.Top="110" Width="16" Height="14" CornerRadius="4"
+                            <Border Canvas.Left="178" Canvas.Top="119" Width="16" Height="14" CornerRadius="4"
                                     Background="{DynamicResource SurfaceAltBrush}"
                                     BorderBrush="{DynamicResource StrokeBrush}"
                                     BorderThickness="1.5" />
 
-                            <TextBlock Canvas.Left="26" Canvas.Top="158"
-                                       Width="152"
-                                       Text="{DynamicResource Static.Guide.ConnectComputer}"
-                                       FontSize="11.5"
-                                       Foreground="{DynamicResource MutedBrush}"
-                                       TextAlignment="Center"
-                                       TextWrapping="Wrap" />
-
-                            <!-- 横放的 Y700 平板：底部中央是 USB-C 口 -->
-                            <Border Canvas.Left="326"
-                                    Canvas.Top="8"
-                                    Width="334"
-                                    Height="156"
+                            <!-- 横放的 Y700 平板：约 1.6 比例，底部中央是长边 USB-C 口 -->
+                            <Border Canvas.Left="350"
+                                    Canvas.Top="12"
+                                    Width="280"
+                                    Height="172"
                                     Background="{DynamicResource SurfaceAltBrush}"
                                     BorderBrush="{DynamicResource StrokeBrush}"
                                     BorderThickness="2"
-                                    CornerRadius="13">
+                                    CornerRadius="14">
                                 <Grid>
-                                    <Border Margin="6"
+                                    <!-- 极窄边内的屏幕 -->
+                                    <Border Margin="5"
                                             Background="{DynamicResource SurfaceBrush}"
-                                            CornerRadius="8"
+                                            CornerRadius="10"
                                             BorderBrush="{DynamicResource StrokeBrush}"
-                                            BorderThickness="1" />
+                                            BorderThickness="1">
+                                        <Grid Margin="4">
+                                            <!-- 顶部中央前置摄像头 -->
+                                            <Ellipse Width="4"
+                                                     Height="4"
+                                                     Fill="{DynamicResource StrokeBrush}"
+                                                     HorizontalAlignment="Center"
+                                                     VerticalAlignment="Top"
+                                                     Margin="0,2,0,0" />
 
-                                    <!-- 顶部边框中央的小摄像头 -->
-                                    <Ellipse Width="5" Height="5"
-                                             Fill="{DynamicResource StrokeBrush}"
-                                             HorizontalAlignment="Center"
-                                             VerticalAlignment="Top"
-                                             Margin="0,1,0,0" />
+                                            <!-- USB 调试授权弹窗（装饰性矢量，不是真实按钮） -->
+                                            <Border Margin="8,14,8,8"
+                                                    Background="{DynamicResource SurfaceBrush}"
+                                                    BorderBrush="{DynamicResource StrokeBrush}"
+                                                    BorderThickness="1.5"
+                                                    CornerRadius="9"
+                                                    Padding="10,8"
+                                                    VerticalAlignment="Top">
+                                                <StackPanel>
+                                                    <TextBlock Text="{DynamicResource Static.Guide.AuthDialogTitle}"
+                                                               FontSize="12"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource InkBrush}"
+                                                               TextWrapping="Wrap" />
 
-                                    <!-- 唯一的 USB 调试授权弹窗（装饰性矢量，不是真实按钮） -->
-                                    <Border Margin="18,20"
-                                            Background="{DynamicResource SurfaceBrush}"
-                                            BorderBrush="{DynamicResource StrokeBrush}"
-                                            BorderThickness="1.5"
-                                            CornerRadius="9"
-                                            Padding="12,9">
-                                        <StackPanel>
-                                            <TextBlock Text="{DynamicResource Static.Guide.AuthDialogTitle}"
-                                                       FontSize="12.5"
-                                                       FontWeight="SemiBold"
-                                                       Foreground="{DynamicResource InkBrush}"
-                                                       TextWrapping="Wrap" />
-
-                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                                <Border Width="13"
-                                                        Height="13"
-                                                        CornerRadius="3"
-                                                        Background="{DynamicResource AccentBrush}"
-                                                        VerticalAlignment="Center">
-                                                    <Path Data="M 0 3 L 2.4 5.5 L 6.4 1"
-                                                          Stroke="{DynamicResource AccentInkBrush}"
-                                                          StrokeThickness="1.6"
-                                                          HorizontalAlignment="Center"
-                                                          VerticalAlignment="Center" />
-                                                </Border>
-                                                <TextBlock Text="{DynamicResource Static.Guide.AuthAlways}"
-                                                           FontSize="10.5"
-                                                           Foreground="{DynamicResource MutedBrush}"
-                                                           Margin="6,0,0,0"
-                                                           TextWrapping="Wrap"
-                                                           VerticalAlignment="Center" />
-                                            </StackPanel>
-
-                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-                                                <Border Background="{DynamicResource SurfaceAltBrush}"
-                                                        BorderBrush="{DynamicResource StrokeBrush}"
-                                                        BorderThickness="1"
-                                                        CornerRadius="6"
-                                                        Padding="11,4">
-                                                    <TextBlock Text="{DynamicResource Static.Guide.AuthCancel}"
-                                                               FontSize="10.5"
-                                                               Foreground="{DynamicResource MutedBrush}" />
-                                                </Border>
-
-                                                <Grid Margin="8,0,0,0">
-                                                    <Border x:Name="Scene3TapCue"
-                                                            CornerRadius="9"
-                                                            BorderBrush="{DynamicResource AccentBrush}"
-                                                            BorderThickness="2"
-                                                            Margin="-5"
-                                                            Opacity="0.9" />
-                                                    <Border Background="{DynamicResource AccentBrush}"
-                                                            CornerRadius="6"
-                                                            Padding="15,5">
-                                                        <TextBlock Text="{DynamicResource Static.Guide.AuthAllow}"
+                                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                        <Border Width="13"
+                                                                Height="13"
+                                                                CornerRadius="3"
+                                                                Background="{DynamicResource AccentBrush}"
+                                                                VerticalAlignment="Center">
+                                                            <Path Data="M 0 3 L 2.4 5.5 L 6.4 1"
+                                                                  Stroke="{DynamicResource AccentInkBrush}"
+                                                                  StrokeThickness="1.6"
+                                                                  HorizontalAlignment="Center"
+                                                                  VerticalAlignment="Center" />
+                                                        </Border>
+                                                        <TextBlock Text="{DynamicResource Static.Guide.AuthAlways}"
                                                                    FontSize="11"
-                                                                   FontWeight="SemiBold"
-                                                                   Foreground="{DynamicResource AccentInkBrush}" />
-                                                    </Border>
-                                                </Grid>
-                                            </StackPanel>
-                                        </StackPanel>
+                                                                   Foreground="{DynamicResource InkBrush}"
+                                                                   Margin="6,0,0,0"
+                                                                   TextWrapping="Wrap"
+                                                                   VerticalAlignment="Center" />
+                                                    </StackPanel>
+
+                                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+                                                        <Border Background="{DynamicResource SurfaceAltBrush}"
+                                                                BorderBrush="{DynamicResource StrokeBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="6"
+                                                                Padding="11,4">
+                                                            <TextBlock Text="{DynamicResource Static.Guide.AuthCancel}"
+                                                                       FontSize="11"
+                                                                       Foreground="{DynamicResource MutedBrush}" />
+                                                        </Border>
+
+                                                        <Grid Margin="8,0,0,0">
+                                                            <Border x:Name="Scene3TapCue"
+                                                                    CornerRadius="9"
+                                                                    BorderBrush="{DynamicResource AccentBrush}"
+                                                                    BorderThickness="2"
+                                                                    Margin="-5"
+                                                                    Opacity="0.9" />
+                                                            <Border Background="{DynamicResource AccentBrush}"
+                                                                    CornerRadius="6"
+                                                                    Padding="13,4">
+                                                                <TextBlock Text="{DynamicResource Static.Guide.AuthAllow}"
+                                                                           FontSize="11"
+                                                                           FontWeight="SemiBold"
+                                                                           Foreground="{DynamicResource AccentInkBrush}" />
+                                                            </Border>
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+                                        </Grid>
                                     </Border>
                                 </Grid>
                             </Border>
 
-                            <!-- 底部长边中央：高亮 USB-C 接口（水平圆角槽） -->
-                            <Border Canvas.Left="477" Canvas.Top="152" Width="32" Height="20" CornerRadius="10"
+                            <!-- 底部中央：高亮的长边 USB-C 接口（贴着平板底边） -->
+                            <Border Canvas.Left="473" Canvas.Top="180" Width="34" Height="10" CornerRadius="5"
                                     Background="{DynamicResource AccentSoftBrush}"
                                     Opacity="0.9" />
-                            <Border Canvas.Left="483" Canvas.Top="159" Width="20" Height="10" CornerRadius="5"
+                            <Border Canvas.Left="481" Canvas.Top="181" Width="18" Height="8" CornerRadius="4"
                                     Background="{DynamicResource SurfaceAltBrush}"
                                     BorderBrush="{DynamicResource AccentBrush}"
-                                    BorderThickness="2" />
+                                    BorderThickness="1.5" />
 
-                            <!-- 插头竖直向上插入底边接口，线从插头底部向下再向左 -->
-                            <Border Canvas.Left="489" Canvas.Top="164" Width="8" Height="7" CornerRadius="2"
+                            <!-- 插头竖直向上插入底边接口，线从插头底部向下 -->
+                            <Border Canvas.Left="486" Canvas.Top="188" Width="8" Height="7" CornerRadius="2"
                                     Background="{DynamicResource StrokeBrush}" />
-                            <Border Canvas.Left="485" Canvas.Top="168" Width="16" Height="16" CornerRadius="4"
+                            <Border Canvas.Left="483" Canvas.Top="193" Width="14" Height="12" CornerRadius="3"
                                     Background="{DynamicResource SurfaceAltBrush}"
                                     BorderBrush="{DynamicResource StrokeBrush}"
                                     BorderThickness="1.5" />
 
-                            <!-- 长边接口标注：引线与箭头精确指向底部接口 -->
-                            <Path Data="M 516 182 L 508 170 L 497 165"
+                            <!-- 长边接口标注：短箭头指向底部接口，右侧标签留在画布内 -->
+                            <Path Data="M 516 200 L 504 196 L 499 190"
                                   Stroke="{DynamicResource AccentBrush}"
-                                  StrokeThickness="2"
+                                  StrokeThickness="1.8"
                                   StrokeStartLineCap="Round"
                                   StrokeEndLineCap="Round"
                                   Fill="Transparent" />
-                            <Path Data="M 495 164 L 503 165 L 499 171 Z"
+                            <Path Data="M 498 189 L 505 191 L 500 196 Z"
                                   Fill="{DynamicResource AccentBrush}" />
 
-                            <Border Canvas.Left="512" Canvas.Top="176" Width="150"
+                            <Border Canvas.Left="520" Canvas.Top="190" Width="148"
                                     Background="{DynamicResource AccentSoftBrush}"
                                     CornerRadius="7"
-                                    Padding="7,5">
+                                    Padding="7,4">
                                 <TextBlock Text="{DynamicResource Static.Guide.LongEdgeUsbC}"
-                                           FontSize="11.5"
+                                           FontSize="11"
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource InkBrush}"
                                            TextWrapping="Wrap" />
@@ -683,6 +753,7 @@
                         VerticalAlignment="Center"
                         Click="OnReplayClick" />
             </Grid>
-        </Grid>
+            </Grid>
+        </DockPanel>
     </Border>
 </UserControl>

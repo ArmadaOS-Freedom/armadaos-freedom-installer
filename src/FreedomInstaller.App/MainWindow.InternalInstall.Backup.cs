@@ -40,9 +40,17 @@ public partial class MainWindow
     /// 该属性只读取已存在的会话，绝不在刷新 / 渲染路径中创建会话。
     /// </summary>
     private string? InternalInstallWorkParent =>
-        IsInternalInstallMode && _internalInstallBackupUseExisting
+        IsInternalInstallMode
             ? _workSession?.DirectoryPath
             : _internalInstallBackupParent;
+
+    /// <summary>
+    /// 内部安装的自动备份已经真正开始、但尚未得到后端真实终态时置位：关闭时保留临时工作会话里的
+    /// 恢复资料，避免仅因取消 / 失败 / 退出就清掉尚未写入并通过回读校验的恢复镜像。
+    /// 只在真实成功终态（<see cref="IsCompletedInternalInstallExecution"/>）后由执行侧清除，
+    /// 绝不按页面位置或勾选状态推断清除。
+    /// </summary>
+    private bool _internalInstallAutoBackupPendingPreserve;
 
     /// <summary>是否复用用户已有的只读备份目录；只由复选框与浏览按钮写入，不是任何完成证据。</summary>
     private bool _internalInstallBackupUseExisting;
@@ -417,19 +425,22 @@ public partial class MainWindow
         var storedAndroid = IsSharedNonInternalDeviceMode && !HasCheckedInternalInstallDevice
             ? CurrentAndroidForBackup
             : _internalInstallDeviceCheck?.Android;
-        var parent = _internalInstallBackupParent;
+        // 内部安装没有交互备份页：自动分支的工作父目录只取环境准备已建立的临时会话，
+        // 绝不要求、也不写入用户选择的备份位置；绝不回退到系统临时目录或触发目录选择。
+        var internalAutoBranch = IsInternalInstallMode;
+        string? parent = internalAutoBranch ? null : _internalInstallBackupParent;
         if (useBoardBackup)
         {
-            if (!IsInternalInstallMode || !_internalInstallBoardBackupDetected) return;
-            if (string.IsNullOrWhiteSpace(parent))
-            {
-                parent = DefaultRecoveryOutputDirectory();
-                ApplyInternalInstallBackupParent(parent);
-            }
+            if (!internalAutoBranch || !_internalInstallBoardBackupDetected) return;
         }
 
-        // 共享模式只允许全新备份：复用已有备份一律内部安装模式专用；TF 卡安装保持全新。
-        var useExisting = !useBoardBackup && !IsSharedNonInternalDeviceMode && _internalInstallBackupUseExisting;
+        // 共享模式只允许全新备份；内部安装也不再提供交互式复用已有备份，
+        // 复用模式（及其已有备份目录）只保留给来自旧内部安装流程的显式状态，
+        // 但内部自动分支一律按全新临时会话处理。
+        var useExisting = !internalAutoBranch
+            && !useBoardBackup
+            && !IsSharedNonInternalDeviceMode
+            && _internalInstallBackupUseExisting;
         var existingDirectory = _internalInstallBackupExistingDirectory;
 
         // 非内部模式按共享事实门槛判定；内部安装保持原有完整检查门槛。
@@ -443,9 +454,32 @@ public partial class MainWindow
         }
 
         // 复用模式完全忽略用户新的备份位置：工作父目录只能来自环境准备建立的会话。
+        // 内部安装自动分支同样只使用临时会话根目录（其恢复资料在关闭时受保留标志保护）；
         // 新建 / 共享模式仍要求一个真实存在的电脑备份父目录。
         string parentPath;
-        if (useExisting)
+        if (internalAutoBranch)
+        {
+            try
+            {
+                parentPath = TemporaryWorkRoot;
+            }
+            catch (Exception exception) when (exception is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or ArgumentException
+                or NotSupportedException
+                or System.Security.SecurityException)
+            {
+                SetInternalInstallBackupStatus(
+                    M(
+                        "Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceUnavailable",
+                        exception.Message));
+                SetInternalInstallBackupVerified(
+                    M("Dynamic.InternalInstall.Backup.FailedNote"));
+                return;
+            }
+        }
+        else if (useExisting)
         {
             if (string.IsNullOrWhiteSpace(existingDirectory) || !Directory.Exists(existingDirectory))
             {
@@ -580,6 +614,14 @@ public partial class MainWindow
             SetInternalInstallBackupStatus(M("Dynamic.InternalInstall.Backup.BindingChanged"));
             RefreshInternalInstallActions();
             return;
+        }
+
+        // 内部安装自动备份真正开始时先报告「正在自动备份」；这是真实动作已经开始的标记，
+        // 关闭时据此保留临时会话里可能已捕获、但尚未通过后端成功终态确认的恢复资料。
+        if (internalAutoBranch)
+        {
+            _internalInstallAutoBackupPendingPreserve = true;
+            InternalInstallAutomaticBackupPanel.Visibility = Visibility.Visible;
         }
 
         // 上一份备份对象与其派生结果先作废；客户端、工具链与 9008 证据保持原样。
