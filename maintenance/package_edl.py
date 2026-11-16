@@ -38,7 +38,8 @@ COMMON_FLAGS = (
     ("client", "--client", "edl-ng.exe source path"),
     ("usbLibrary", "--usb-library", "libusb-1.0.dll source path"),
     ("license", "--license", "edl-ng LICENSE source path"),
-    ("python", "--python-zip", "official embeddable Python ZIP source path"),
+    ("python", "--python-zip", "official Python runtime archive source path (Windows: embeddable ZIP; "
+     "macOS: python-build-standalone install_only_stripped tar.gz)"),
     ("avb", "--avb", "avb_stock.py source path"),
     ("avbCli", "--avb-cli", "avb_stock_cli.py source path"),
     ("gpt", "--gpt", "portable_gpt.py source path"),
@@ -50,12 +51,15 @@ FIXED_PINS = {
     "python": (12601679, "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310"),
 }
 
-# macOS (Apple silicon) toolchain: the same modified edl-ng built for osx-arm64 with its libusb dylib and
-# no Python runtime (the install route does not use it). Must match EdlToolchain.MacOSPlatform.
+# macOS (Apple silicon) toolchain: the same modified edl-ng built for osx-arm64 with its libusb dylib, and the
+# Python runtime the uninstall bridges need. python.org ships no embeddable macOS build, so it is the pinned,
+# unmodified python-build-standalone install_only_stripped archive of the same CPython 3.14.8 (self-contained,
+# links only system libraries). Must match EdlToolchain.MacOSPlatform.
 MACOS_ROLES = (
     ("client", "tools/edl-ng"),
     ("usbLibrary", "tools/libusb-1.0.dylib"),
     ("license", "tools/LICENSE.txt"),
+    ("python", "python/cpython-3.14.8-20261020-aarch64-apple-darwin-install_only_stripped.tar.gz"),
     ("avb", "scripts/avb_stock.py"),
     ("avbCli", "scripts/avb_stock_cli.py"),
     ("gpt", "scripts/portable_gpt.py"),
@@ -63,8 +67,10 @@ MACOS_ROLES = (
 )
 
 # The macOS client has no frozen pin: it is always the osx-arm64 edl-ng of the same build, passed with
-# --build-pins-json.
-MACOS_PINS: dict[str, tuple[int, str]] = {}
+# --build-pins-json. The Python runtime is pinned like the Windows one.
+MACOS_PINS: dict[str, tuple[int, str]] = {
+    "python": (26694605, "f0f1402b45a8a655fc78c8ee62462fddcb9dc8717a022e79700d07e44fd18d4a"),
+}
 
 # Toolchain platforms: the manifest "platform" field is omitted for Windows, the original format.
 PLATFORMS = {
@@ -456,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
         dest="platform",
         default="windows-x64",
         choices=sorted(PLATFORMS),
-        help="toolchain platform: windows-x64 (default) or macos-arm64 (no --python-zip)",
+        help="toolchain platform: windows-x64 (default) or macos-arm64",
     )
     for role, flag, help_text in COMMON_FLAGS:
         parser.add_argument(flag, dest=role, metavar="PATH", help=help_text)
