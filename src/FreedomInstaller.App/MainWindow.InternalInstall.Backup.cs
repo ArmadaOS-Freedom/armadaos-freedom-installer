@@ -45,12 +45,12 @@ public partial class MainWindow
             : _internalInstallBackupParent;
 
     /// <summary>
-    /// 内部安装的自动备份已经真正开始、但尚未得到后端真实终态时置位：关闭时保留临时工作会话里的
-    /// 恢复资料，避免仅因取消 / 失败 / 退出就清掉尚未写入并通过回读校验的恢复镜像。
-    /// 只在真实成功终态（<see cref="IsCompletedInternalInstallExecution"/>）后由执行侧清除，
-    /// 绝不按页面位置或勾选状态推断清除。
+    /// 当前内部安装活动备份的 <see cref="Guid"/> 令牌（<see langword="null"/> 表示无活动备份），
+    /// 而非窗口级保留布尔值。释放活动备份仅清除此 UI 令牌，绝不会确认或移除
+    /// <see cref="InstallerWorkSession"/> 中对应的待处理记录；只有实际完成的安装才会在会话中确认自己的令牌，
+    /// 任何其他未验证记录都会继续保护清理操作。
     /// </summary>
-    private bool _internalInstallAutoBackupPendingPreserve;
+    private Guid? _internalInstallActiveBackupAttempt;
 
     /// <summary>是否复用用户已有的只读备份目录；只由复选框与浏览按钮写入，不是任何完成证据。</summary>
     private bool _internalInstallBackupUseExisting;
@@ -616,16 +616,16 @@ public partial class MainWindow
             return;
         }
 
-        // 内部安装自动备份真正开始时先报告「正在自动备份」；这是真实动作已经开始的标记，
-        // 关闭时据此保留临时会话里可能已捕获、但尚未通过后端成功终态确认的恢复资料。
-        if (internalAutoBranch)
-        {
-            _internalInstallAutoBackupPendingPreserve = true;
-            InternalInstallAutomaticBackupPanel.Visibility = Visibility.Visible;
-        }
-
         // 上一份备份对象与其派生结果先作废；客户端、工具链与 9008 证据保持原样。
         ReleaseInternalInstallBackupObject();
+
+        // 内部安装自动备份真正开始时先报告「正在自动备份」；每次尝试在真实读/捕获之前
+        // 于既有工作会话中登记自己的令牌。关闭时任一未确认令牌都会保留临时会话里的恢复资料。
+        if (internalAutoBranch)
+        {
+            _internalInstallActiveBackupAttempt = _workSession?.BeginRecoveryBackup();
+            InternalInstallAutomaticBackupPanel.Visibility = Visibility.Visible;
+        }
         ClearInternalInstallRetainedBackupEvidence();
         RenderInternalInstallBackupDetail();
         SetInternalInstallBackupProgressIndeterminate(true);
@@ -1248,6 +1248,8 @@ public partial class MainWindow
         _internalInstallRecoverySource?.Dispose();
         _internalInstallRecoverySource = null;
         _boardRecoveryAttemptManifest = null;
+
+        _internalInstallActiveBackupAttempt = null;
 
         var backup = _internalInstallBackup;
         _internalInstallBackup = null;

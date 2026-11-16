@@ -21,18 +21,8 @@ namespace FreedomInstaller.App;
 /// </summary>
 public partial class MainWindow
 {
-    private async Task<bool> DetectInternalBoardBackupAsync(string adbPath, string serial, CancellationToken token)
-    {
-        try
-        {
-            var result = await _runner.RunAsync(new ProcessCommand(adbPath,
-                new[] { "-s", serial, "shell", "test -e /dev/block/by-name/ARMADA_BACKUP && echo ARMADA_BACKUP" },
-                TimeSpan.FromSeconds(10)), token);
-            return result.ExitCode == 0 && result.StandardOutput.Trim() == "ARMADA_BACKUP";
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception) { return false; }
-    }
+    private Task<bool> DetectInternalBoardBackupAsync(string adbPath, string serial, CancellationToken token)
+        => BoardRecoveryBackup.DetectAdbAsync(adbPath, serial, _runner, token);
 
     /// <summary>最近一次真实检查结果；null 表示还没有可用的检查结论。</summary>
     private InternalDeviceCheckResult? _internalInstallDeviceCheck;
@@ -264,6 +254,20 @@ public partial class MainWindow
                     var result = await check.CheckAsync(target.Serial, progress, token);
 
                     acceptProgress = false;
+
+                    var detectedBoardBackup = false;
+                    if (result.Succeeded && result.AndroidReturn == AndroidReturnState.Verified)
+                    {
+                        var power = await CaptureInternalInstallPowerAsync(
+                            transport.AdbPath,
+                            result.Android!.Identity.Serial,
+                            token);
+                        detectedBoardBackup = await DetectInternalBoardBackupAsync(
+                            transport.AdbPath, result.Android.Identity.Serial, token);
+                        _internalInstallPower = power;
+                        _internalInstallBoardBackupDetected = detectedBoardBackup;
+                    }
+
                     _internalInstallDeviceCheck = result;
                     RenderInternalInstallDeviceCheck(result);
 
@@ -273,21 +277,14 @@ public partial class MainWindow
                         AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", Placeholder(result.Error)));
                     }
 
-                    if (result.Succeeded && result.AndroidReturn == AndroidReturnState.Verified)
-                    {
-                        _internalInstallPower = await CaptureInternalInstallPowerAsync(
-                            transport.AdbPath,
-                            result.Android!.Identity.Serial,
-                            token);
-                        _internalInstallBoardBackupDetected = await DetectInternalBoardBackupAsync(
-                            transport.AdbPath, result.Android.Identity.Serial, token);
-                    }
-
                     RenderInternalInstallPower();
                 }
                 catch (OperationCanceledException)
                 {
                     acceptProgress = false;
+                    _internalInstallDeviceCheck = null;
+                    _internalInstallPower = null;
+                    _internalInstallBoardBackupDetected = false;
 
                     // 调用方取消：只写一条取消说明，不声称平板没有被重启过。
                     SetInternalInstallCheckProgress(M("Dynamic.InternalInstall.Check.Cancelled"));
@@ -299,6 +296,7 @@ public partial class MainWindow
                     acceptProgress = false;
                     _internalInstallDeviceCheck = null;
                     _internalInstallPower = null;
+                    _internalInstallBoardBackupDetected = false;
                     RenderInternalInstallCheckPlaceholders();
                     var diagnostic = string.IsNullOrWhiteSpace(exception.Message)
                         ? UnknownValue

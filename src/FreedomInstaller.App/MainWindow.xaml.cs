@@ -179,7 +179,7 @@ public partial class MainWindow : Window
         bool preserveWork = HasUnconfirmedBootMaintenanceWrite || HasUnknownBootMaintenanceReset
             || HasUnresolvedModernUserdataUninstallState
             || (HasInternalInstallExecutionStarted && !IsCompletedInternalInstallExecution)
-            || _internalInstallAutoBackupPendingPreserve;
+            || _workSession?.HasUnverifiedRecoveryBackups == true;
 
         // 全局救援：只释放本页自有托管对象，不删除用户备份或证据目录。
         DisposeGlobalRecoveryOnClose();
