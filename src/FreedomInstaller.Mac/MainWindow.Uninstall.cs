@@ -55,6 +55,12 @@ public partial class MainWindow
     private string? _uninstallBoardRecoveryDirectory;
     private EdlRawBootTools? _uninstallNativeTools;
     private InternalInstallDirectAssets? _uninstallAssets;
+    // The directory holding only the two staged tool executables; removed when the session releases the tools.
+    private string? _uninstallAssetsDirectory;
+
+    // Set when the last leave stopped because its device probe failed (no reset was sent): closing may then offer the
+    // explicit close-only warning instead of repeating the same failing probe on every close.
+    private bool _uninstallLeaveProbeFailed;
 
     // ---------- 选项与准备 ----------
 
@@ -2108,12 +2114,17 @@ public partial class MainWindow
             pendingTools = null;
             _uninstallAssets = pendingAssets;
             pendingAssets = null;
+            _uninstallAssetsDirectory = materials;
             AppendUninstallLog(M("Dynamic.InternalInstall.Prepared.MaterialsReady", materials));
         }
         finally
         {
             pendingAssets?.Dispose();
             pendingTools?.Dispose();
+            if (!ReferenceEquals(_uninstallAssetsDirectory, materials))
+            {
+                DeleteBootMaintenanceAssetsDirectory(materials);
+            }
         }
     }
 
@@ -2392,6 +2403,13 @@ public partial class MainWindow
                         return;
                     }
 
+                    // A failed result that erased nothing is a pre-write failure: replace the startup "active" status,
+                    // which the later rendering would otherwise replay as if the run were still going.
+                    if (!result.Success && !result.DataMayBeErased)
+                    {
+                        SetUninstallExitStatus(M("Dynamic.UserdataUninstall.Runtime.PrewriteFailed"));
+                    }
+
                     if (!string.IsNullOrWhiteSpace(result.Error))
                     {
                         AppendUninstallLog(M("Dynamic.RawValue", result.Error));
@@ -2534,6 +2552,8 @@ public partial class MainWindow
             return false;
         }
 
+        _uninstallLeaveProbeFailed = false;
+
         if (_uninstallCompleted)
         {
             // 已完成：只释放自己的计划与会话资源，绝不发送任何设备调用。
@@ -2604,6 +2624,7 @@ public partial class MainWindow
                     // 探针失败：记录真实诊断；不复位、不自动重试。
                     AppendUninstallLog(M("Dynamic.RawValue", exception.Message));
                     SetUninstallExitStatus(M("Dynamic.UserdataUninstall.Exit.ProbeFailed"));
+                    _uninstallLeaveProbeFailed = true;
                     return;
                 }
 
@@ -2737,6 +2758,8 @@ public partial class MainWindow
         _uninstallAssets = null;
         _uninstallNativeTools?.Dispose();
         _uninstallNativeTools = null;
+        DeleteBootMaintenanceAssetsDirectory(_uninstallAssetsDirectory);
+        _uninstallAssetsDirectory = null;
 
         var tools = _uninstallEdlTools;
         _uninstallEdlTools = null;
@@ -2807,8 +2830,11 @@ public partial class MainWindow
                 return true;
             }
 
-            // 未解决写入 / 未知复位 / 进入 9008 却没有客户端：只提供「仅关闭窗口」的默认「否」警告，保留全部现场。
-            if (HasUnresolvedUninstallState || (HasUninstallLiveEdlState && _uninstallEdlClient is null))
+            // 未解决写入 / 未知复位 / 进入 9008 却没有客户端，或客户端从未取得初始 Sahara 证明（离开的热探针必然被
+            // 拒绝，离开无法完成）：只提供「仅关闭窗口」的默认「否」警告，不发任何设备命令，保留全部现场。
+            if (HasUnresolvedUninstallState
+                || (HasUninstallLiveEdlState && _uninstallEdlClient is null)
+                || _uninstallEdlClient is { HasInitialSaharaProof: false })
             {
                 if (await MessageDialog.AskAsync(
                         this,
@@ -2827,6 +2853,20 @@ public partial class MainWindow
             // 已完成或预写入：先走统一离开（完成时不发任何设备调用），再批准关闭。
             if (!await ConfirmLeaveUninstallAsync())
             {
+                // The leave's device probe failed (for example the tablet was unplugged): offer the same explicit
+                // close-only warning, which sends no device command and keeps every file.
+                if (_uninstallLeaveProbeFailed
+                    && await MessageDialog.AskAsync(
+                        this,
+                        T("Dynamic.UserdataUninstall.Exit.CloseUnconfirmedTitle"),
+                        T("Dynamic.UserdataUninstall.Exit.CloseUnconfirmedBody"),
+                        T("Dynamic.Mac.Dialog.Yes"),
+                        T("Dynamic.Mac.Dialog.No")))
+                {
+                    _closeConfirmed = true;
+                    Close();
+                }
+
                 return true;
             }
 

@@ -314,6 +314,17 @@ class MacUninstallParityTests(unittest.TestCase):
         self.assertIn("DisposeUninstallOnClose();", closing)
         self.assertLess(closing.index("await OnBootMaintenanceClosingAsync(e)"), closing.index("await OnUninstallClosingAsync(e)"))
 
+    def test_close_offers_close_only_when_the_leave_cannot_complete(self):
+        # A retained client without initial Sahara proof cannot pass the leave's warm probe, and a leave whose probe
+        # failed sent no reset: both must reach the explicit close-only warning instead of cancelling every close.
+        code = MAC_CODE[0].read_text(encoding="utf-8")
+        closing = code[code.index("private async Task<bool> OnUninstallClosingAsync"):]
+        close_only = closing[:closing.index("await ConfirmLeaveUninstallAsync()")]
+        self.assertIn("_uninstallEdlClient is { HasInitialSaharaProof: false }", close_only)
+        fallback = closing[closing.index("await ConfirmLeaveUninstallAsync()"):]
+        self.assertIn("_uninstallLeaveProbeFailed", fallback[:fallback.index("SafeResetUninstallState();")])
+        self.assertIn("_uninstallLeaveProbeFailed = true;", code)
+
 
 if __name__ == "__main__":
     unittest.main()
