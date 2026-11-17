@@ -2836,10 +2836,13 @@ public partial class MainWindow
                 || (HasUninstallLiveEdlState && _uninstallEdlClient is null)
                 || _uninstallEdlClient is { HasInitialSaharaProof: false })
             {
+                // An unproven client is a pre-write session whose initial probe failed: say so instead of claiming
+                // an unconfirmed write.
+                bool unproven = !HasUnresolvedUninstallState && _uninstallEdlClient is { HasInitialSaharaProof: false };
                 if (await MessageDialog.AskAsync(
                         this,
-                        T("Dynamic.UserdataUninstall.Exit.CloseUnconfirmedTitle"),
-                        T("Dynamic.UserdataUninstall.Exit.CloseUnconfirmedBody"),
+                        T(unproven ? "Dynamic.Mac.Close.ProbeFailedTitle" : "Dynamic.UserdataUninstall.Exit.CloseUnconfirmedTitle"),
+                        T(unproven ? "Dynamic.Mac.Close.ProbeFailedBody" : "Dynamic.UserdataUninstall.Exit.CloseUnconfirmedBody"),
                         T("Dynamic.Mac.Dialog.Yes"),
                         T("Dynamic.Mac.Dialog.No")))
                 {
@@ -2858,8 +2861,8 @@ public partial class MainWindow
                 if (_uninstallLeaveProbeFailed
                     && await MessageDialog.AskAsync(
                         this,
-                        T("Dynamic.UserdataUninstall.Exit.CloseUnconfirmedTitle"),
-                        T("Dynamic.UserdataUninstall.Exit.CloseUnconfirmedBody"),
+                        T("Dynamic.Mac.Close.ProbeFailedTitle"),
+                        T("Dynamic.Mac.Close.ProbeFailedBody"),
                         T("Dynamic.Mac.Dialog.Yes"),
                         T("Dynamic.Mac.Dialog.No")))
                 {
