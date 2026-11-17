@@ -222,6 +222,20 @@ class MacBootMaintenanceParityTests(unittest.TestCase):
         self.assertIn("await OnBootMaintenanceClosingAsync(e)", closing)
         self.assertIn("DisposeBootMaintenanceOnClose();", closing)
 
+    def test_close_offers_close_only_when_the_leave_probe_failed(self):
+        # A leave whose device probe failed sent no reset: closing must reach the explicit close-only warning instead
+        # of cancelling every close with the same failing probe.
+        code = _code(MAC_CODE)
+        closing = code[code.index("private async Task<bool> OnBootMaintenanceClosingAsync"):]
+        fallback = closing[closing.index("await ConfirmLeaveBootMaintenanceAsync()"):]
+        self.assertIn("_bootMaintenanceLeaveProbeFailed", fallback[:fallback.index("ResetBootMaintenanceUiState();")])
+        self.assertIn("_bootMaintenanceLeaveProbeFailed = true;", code)
+
+    def test_completed_run_is_kept_until_the_session_is_released(self):
+        code = _code(MAC_CODE)
+        invalidate = code[code.index("private void InvalidateBootMaintenancePreparation"):]
+        self.assertIn("IsBootMaintenanceCompleted", invalidate[:invalidate.index("_bootMaintenanceBackend")])
+
 
 if __name__ == "__main__":
     unittest.main()
