@@ -2642,8 +2642,8 @@ public partial class MainWindow
                 if (_bootMaintenanceLeaveProbeFailed
                     && await MessageDialog.AskAsync(
                         this,
-                        T("Dynamic.BootMaintenance.Exit.ConfirmTitle"),
-                        T("Dynamic.BootMaintenance.Exit.CloseUnconfirmedBody"),
+                        T("Dynamic.Mac.Close.ProbeFailedTitle"),
+                        T("Dynamic.Mac.Close.ProbeFailedBody"),
                         T("Dynamic.Mac.Dialog.Yes"),
                         T("Dynamic.Mac.Dialog.No")))
                 {
