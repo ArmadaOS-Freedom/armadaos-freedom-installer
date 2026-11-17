@@ -59,6 +59,12 @@ public partial class MainWindow
     private ImportedPackage? _bootMaintenanceRepairPackage;
     private EdlRawBootTools? _bootMaintenanceNativeTools;
     private InternalInstallDirectAssets? _bootMaintenanceAssets;
+    // The directory holding only the two staged tool executables; removed when the session releases the tools.
+    private string? _bootMaintenanceAssetsDirectory;
+
+    // Set when the last leave stopped because its device probe failed (no reset was sent): closing may then offer the
+    // explicit close-only warning instead of repeating the same failing probe on every close.
+    private bool _bootMaintenanceLeaveProbeFailed;
 
     // ---------- 04 确认与执行 ----------
 
@@ -139,6 +145,10 @@ public partial class MainWindow
         _bootMaintenanceResetAttempted && !_bootMaintenanceResetAcked;
 
     // 持久保护状态：正在执行，或后端已有未确认写入 / 未知复位。_busy 只参与控件可用性，不计入保护。
+    /// <summary>A real Completed run whose every write was verified; kept until the session is released.</summary>
+    private bool IsBootMaintenanceCompleted =>
+        _bootMaintenanceLastResult is { Outcome: BootMaintenanceOutcome.Completed, WriteState: InternalInstallWriteState.AllVerified };
+
     private bool ProtectedBootMaintenanceState =>
         _bootMaintenanceOperationActive
         || HasUnconfirmedBootMaintenanceWrite
@@ -1780,6 +1790,12 @@ public partial class MainWindow
             }
         }
 
+        // 已完成的运行先要离开（释放会话）才能重新准备。
+        if (IsBootMaintenanceCompleted)
+        {
+            return;
+        }
+
         // 先作废旧准备，再标记操作进行中；准备失败时保留全新备份 / 会话 / 来源文件。
         InvalidateBootMaintenancePreparation();
         ClearBootMaintenanceRuntimeState();
@@ -1996,12 +2012,38 @@ public partial class MainWindow
             pendingTools = null;
             _bootMaintenanceAssets = pendingAssets;
             pendingAssets = null;
+            _bootMaintenanceAssetsDirectory = materials;
             AppendBootMaintenanceLog(M("Dynamic.InternalInstall.Prepared.MaterialsReady", materials));
         }
         finally
         {
             pendingAssets?.Dispose();
             pendingTools?.Dispose();
+            if (!ReferenceEquals(_bootMaintenanceAssetsDirectory, materials))
+            {
+                DeleteBootMaintenanceAssetsDirectory(materials);
+            }
+        }
+    }
+
+    /// <summary>Removes one staged-tool directory; it holds only the two copied executables, never evidence.</summary>
+    private static void DeleteBootMaintenanceAssetsDirectory(string? directory)
+    {
+        if (string.IsNullOrEmpty(directory))
+        {
+            return;
+        }
+
+        try
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort: a leftover copy of the bundled tools is harmless.
         }
     }
 
@@ -2011,7 +2053,9 @@ public partial class MainWindow
     /// </summary>
     private void InvalidateBootMaintenancePreparation()
     {
-        if (ProtectedBootMaintenanceState)
+        // A completed run keeps its evidence until DisposeBootMaintenanceSession: changing a source afterwards must not
+        // turn the already reset tablet back into a pre-write 9008 session.
+        if (ProtectedBootMaintenanceState || IsBootMaintenanceCompleted)
         {
             return;
         }
@@ -2346,6 +2390,8 @@ public partial class MainWindow
             return false;
         }
 
+        _bootMaintenanceLeaveProbeFailed = false;
+
         var backend = _bootMaintenanceBackend;
 
         // 未知复位（尝试过但从未收到确认）：现场与会话全部保留，绝不再发复位，直接拒绝。
@@ -2413,6 +2459,7 @@ public partial class MainWindow
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 AppendBootMaintenanceLog(M("Dynamic.RawValue", $"{ex.GetType().FullName}: {ex.Message}"));
+                _bootMaintenanceLeaveProbeFailed = true;
                 return;
             }
 
@@ -2503,6 +2550,8 @@ public partial class MainWindow
         _bootMaintenanceAssets = null;
         _bootMaintenanceNativeTools?.Dispose();
         _bootMaintenanceNativeTools = null;
+        DeleteBootMaintenanceAssetsDirectory(_bootMaintenanceAssetsDirectory);
+        _bootMaintenanceAssetsDirectory = null;
 
         var tools = _bootMaintenanceEdlTools;
         _bootMaintenanceEdlTools = null;
@@ -2587,6 +2636,21 @@ public partial class MainWindow
             // 已完成或预写入：走统一的维护离开确认（默认「否」），批准后放行关闭。
             if (!await ConfirmLeaveBootMaintenanceAsync())
             {
+                // The leave's device probe failed (for example the tablet was unplugged): no reset was sent and none
+                // can be. Offer the same explicit close-only warning (default "No"), which sends no device command and
+                // keeps the backup and evidence files; otherwise every close would repeat the failing probe.
+                if (_bootMaintenanceLeaveProbeFailed
+                    && await MessageDialog.AskAsync(
+                        this,
+                        T("Dynamic.BootMaintenance.Exit.ConfirmTitle"),
+                        T("Dynamic.BootMaintenance.Exit.CloseUnconfirmedBody"),
+                        T("Dynamic.Mac.Dialog.Yes"),
+                        T("Dynamic.Mac.Dialog.No")))
+                {
+                    _closeConfirmed = true;
+                    Close();
+                }
+
                 return true;
             }
 
