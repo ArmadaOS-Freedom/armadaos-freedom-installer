@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
 using System.Buffers.Binary;
 using System.IO;
 using System.IO.Compression;
@@ -72,6 +74,67 @@ public sealed class Tb710fuLiveChainTests
         Assert.Equal(boot.Length, envelope.CandidateBoot.Length);
         Assert.Equal(2, envelope.AlgorithmType);
         File.WriteAllText(Path.Combine(work, "candidate-path.txt"), candidatePath);
+    }
+
+    [Theory]
+    [InlineData("a", "a", "b", "b", "a,b")]
+    [InlineData("a", "a", "b", "a", "a,b")]
+    [InlineData("a", "b", "b", "b", "a,b")]
+    public void The_gate_authenticates_every_target_and_every_source(
+        string targetA, string sourceA, string targetB, string sourceB, string expected)
+    {
+        var map = new Dictionary<string, string> { [targetA] = sourceA, [targetB] = sourceB };
+        Assert.Equal(expected.Split(','), InternalInstallPreparationContext.PreservedAospRootSlots(map));
+    }
+
+    [Fact]
+    public void A_single_target_sourced_from_the_other_slot_checks_both_roots()
+    {
+        var map = new Dictionary<string, string> { ["b"] = "a" };
+        Assert.Equal(new[] { "a", "b" }, InternalInstallPreparationContext.PreservedAospRootSlots(map));
+    }
+
+    [Fact]
+    public async Task A_target_sourced_from_the_other_slot_has_its_own_real_root_authenticated()
+    {
+        string? directory = LiveDirectory();
+        if (directory is null)
+            return;
+
+        var files = new Dictionary<string, EdlCapturedRegion>
+        {
+            ["vbmeta_a"] = Region("vbmeta_a", Path.Combine(directory, "vbmeta_a.img")),
+            ["vbmeta_b"] = Region("vbmeta_b", Path.Combine(directory, "vbmeta_b.img")),
+        };
+
+        IReadOnlyList<string> roles = await InternalInstallPreparationContext.RequirePreservedAospChainAsync(
+            new Dictionary<string, string> { ["a"] = "a", ["b"] = "a" }, files, CancellationToken.None);
+
+        Assert.Equal(new[] { "vbmeta_a", "vbmeta_b" }, roles);
+    }
+
+    [Fact]
+    public async Task A_target_whose_own_root_is_not_the_aosp_chain_is_refused()
+    {
+        string? directory = LiveDirectory();
+        if (directory is null || !File.Exists(Path.Combine(directory, "vbmeta_system_a.img")))
+            return;
+
+        // vbmeta_b stands in with the real RSA2048 vbmeta_system: a root that does not chain boot to the AOSP key.
+        var files = new Dictionary<string, EdlCapturedRegion>
+        {
+            ["vbmeta_a"] = Region("vbmeta_a", Path.Combine(directory, "vbmeta_a.img")),
+            ["vbmeta_b"] = Region("vbmeta_b", Path.Combine(directory, "vbmeta_system_a.img")),
+        };
+
+        await Assert.ThrowsAnyAsync<Exception>(() => InternalInstallPreparationContext.RequirePreservedAospChainAsync(
+            new Dictionary<string, string> { ["a"] = "a", ["b"] = "a" }, files, CancellationToken.None));
+    }
+
+    private static EdlCapturedRegion Region(string role, string path)
+    {
+        VerifiedEdlFile claim = Claim(path);
+        return new EdlCapturedRegion(role, 0, 0, claim.Length / 4096, 4096, null, path, claim.Length, claim.Sha256);
     }
 
     /// <summary>The gzip-compressed kernel of a boot v4 image, decompressed: the packed kShim raw image.</summary>
