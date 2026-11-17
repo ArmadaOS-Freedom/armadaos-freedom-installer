@@ -320,16 +320,11 @@ public partial class MainWindow
 
     private void AppendGlobalLog(UiMessage message)
     {
-        var row = _l.NewLogRow(message, MaxLogRows, out var dropped);
+        var row = _l.AppendLogRow(GlobalLogList, message, MaxLogRows);
         row.FontSize = 12;
         row.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
         row.Margin = new Avalonia.Thickness(0, 0, 0, 4);
         row[!TextBlock.ForegroundProperty] = row.GetResourceObservable("MutedBrush").ToBinding();
-        GlobalLogList.Children.Add(row);
-        if (dropped is not null)
-        {
-            GlobalLogList.Children.Remove(dropped);
-        }
 
         GlobalLogEmptyText.IsVisible = false;
         GlobalLogScrollViewer.ScrollToEnd();
@@ -710,7 +705,7 @@ public partial class MainWindow
             SetText(GlobalProgressStatusText, "Dynamic.Global.Status.BindingExistingEdl");
 
             EdlHardwareIdentity detectedHardware;
-            using (var identificationTools = await LoadGlobalToolsAsync(EdlDeviceProfiles.FindByModel("TB322FC")!, token))
+            using (var identificationTools = await LoadGlobalToolsAsync(GlobalIdentificationProfile(), token))
             {
                 var clientPath = identificationTools.ClientPath;
                 detectedHardware = await Task.Run(
@@ -832,6 +827,28 @@ public partial class MainWindow
         !string.IsNullOrWhiteSpace(socSerial)
         && uint.TryParse(socSerial, NumberStyles.None, CultureInfo.InvariantCulture, out var value)
         && string.Equals(value.ToString("X8", CultureInfo.InvariantCulture), expectedBusSerialHex, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The toolchain used only to read the 9008 identity before the model is known. Every model's archive carries
+    /// the same pinned client, so any available one will do; the WPF window always uses TB322FC's, which every
+    /// release embeds. A Mac build may instead take its tools from an external directory holding only some models,
+    /// so the first complete profile whose archive is present is used. The detected model's own archive is loaded
+    /// afterwards for everything model-specific.
+    /// </summary>
+    private EdlDeviceProfile GlobalIdentificationProfile()
+    {
+        foreach (var model in EdlDeviceProfiles.Models)
+        {
+            var profile = EdlDeviceProfiles.FindByModel(model);
+            if (profile is { IsComplete: true } && !string.IsNullOrWhiteSpace(profile.ArchiveLogicalName)
+                && MacTools.Exists(profile.ArchiveLogicalName!))
+            {
+                return profile;
+            }
+        }
+
+        throw new InvalidOperationException(T("Dynamic.Global.Error.ToolsMissing"));
+    }
 
     private async Task<EdlToolchain> LoadGlobalToolsAsync(EdlDeviceProfile profile, CancellationToken token)
     {
@@ -1163,6 +1180,8 @@ public partial class MainWindow
         var text = string.IsNullOrWhiteSpace(detail) ? T("Dynamic.Global.Error.Unknown") : detail!;
         AppendGlobalLog(M("Dynamic.Global.Log.RestoreUncertain", text));
         SetText(GlobalProgressStatusText, "Dynamic.Global.Status.RestoreUncertain", text);
+        // The old Sahara proof no longer describes the device: show the unverified state right away.
+        RenderGlobalConnection();
     }
 
     // ================================================================ explicit restart

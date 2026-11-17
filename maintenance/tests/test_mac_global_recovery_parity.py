@@ -50,8 +50,19 @@ def _names(page):
     return set(re.findall(r'x:Name="(Global[A-Za-z0-9_]+)"', page))
 
 
+# WPF wires a check box's Checked and Unchecked to one handler; Avalonia has one IsCheckedChanged event for both.
+_EVENTS = {"Click": "Click", "Checked": "CheckedChanged", "Unchecked": "CheckedChanged",
+           "IsCheckedChanged": "CheckedChanged"}
+
+
 def _handlers(page):
-    return set(re.findall(r'(?:Click|Checked|Unchecked|IsCheckedChanged)="([A-Za-z0-9_]+)"', page))
+    """(control name, normalized event, handler) for every element of the page that wires an event."""
+    bindings = set()
+    for tag in re.findall(r"<[A-Za-z][\w:.]*\b[^>]*>", page):
+        name = re.search(r'x:Name="([A-Za-z0-9_]+)"', tag)
+        for event, handler in re.findall(r'(?<![A-Za-z])(Click|Checked|Unchecked|IsCheckedChanged)="([A-Za-z0-9_]+)"', tag):
+            bindings.add((name.group(1) if name else None, _EVENTS[event], handler))
+    return bindings
 
 
 def _code_messages(paths):
@@ -72,10 +83,11 @@ class MacGlobalRecoveryParityTests(unittest.TestCase):
         self.assertEqual(_names(self.wpf) - _WPF_ONLY_NAMES, _names(self.mac))
 
     def test_handlers_match(self):
+        # Compared per control and event, so two controls that swap handlers are caught.
         wpf = _handlers(self.wpf)
-        mac = _handlers(self.mac)
-        # The WPF consent checkbox has one handler for Checked and Unchecked; Avalonia uses IsCheckedChanged.
-        self.assertEqual(wpf, mac)
+        self.assertIn(("GlobalBackupButton", "Click", "OnGlobalBackupAction"), wpf)
+        self.assertIn(("GlobalRestoreConfirmCheck", "CheckedChanged", "OnGlobalRestoreConsentChanged"), wpf)
+        self.assertEqual(wpf, _handlers(self.mac))
 
     def test_initial_dynamic_texts_match(self):
         self.assertEqual(_keys(self.wpf, "Dynamic."), _keys(self.mac, "Dynamic."))

@@ -616,16 +616,11 @@ public partial class MainWindow
 
     private void AppendBootMaintenanceLog(UiMessage message)
     {
-        var row = _l.NewLogRow(message, MaxLogRows, out var dropped);
+        var row = _l.AppendLogRow(BootMaintenanceLogList, message, MaxLogRows);
         row.FontSize = 12;
         row.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
         row.Margin = new Avalonia.Thickness(0, 0, 0, 4);
         row[!TextBlock.ForegroundProperty] = row.GetResourceObservable("MutedBrush").ToBinding();
-        BootMaintenanceLogList.Children.Add(row);
-        if (dropped is not null)
-        {
-            BootMaintenanceLogList.Children.Remove(dropped);
-        }
 
         BootMaintenanceLogEmptyText.IsVisible = false;
         BootMaintenanceLogScrollViewer.ScrollToEnd();

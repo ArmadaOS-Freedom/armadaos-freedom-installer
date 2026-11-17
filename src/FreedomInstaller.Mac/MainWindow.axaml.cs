@@ -54,16 +54,11 @@ public partial class MainWindow : Window
 
     private void AppendLog(UiMessage message)
     {
-        var row = _l.NewLogRow(message, MaxLogRows, out var dropped);
+        var row = _l.AppendLogRow(InternalInstallLogList, message, MaxLogRows);
         row.FontSize = 12;
         row.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
         row.Margin = new Thickness(0, 0, 0, 4);
         row[!TextBlock.ForegroundProperty] = row.GetResourceObservable("MutedBrush").ToBinding();
-        InternalInstallLogList.Children.Add(row);
-        if (dropped is not null)
-        {
-            InternalInstallLogList.Children.Remove(dropped);
-        }
 
         InternalInstallLogEmptyText.IsVisible = false;
         InternalInstallLogScrollViewer.ScrollToEnd();
