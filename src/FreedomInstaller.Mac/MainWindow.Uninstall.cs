@@ -478,16 +478,11 @@ public partial class MainWindow
 
     private void AppendUninstallLog(UiMessage message)
     {
-        var row = _l.NewLogRow(message, MaxLogRows, out var dropped);
+        var row = _l.AppendLogRow(UninstallLogList, message, MaxLogRows);
         row.FontSize = 12;
         row.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
         row.Margin = new Avalonia.Thickness(0, 0, 0, 4);
         row[!TextBlock.ForegroundProperty] = row.GetResourceObservable("MutedBrush").ToBinding();
-        UninstallLogList.Children.Add(row);
-        if (dropped is not null)
-        {
-            UninstallLogList.Children.Remove(dropped);
-        }
 
         UninstallLogEmptyText.IsVisible = false;
         UninstallLogScrollViewer.ScrollToEnd();

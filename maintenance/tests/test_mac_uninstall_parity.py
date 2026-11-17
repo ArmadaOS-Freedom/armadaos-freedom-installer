@@ -174,6 +174,21 @@ def _wpf_names():
     return set(re.findall(r'x:Name="([A-Za-z0-9_]+)"', WPF_XAML.read_text(encoding="utf-8")))
 
 
+
+# WPF wires a check box's Checked and Unchecked to one handler; Avalonia has one IsCheckedChanged event for both.
+_EVENTS = {"Click": "Click", "Checked": "CheckedChanged", "Unchecked": "CheckedChanged",
+           "IsCheckedChanged": "CheckedChanged"}
+
+
+def _bindings(markup):
+    """(control name, normalized event, handler) for every element that wires an event."""
+    bindings = set()
+    for tag in re.findall(r"<[A-Za-z][\w:.]*\b[^>]*>", markup):
+        name = re.search(r'x:Name="([A-Za-z0-9_]+)"', tag)
+        for event, handler in re.findall(r'(?<![A-Za-z])(Click|Checked|Unchecked|IsCheckedChanged)="(On[A-Za-z0-9_]+)"', tag):
+            bindings.add((name.group(1) if name else None, _EVENTS[event], handler))
+    return bindings
+
 class MacUninstallParityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -194,11 +209,15 @@ class MacUninstallParityTests(unittest.TestCase):
         self.assertEqual(set(), {name for name in self.mac_names if not name.startswith("Uninstall")})
 
     def test_uninstall_handlers_match(self):
-        wpf = set(re.findall(
-            r'(?:Click|Checked|Unchecked)="(On[A-Za-z0-9_]+)"', WPF_XAML.read_text(encoding="utf-8")))
-        self.assertLessEqual(_UNINSTALL_HANDLERS, wpf)
-        mac = set(re.findall(r'(?:Click|IsCheckedChanged)="(On[A-Za-z0-9_]+)"', self.mac))
-        self.assertLessEqual(_UNINSTALL_HANDLERS, mac)
+        wpf = {b for b in _bindings(WPF_XAML.read_text(encoding="utf-8")) if b[2] in _UNINSTALL_HANDLERS}
+        self.assertEqual(_UNINSTALL_HANDLERS, {handler for _name, _event, handler in wpf})
+        mac = _bindings(self.mac)
+        self.assertLessEqual(_UNINSTALL_HANDLERS, {handler for _name, _event, handler in mac})
+        # Per control and event: every WPF binding of a mapped control is on its Mac counterpart, so two controls
+        # that swap handlers are caught.
+        mapped = {(_CONTROL_MAP[name], event, handler) for name, event, handler in wpf if name in _CONTROL_MAP}
+        self.assertTrue(mapped)
+        self.assertLessEqual(mapped, mac)
 
     def test_markup_keys_match(self):
         # The uninstall texts WPF shows in markup or sets from code on visible controls are on the Mac page.
