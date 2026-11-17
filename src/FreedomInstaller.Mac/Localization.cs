@@ -18,7 +18,9 @@ internal sealed class Localization
 
     private readonly UiText _text;
     private readonly Dictionary<TextBlock, UiMessage> _texts = new();
-    private readonly List<(TextBlock Row, string Time, UiMessage Message)> _logRows = new();
+    // Each log pane keeps its own history, so trimming one pane never removes (or stops re-translating) a row of
+    // another pane.
+    private readonly Dictionary<Panel, List<(TextBlock Row, string Time, UiMessage Message)>> _logRows = new();
 
     internal Localization(string language)
     {
@@ -58,9 +60,12 @@ internal sealed class Localization
             target.Text = _text.Format(message);
         }
 
-        foreach (var (row, time, message) in _logRows)
+        foreach (var rows in _logRows.Values)
         {
-            row.Text = time + "  " + _text.Format(message);
+            foreach (var (row, time, message) in rows)
+            {
+                row.Text = time + "  " + _text.Format(message);
+            }
         }
     }
 
@@ -72,16 +77,26 @@ internal sealed class Localization
 
     internal void Set(TextBlock target, string key, params object?[] args) => Set(target, new UiMessage(key, args));
 
-    internal TextBlock NewLogRow(UiMessage message, int maxRows, out TextBlock? dropped)
+    /// <summary>
+    /// Creates a translated log row, appends it to <paramref name="pane"/> and keeps that pane at
+    /// <paramref name="maxRows"/> rows: the pane's oldest row leaves both the pane and the language updates.
+    /// </summary>
+    internal TextBlock AppendLogRow(Panel pane, UiMessage message, int maxRows)
     {
         var time = DateTime.Now.ToString("HH:mm:ss");
         var row = new TextBlock { Text = time + "  " + _text.Format(message) };
-        _logRows.Add((row, time, message));
-        dropped = null;
-        if (_logRows.Count > maxRows)
+        if (!_logRows.TryGetValue(pane, out var rows))
         {
-            dropped = _logRows[0].Row;
-            _logRows.RemoveAt(0);
+            rows = new List<(TextBlock Row, string Time, UiMessage Message)>();
+            _logRows[pane] = rows;
+        }
+
+        rows.Add((row, time, message));
+        pane.Children.Add(row);
+        while (rows.Count > maxRows)
+        {
+            pane.Children.Remove(rows[0].Row);
+            rows.RemoveAt(0);
         }
 
         return row;
