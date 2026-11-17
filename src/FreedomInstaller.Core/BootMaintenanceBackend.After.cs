@@ -901,6 +901,10 @@ public sealed partial class BootMaintenanceBackend
                 }
             }
             ValidateAfterPlan(plan, ablRecovery);
+            if (authority.UsesPreservedAospChain)
+            {
+                RequireBootOnlyAfterPlan(plan);
+            }
 
             DeviceIdentity preparedIdentity = deviceFacts.Identity.Identity;
             string bindingTag = contract is not null
@@ -950,7 +954,11 @@ public sealed partial class BootMaintenanceBackend
                 currentSlot,
                 ownedCurrent.DirectoryPath,
                 evidenceDirectory,
-                authority.UsesGbl ? BootMaintenanceBootTrust.GblPreserveOem : BootMaintenanceBootTrust.AospResigned,
+                authority.UsesGbl
+                    ? BootMaintenanceBootTrust.GblPreserveOem
+                    : authority.UsesPreservedAospChain
+                        ? BootMaintenanceBootTrust.AospPreserved
+                        : BootMaintenanceBootTrust.AospResigned,
                 slotSummaries,
                 regionSummaries);
 
@@ -1190,6 +1198,23 @@ public sealed partial class BootMaintenanceBackend
         return new PlannedRegion(
             role, slot, fresh.Lun, fresh.StartSector, fresh.SectorCount, fresh.Length,
             fresh.Sha256, destination, candidate.Sha256);
+    }
+
+    /// <summary>
+    /// The AOSP-preserving boot-only route (TB710FU) writes boot and nothing else: its locked chain keeps the original
+    /// root vbmeta and an RSA2048 vbmeta_system that no candidate may replace.
+    /// </summary>
+    internal static void RequireBootOnlyAfterPlan(IReadOnlyList<PlannedRegion> plan)
+    {
+        foreach (PlannedRegion region in plan)
+        {
+            if (region.WillWrite && region.Role is not ("boot_a" or "boot_b"))
+            {
+                throw new InvalidOperationException(
+                    PlanIncompleteCode + ": the AOSP-preserving boot-only route planned a write of '" + region.Role
+                    + "'; only boot_a and boot_b may be written.");
+            }
+        }
     }
 
     private static void ValidateAfterPlan(IReadOnlyList<PlannedRegion> plan, BootMaintenanceAblRecovery? ablRecovery = null)

@@ -701,7 +701,7 @@
   "Dynamic.BootRoute.Next.LockedEdlCandidate": "后续计划：检测固件 → 备份 A/B boot → 9008 安装；当前固件信任链、兼容 EDL 载入器、签名 boot 与 A/B 备份状态均未验证，暂不要解锁或写入。",
   "Dynamic.BootRoute.Status.LockedRouteUnsupported": "引导路线：联想拯救者 Y700 五代（TB323FU）暂不在提供的免解锁方案内。",
   "Dynamic.BootRoute.Next.LockedRouteUnsupported": "下一步：现有支持的路线需要先独立确认已解锁；本型号的免解锁做法尚未提供。",
-  "Dynamic.BootRoute.Status.ModelRoutePending": "引导路线：联想小新 Pad Pro GT（TB710FU）已识别，但写入路线尚未开放。",
+  "Dynamic.BootRoute.Status.ModelRoutePending": "引导路线：该机型已识别，但写入路线尚未开放。",
   "Dynamic.BootRoute.Next.ModelRoutePending": "下一步：只做只读检测或全局备份；不要尝试安装、维护、卸载或恢复。",
   "Dynamic.Firmware.ReleaseFormat": "Android {0}",
   "Dynamic.Firmware.PatchFormat": "安全补丁 {0}",

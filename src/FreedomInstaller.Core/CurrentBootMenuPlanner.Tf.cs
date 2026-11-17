@@ -569,7 +569,9 @@ public static partial class CurrentBootMenuPlanner
                     var envelope = await EdlRawBootBuilder.RepackEnvelopeAsync(
                         sourceBoot, payload.PackedRaw, rawBounds[source], candidatePath, ct).ConfigureAwait(false);
                     candidate = envelope.CandidateBoot;
-                    trust = BootMaintenanceBootTrust.AospResigned;
+                    trust = authority.UsesPreservedAospChain
+                        ? BootMaintenanceBootTrust.AospPreserved
+                        : BootMaintenanceBootTrust.AospResigned;
                     metadataSha256 = envelope.SourceEmbeddedVbmetaSha256;
                     payloadDigestMatchesOem = false;
                 }

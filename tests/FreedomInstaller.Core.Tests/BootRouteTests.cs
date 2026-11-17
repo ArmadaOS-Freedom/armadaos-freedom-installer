@@ -297,21 +297,25 @@ public sealed class BootRouteTests
     [InlineData(BootloaderState.Locked)]
     [InlineData(BootloaderState.Unlocked)]
     [InlineData(BootloaderState.Unknown)]
-    public void Evaluate_Tb710fuIsIdentifiedButItsRouteIsPendingWhateverTheConfirmedLockState(BootloaderState state)
+    public void Evaluate_Tb710fuRoutesLikeTheG4WhateverTheConfirmedLockState(BootloaderState state)
     {
-        // TB710FU is a known model (not UnsupportedModel), but no lock state can turn it into a route.
-        Assert.Equal(BootRouteStatus.ModelRoutePending, Evaluate(ModelTb710fu, state));
-        Assert.Equal(BootRouteStatus.ModelRoutePending, Evaluate("tb710fu", state));
-        Assert.Equal(BootRouteStatus.ModelRoutePending, Evaluate("Lenovo TB710FU_PRC", state));
+        // TB710FU's write routes are open: a confirmed lock state routes it exactly like the G4 (a locked unit is
+        // an EDL candidate, never the G5 "locked route unsupported"), and it is never held as route-pending.
+        BootRouteStatus expected = Evaluate(ModelA, state);
+        Assert.NotEqual(BootRouteStatus.ModelRoutePending, expected);
+        Assert.Equal(expected, Evaluate(ModelTb710fu, state));
+        Assert.Equal(expected, Evaluate("tb710fu", state));
+        Assert.Equal(expected, Evaluate("Lenovo TB710FU_PRC", state));
     }
 
     [Theory]
     [InlineData(BootloaderState.Locked)]
     [InlineData(BootloaderState.Unlocked)]
     [InlineData(BootloaderState.Unknown)]
-    public void Evaluate_Tb710fuAndroidReportNeverOpensARoute(BootloaderState reported)
+    public void Evaluate_Tb710fuAndroidReportRoutesLikeTheG4(BootloaderState reported)
     {
-        Assert.Equal(BootRouteStatus.ModelRoutePending, EvaluateWithReport(ModelTb710fu, reported));
+        Assert.Equal(EvaluateWithReport(ModelA, reported), EvaluateWithReport(ModelTb710fu, reported));
+        Assert.NotEqual(BootRouteStatus.ModelRoutePending, EvaluateWithReport(ModelTb710fu, reported));
     }
 
     [Fact]
@@ -332,9 +336,10 @@ public sealed class BootRouteTests
     }
 
     [Fact]
-    public void Readiness_Tb710fuStaysClosedEvenWhenEveryOtherInputIsReady()
+    public void Readiness_Tb710fuIsNoLongerHeldBackAsRoutePending()
     {
-        // The same inputs that open the gate for an unlocked TB322FC keep it closed for TB710FU.
+        // The model gate no longer refuses TB710FU; whatever else these G4-shaped inputs decide, no reason names
+        // a pending write route.
         var readiness = InstallationReadiness.Evaluate(
             new DeviceIdentity(Serial, ModelTb710fu, BootloaderState.Unlocked),
             backupsVerified: true,
@@ -342,8 +347,7 @@ public sealed class BootRouteTests
             maintenanceValidated: true,
             ExpectedPlan());
 
-        Assert.False(readiness.IsReady);
-        Assert.Contains(readiness.Reasons, reason => reason.Contains("TB710FU", StringComparison.Ordinal));
+        Assert.DoesNotContain(readiness.Reasons, reason => reason.Contains("写入路线尚未开放", StringComparison.Ordinal));
     }
 
     [Fact]
