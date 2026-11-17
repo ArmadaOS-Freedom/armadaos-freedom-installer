@@ -112,11 +112,24 @@ def _names(markup):
     return set(re.findall(r'x:Name="(BootMaintenance[A-Za-z0-9_]+)"', markup))
 
 
+_EVENTS = {"Click": "Click", "Checked": "CheckedChanged", "Unchecked": "CheckedChanged",
+           "IsCheckedChanged": "CheckedChanged", "TextChanged": "TextChanged"}
+
+
 def _handlers(markup):
-    # Only the maintenance handlers: the shared WPF markup also wires uninstall handlers and the shared check
-    # button (the Mac page has its own BootMaintenance-named check handlers for the same two buttons).
-    found = re.findall(r'(?:Click|Checked|Unchecked|IsCheckedChanged|TextChanged)="(On[A-Za-z0-9_]+)"', markup)
-    return {name for name in found if "BootMaintenance" in name}
+    """(control name, normalized event, handler) for the maintenance handlers, so swapped bindings are caught.
+
+    Only the maintenance handlers: the shared WPF markup also wires uninstall handlers and the shared check
+    button (the Mac page has its own BootMaintenance-named check handlers for the same two buttons).
+    """
+    bindings = set()
+    for tag in re.findall(r"<[A-Za-z][\w:.]*\b[^>]*>", markup):
+        name = re.search(r'x:Name="([A-Za-z0-9_]+)"', tag)
+        for event, handler in re.findall(
+                r'(?<![A-Za-z])(Click|Checked|Unchecked|IsCheckedChanged|TextChanged)="(On[A-Za-z0-9_]+)"', tag):
+            if "BootMaintenance" in handler:
+                bindings.add((name.group(1) if name else None, _EVENTS[event], handler))
+    return bindings
 
 
 def _messages(paths, prefixes):
@@ -154,7 +167,9 @@ class MacBootMaintenanceParityTests(unittest.TestCase):
         self.assertEqual(set(), {name for name in names if not name.startswith("BootMaintenance")})
 
     def test_handlers_match(self):
-        self.assertLessEqual(_handlers(self.wpf) - _WPF_ONLY_HANDLERS, _handlers(self.mac))
+        wpf = {binding for binding in _handlers(self.wpf) if binding[2] not in _WPF_ONLY_HANDLERS}
+        self.assertTrue(wpf)
+        self.assertLessEqual(wpf, _handlers(self.mac))
 
     def test_markup_keys_match(self):
         for prefix in ("Dynamic.BootMaintenance.", "Dynamic.Shared."):
