@@ -602,6 +602,14 @@ public partial class MainWindow
                     var verifiedIdentity = _globalRestoreSet?.Identity;
                     if (verifiedIdentity is not null)
                     {
+                        // A restore the app would refuse later must not reboot the tablet into 9008 first: the same
+                        // write-route gate as the restore preparation runs before any connection.
+                        if (DeviceModelRoutes.IsWriteRoutePending(verifiedIdentity.Model))
+                        {
+                            throw new InvalidOperationException(
+                                T("Dynamic.Global.Error.RestoreRoutePending", UiText.ModelName(verifiedIdentity.Model)));
+                        }
+
                         expectedProfile = EdlDeviceProfiles.FindById(verifiedIdentity.ProfileId);
                         if (expectedProfile is null || !expectedProfile.IsComplete)
                         {
