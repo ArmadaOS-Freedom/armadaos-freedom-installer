@@ -273,7 +273,11 @@ public static partial class PackageImporter
                 return new ImportedPackage(sourcePath, fullSource, expectedModel, legacy, null, null);
             }
 
-            var source = ResolveArchiveSource(fullSource);
+            using var ciArtifact = PrepareCiArtifactSource(
+                fullSource, expectedModel, "install",
+                typeof(PackageImporter).Assembly.GetName().Version!.ToString(3),
+                root, UpdatePackageDescriptor.VerifyAndParse, token);
+            var source = ResolveArchiveSource(ciArtifact?.MediaPath ?? fullSource);
             token.ThrowIfCancellationRequested();
 
             var updateDescriptor = ReadUpdateDescriptor(
@@ -449,7 +453,6 @@ public static partial class PackageImporter
                 return Invalid(sourcePath, expectedModel, reasons);
             }
 
-            stage = null;
             return new ImportedPackage(sourcePath, stageDirectory, expectedModel, validation, stageDirectory, root, updateDescriptor);
         }
         catch (OperationCanceledException)

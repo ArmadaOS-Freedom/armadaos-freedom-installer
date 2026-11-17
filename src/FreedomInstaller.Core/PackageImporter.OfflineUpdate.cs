@@ -133,7 +133,10 @@ public static partial class PackageImporter
         }
 
         var canonicalWorkRoot = PrepareOfflineWorkRoot(workRoot);
-        var source = ResolveArchiveSource(fullSource);
+        using var ciArtifact = PrepareCiArtifactSource(
+            fullSource, normalizedModel, OfflineUpgradeOperation, installerVersion,
+            canonicalWorkRoot, verify, token);
+        var source = ResolveArchiveSource(ciArtifact?.MediaPath ?? fullSource);
         if (source.IsNativeRar)
         {
             throw new InvalidDataException("签名升级包不支持 RAR 分卷格式。");
@@ -171,6 +174,9 @@ public static partial class PackageImporter
             WriteBoundedStageFile(signaturePath, signatureBytes, token);
             StageVerifiedOfflinePayload(stream, descriptor, payloadDirectory, token);
             token.ThrowIfCancellationRequested();
+
+            stream.Dispose();
+            ciArtifact?.Dispose();
 
             return new ImportedUpdatePackage(
                 fullSource,
