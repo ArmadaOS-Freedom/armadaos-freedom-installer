@@ -28,6 +28,7 @@ REQUIRED_IDS = (
     "platformTools",
     "platformToolsMacos",
     "python",
+    "pythonMacos",
     "libusbPackage",
     "libusbLicense",
     "gblPrc",
@@ -39,7 +40,7 @@ REQUIRED_IDS = (
 # The manifest itself must still list every REQUIRED_IDS entry.
 BUILDER_IDS = {
     "windows": ("platformTools", "python", "libusbPackage", "libusbLicense", "gblPrc", "gblRow"),
-    "macos": ("platformToolsMacos", "libusbPackage", "libusbLicense", "gblPrc", "gblRow"),
+    "macos": ("platformToolsMacos", "pythonMacos", "libusbPackage", "libusbLicense", "gblPrc", "gblRow"),
 }
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

@@ -543,7 +543,7 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             AddPinned(gptRequestPath, "request:gpt", locks, pinned);
 
             ProcessResult gptResult = await RunBridgeAsync(
-                runner, python, new[] { "-B", gptCli, gptRequestPath }, token)
+                runner, python, BridgeArguments(tools, gptCli, gptRequestPath), token)
                 .ConfigureAwait(false);
 
             string gptResponsePath = Path.Combine(evidenceDirectory, "gpt-response.json");
@@ -2509,6 +2509,16 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
     // -----------------------------------------------------------------
     // Process bridge
     // -----------------------------------------------------------------
+
+    // The toolchain's interpreter options (none on Windows, -E -s on macOS), then -B, the bridge and its request.
+    private static string[] BridgeArguments(EdlToolchain tools, string bridge, string requestPath)
+    {
+        var arguments = new List<string>(tools.PythonOptions);
+        arguments.Add("-B");
+        arguments.Add(bridge);
+        arguments.Add(requestPath);
+        return arguments.ToArray();
+    }
 
     private static async Task<ProcessResult> RunBridgeAsync(
         ICommandRunner runner,
