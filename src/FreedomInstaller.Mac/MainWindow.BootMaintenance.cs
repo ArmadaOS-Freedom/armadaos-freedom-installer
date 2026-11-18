@@ -363,6 +363,8 @@ public partial class MainWindow
         && backend.Prepared is { } prepared
         && prepared.Mode == CurrentBootMaintenanceMode
         && !_bootMaintenanceExecuteAttempted
+        && !_bootMaintenanceResetAttempted
+        && !ProtectedBootMaintenanceState
         && !_busy
         && !_bootMaintenanceOperationActive
         && BootMaintenanceRiskCheck.IsChecked == true;
@@ -1825,7 +1827,9 @@ public partial class MainWindow
                 }
             });
             var runner = _runner;
-            var evidenceParent = BootMaintenanceWorkRoot;
+            // Created inside the caught preparation block below: an unwritable cache root is a preparation failure
+            // (backup and session kept), never an exception escaping the async void handler.
+            var evidenceParent = string.Empty;
 
             // 本地小工厂：绑定本次捕获的全部输入；只在确切的包缺失前缀下做一次导入重试。
             Task<BootMaintenanceBackend> CreateBackendAsync(BootMaintenanceSources chosen, CancellationToken token)
@@ -1842,6 +1846,8 @@ public partial class MainWindow
                 SetText(BootMaintenancePrepareStatusText, M("Dynamic.BootMaintenance.Status.Preparing"));
                 try
                 {
+                    evidenceParent = BootMaintenanceWorkRoot;
+
                     // 更新后修复必须准备内置裸工具；准备原厂只要求已有原厂来源。
                     if (mode == MaintenanceMode.AfterUpdate)
                     {
@@ -2119,10 +2125,13 @@ public partial class MainWindow
     private async Task ExecuteBootMaintenanceAsync()
     {
         var mode = CurrentBootMaintenanceMode;
+        // A leave reset was attempted (acknowledged or not): this session is over or unresolved, never executable.
         if (_bootMaintenanceStep != 3
             || _busy
             || _bootMaintenanceOperationActive
-            || _bootMaintenanceExecuteAttempted)
+            || _bootMaintenanceExecuteAttempted
+            || _bootMaintenanceResetAttempted
+            || ProtectedBootMaintenanceState)
         {
             return;
         }
@@ -2181,7 +2190,9 @@ public partial class MainWindow
             || current.Mode != mode
             || BootMaintenanceRiskCheck.IsChecked != true
             || _busy
-            || _bootMaintenanceOperationActive)
+            || _bootMaintenanceOperationActive
+            || _bootMaintenanceResetAttempted
+            || ProtectedBootMaintenanceState)
         {
             return;
         }
