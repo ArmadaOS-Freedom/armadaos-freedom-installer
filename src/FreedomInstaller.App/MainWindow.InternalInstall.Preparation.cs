@@ -208,7 +208,8 @@ public partial class MainWindow
     {
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream(logicalName)
             ?? throw new LocalizedInvalidOperationException(
-                M("Dynamic.InternalInstall.Prepared.ComponentsMissing", logicalName), logicalName);
+                M("Dynamic.InternalInstall.Prepared.ComponentsMissing", logicalName),
+                T("Dynamic.InternalInstall.Prepared.ComponentsMissing", logicalName));
 
         await using (var destination = new FileStream(
             destinationPath,
