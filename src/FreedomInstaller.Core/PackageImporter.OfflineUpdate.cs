@@ -469,7 +469,12 @@ public static partial class PackageImporter
             throw new InvalidDataException($"拒绝清理非离线升级暂存目录：{canonicalStageRoot}。");
         }
 
-        EnsureSafeDirectoryTree(canonicalWorkRoot, canonicalWorkRoot);
+        var workRootAttributes = File.GetAttributes(canonicalWorkRoot);
+        if ((workRootAttributes & FileAttributes.Directory) == 0 ||
+            (workRootAttributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidDataException($"暂存目录包含重解析点或无效目录：{canonicalWorkRoot}。");
+        }
         try
         {
             File.GetAttributes(canonicalStageRoot);
@@ -572,11 +577,22 @@ public static partial class PackageImporter
         while (pending.Count > 0)
         {
             var current = pending.Pop();
-            var info = new DirectoryInfo(current);
-            if (!info.Exists ||
-                info.LinkTarget is not null ||
-                (info.Attributes & FileAttributes.ReparsePoint) != 0 ||
-                (info.Attributes & FileAttributes.Directory) == 0)
+            FileAttributes currentAttributes;
+            try
+            {
+                currentAttributes = File.GetAttributes(current);
+            }
+            catch (FileNotFoundException)
+            {
+                throw new InvalidDataException($"拒绝操作重解析点或非目录路径：{current}。");
+            }
+            catch (DirectoryNotFoundException)
+            {
+                throw new InvalidDataException($"拒绝操作重解析点或非目录路径：{current}。");
+            }
+
+            if ((currentAttributes & FileAttributes.ReparsePoint) != 0 ||
+                (currentAttributes & FileAttributes.Directory) == 0)
             {
                 throw new InvalidDataException($"拒绝操作重解析点或非目录路径：{current}。");
             }
