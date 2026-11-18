@@ -36,9 +36,9 @@ build() {
 
 for arch in arm64 x86_64; do
     build "$arch" MultiBootKernelPatcher \
-        src/patcher.c src/pack.c src/image_format.c src/pack_config.c src/utils.c lib/inih/ini.c
+        src/patcher.c src/pack.c src/image_format.c src/pack_config.c src/utils.c src/file_io.c lib/inih/ini.c
     build "$arch" UnpackTool \
-        src/unpack.c src/image_format.c src/utils.c
+        src/unpack.c src/image_format.c src/utils.c src/file_io.c
 done
 
 for name in MultiBootKernelPatcher UnpackTool; do
