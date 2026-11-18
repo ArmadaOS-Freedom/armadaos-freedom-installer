@@ -15,7 +15,10 @@ internal enum DriverInstallOutcome
     Failed,
 }
 
-internal record DriverInstallResult(DriverInstallOutcome Outcome, int? ExitCode, string? Error);
+internal record DriverInstallResult(DriverInstallOutcome Outcome, int? ExitCode, string? Error)
+{
+    internal bool EarlierPackageCompleted { get; init; }
+}
 
 internal readonly record struct DriverPackageSelection(bool InstallQualcomm, bool InstallAndroid);
 
@@ -72,7 +75,10 @@ internal static class WindowsDriverInstaller
     {
         var google = await install(files.GoogleInfPath).ConfigureAwait(false);
         if (google.Outcome != DriverInstallOutcome.Completed) return google;
-        return await install(files.OplusInfPath).ConfigureAwait(false);
+        var oplus = await install(files.OplusInfPath).ConfigureAwait(false);
+        // 只有 Google 明确 Completed 后才走到这里：把「前一个包已完成」标记带到第二步结果上，
+        // 供调用方在后续步骤被取消时决定是否需要重新自检。
+        return oplus with { EarlierPackageCompleted = true };
     }
 
     private static async Task<DriverInstallResult> InstallInfAsync(string infPath)

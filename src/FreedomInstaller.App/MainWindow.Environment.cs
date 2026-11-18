@@ -490,7 +490,15 @@ public partial class MainWindow
                     ? new DriverInstallResult(DriverInstallOutcome.Completed, 0, null)
                     : await WindowsDriverInstaller.InstallAsync(files);
                 if (installResult.Outcome == DriverInstallOutcome.Completed && androidFiles is not null)
-                    installResult = await WindowsDriverInstaller.InstallAndroidAsync(androidFiles);
+                {
+                    // 仅当 Qualcomm 是真实安装（files 非空）并明确 Completed 时，才把该事实带给 Android 结果；
+                    // 合成占位（没有 Qualcomm 需要安装）不得把标记记为已完成。
+                    var qualcommCompleted = files is not null;
+                    var androidResult = await WindowsDriverInstaller.InstallAndroidAsync(androidFiles);
+                    installResult = qualcommCompleted
+                        ? androidResult with { EarlierPackageCompleted = true }
+                        : androidResult;
+                }
             }
             catch (Exception)
             {
@@ -525,10 +533,20 @@ public partial class MainWindow
                 return;
 
             case "Cancelled":
-                // 明确取消且标记清理成功：保留已核实的系统 / 工具 / 启动与当前 Missing 结论，
-                // 直接允许重试；不自动重开 UAC，也不宣称就绪或成功。
-                if (!TryClearPendingRebootGate()) _environmentCheckCompleted = false;
+                // 但若取消前已有驱动包完成（例如 Qualcomm 或 Google 已完成、随后的 OPlus 被取消），
+                var gateCleared = TryClearPendingRebootGate();
+                if (!gateCleared) _environmentCheckCompleted = false;
+                var needsRecheck = gateCleared && installResult.EarlierPackageCompleted;
+                // 先报告取消，确保日志顺序保留取消事实，然后再追加复核产生的消息。
                 ReportEnvironment(M("Dynamic.Environment.Cancelled"));
+                if (needsRecheck)
+                {
+                    _environmentCheckCompleted = false;
+                    // 已持有 _busy，直接调用只读核心自检，不进入 RunBusyAsync。
+                    try { await CheckEnvironmentCoreAsync(CancellationToken.None); }
+                    catch (OperationCanceledException) { MarkEnvironmentCheckFailed(); }
+                    catch (Exception) { MarkEnvironmentCheckFailed(); }
+                }
                 return;
 
             case "Failed":
