@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using FreedomInstaller.App;
+using FreedomInstaller.Core;
 using Xunit;
 
 namespace FreedomInstaller.Core.Tests;
@@ -27,6 +28,84 @@ public sealed class UiTextTests
     private static readonly Regex PlaceholderPattern = new(
         @"\{(\d+)(?:,[^}]*)?(?::[^}]*)?\}",
         RegexOptions.CultureInvariant);
+
+    [Fact]
+    public void InternalInstallPreparationFailure_MessageIsLocalizedInBothLanguages()
+    {
+        var exception = Assert.Throws<InternalInstallWorkDiskSpaceException>(
+            () => InternalInstallPreparationContext.RequireDirectExecutionSpaceAvailable(38408839168L, 14706802688L));
+        var message = UiText.InternalInstallPreparationFailure(exception);
+
+        var text = new UiText(UiText.ChineseLanguage);
+        var chinese = text.Format(message);
+        Assert.Contains("电脑上安装器工作目录所在磁盘空间不足", chinese);
+        Assert.Contains("13.69 GiB", chinese);
+        Assert.Contains("35.78 GiB", chinese);
+        Assert.DoesNotContain("insufficient-direct-execution-space", chinese);
+
+        text.SetLanguage(UiText.EnglishLanguage);
+        var english = text.Format(message);
+        Assert.Contains("Not enough free space", english);
+        Assert.Contains("13.69 GiB", english);
+        Assert.Contains("35.78 GiB", english);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_NearThresholdRoundsConservatively()
+    {
+        const long gib = 1073741824L;
+        const long required = 36L * gib;
+        var exception = Assert.Throws<InternalInstallWorkDiskSpaceException>(
+            () => InternalInstallPreparationContext.RequireDirectExecutionSpaceAvailable(
+                required,
+                required - (4L * 1024 * 1024)));
+        var message = UiText.InternalInstallPreparationFailure(exception);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.Contains("35.99 GiB", english);
+        Assert.Contains("36.00 GiB", english);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_UnexpectedExceptionHasNoRawEnglish()
+    {
+        var message = UiText.InternalInstallPreparationFailure(
+            new InvalidOperationException("raw english detail"));
+
+        var chinese = new UiText(UiText.ChineseLanguage).Format(message);
+        Assert.DoesNotContain("raw english detail", chinese);
+        Assert.Contains("安装日志", chinese);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.DoesNotContain("raw english detail", english);
+        Assert.Contains("install log", english);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_UnknownFreeSpaceIsLocalized()
+    {
+        var exception = Assert.Throws<InternalInstallWorkDiskSpaceException>(
+            () => InternalInstallPreparationContext.RequireDirectExecutionSpaceAvailable(38408839168L, null));
+        var message = UiText.InternalInstallPreparationFailure(exception);
+
+        var chinese = new UiText(UiText.ChineseLanguage).Format(message);
+        Assert.Contains("无法确定电脑上安装器工作目录所在磁盘的剩余空间", chinese);
+        Assert.Contains("35.78 GiB", chinese);
+        Assert.Contains("请确认该磁盘可访问", chinese);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_LocalizedInvalidOperationMapsToItsKey()
+    {
+        var expected = new UiMessage("Dynamic.InternalInstall.Prepared.NeedInputs");
+        var message = UiText.InternalInstallPreparationFailure(
+            new LocalizedInvalidOperationException(expected));
+
+        Assert.Equal("Dynamic.InternalInstall.Prepared.NeedInputs", message.Key);
+        Assert.Empty(message.Arguments);
+        var chinese = new UiText(UiText.ChineseLanguage).Format(message);
+        Assert.Contains("容量、系统包或 9008 连接尚未就绪", chinese);
+    }
 
     [Fact]
     public void EmbeddedCatalogs_ResolveAuthorNameInBothLanguagesAndDefaultToChinese()
