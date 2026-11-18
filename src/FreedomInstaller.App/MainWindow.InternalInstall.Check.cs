@@ -178,6 +178,9 @@ public partial class MainWindow
             return;
         }
 
+        // 进入真实检查前清掉上一轮失败展示：重检查成功时不得继续显示旧失败。
+        ClearDiagnosticFailure();
+
         var previousSerial = SelectedInternalInstallDevice()?.Serial;
 
         // 重新检查前先清掉上一轮结论：结果、电量与派生界面一起回到「未检查」。
@@ -198,7 +201,11 @@ public partial class MainWindow
 
                     if (devices.Count == 0)
                     {
-                        SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.NoDevices"));
+                        var noDevicesMessage = M("Dynamic.InternalInstall.Check.NoDevices");
+                        SetInternalInstallCheckStatus(noDevicesMessage);
+                        RecordDiagnosticFailure(
+                            M("Dynamic.Diagnostics.Stage.Check"),
+                            _uiText.Format(noDevicesMessage));
                         return;
                     }
 
@@ -216,11 +223,15 @@ public partial class MainWindow
 
                     if (target.ConnectionState != ConnectionState.Authorized)
                     {
-                        SetInternalInstallCheckStatus(
+                        var notAuthorizedMessage =
                             M(
                                 "Dynamic.InternalInstall.Check.NotAuthorized",
                                 target.Serial,
-                                M(ConnectionStateKey(target.ConnectionState))));
+                                M(ConnectionStateKey(target.ConnectionState)));
+                        SetInternalInstallCheckStatus(notAuthorizedMessage);
+                        RecordDiagnosticFailure(
+                            M("Dynamic.Diagnostics.Stage.Check"),
+                            _uiText.Format(notAuthorizedMessage));
                         return;
                     }
 
@@ -257,6 +268,11 @@ public partial class MainWindow
                     var result = await check.CheckAsync(target.Serial, progress, token);
 
                     acceptProgress = false;
+
+                    if (result.Succeeded)
+                    {
+                        RememberLastSuccessfulDiagnosticCheck(result);
+                    }
 
                     RememberDiagnosticDeviceSerial(result.FastbootSerial);
                     RememberDiagnosticDeviceSerial(result.Android?.SocSerial);
@@ -314,7 +330,10 @@ public partial class MainWindow
                     SetInternalInstallCheckProgress(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
                     SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
                     AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
-                    RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Check"), diagnostic);
+                    RecordDiagnosticFailure(
+                        M("Dynamic.Diagnostics.Stage.Check"),
+                        InstallerLog.DescribeFailure(exception),
+                        diagnostic);
                 }
             });
         }

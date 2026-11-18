@@ -239,6 +239,7 @@ public partial class MainWindow
                 var client = _internalInstallEdlClient;
                 var resetUnknown = false;
                 string? resetDiagnostic = null;
+                string? resetFullDetail = null;
 
                 if (!_internalInstallExitResetAttempted)
                 {
@@ -296,6 +297,8 @@ public partial class MainWindow
                         {
                             resetUnknown = true;
                             resetDiagnostic = DiagnosticOf(exception);
+                            resetFullDetail = InstallerLog.DescribeFailure(exception);
+                            AppendWorkLogLine(resetFullDetail);
                             SetInternalInstallExitStatus(
                                 M("Dynamic.InternalInstall.Exit.ResetUnknown", resetDiagnostic));
                         }
@@ -333,6 +336,7 @@ public partial class MainWindow
                         {
                             RecordDiagnosticFailure(
                                 M("Dynamic.Diagnostics.Stage.Exit"),
+                                resetFullDetail ?? _uiText.Format(cancelledMessage),
                                 _uiText.Format(cancelledMessage));
                         }
                         break;

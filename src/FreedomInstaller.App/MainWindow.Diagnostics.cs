@@ -42,12 +42,25 @@ public partial class MainWindow
     // multi-line reason is not truncated to what the label displays.
     private string? _diagnosticLastFailureFullDetail;
 
+    // Immutable snapshot of the most recent successful device check and when it was observed.
+    // Only consulted by the diagnostic summary when the current check result is null or
+    // unconfirmed, so a cleared/failed re-check can still record what was last verified.
+    private (InternalDeviceCheckResult Result, DateTimeOffset ObservedUtc)? _diagnosticLastSuccessfulCheck;
+
     /// <summary>记录本次工作流中观察到的设备序列号，用于导出脱敏；跨次检查保留。</summary>
     private void RememberDiagnosticDeviceSerial(string? serial)
     {
         if (string.IsNullOrWhiteSpace(serial))
             return;
         _diagnosticObservedSerial.Add(serial.Trim());
+    }
+
+    /// <summary>捕获最近一次成功的设备检查快照（不可变），供诊断摘要历史回填使用。</summary>
+    private void RememberLastSuccessfulDiagnosticCheck(InternalDeviceCheckResult result)
+    {
+        if (!result.Succeeded)
+            return;
+        _diagnosticLastSuccessfulCheck = (result, DateTimeOffset.UtcNow);
     }
 
     /// <summary>记录最近一次被明确选中/检查的 ADB 目标序列号；跨越失败检查与断开保留。</summary>
@@ -60,14 +73,37 @@ public partial class MainWindow
 
     /// <summary>记录最近一次诊断失败；面板在首次失败后可见，导出失败不清空此内容。</summary>
     private void RecordDiagnosticFailure(UiMessage stage, string? detail)
+        => RecordDiagnosticFailure(stage, detail, detail);
+
+    /// <summary>
+    /// 记录最近一次诊断失败：<paramref name="fullDetail"/> 存入完整上下文供导出脱敏使用，
+    /// <paramref name="displayDetail"/> 只用于面板首行展示。
+    /// </summary>
+    private void RecordDiagnosticFailure(UiMessage stage, string? fullDetail, string? displayDetail)
     {
-        _diagnosticLastFailureFullDetail = string.IsNullOrWhiteSpace(detail) ? null : detail;
-        var firstLine = FirstLine(detail);
+        _diagnosticLastFailureFullDetail = string.IsNullOrWhiteSpace(fullDetail) ? null : fullDetail;
+        var firstLine = FirstLine(displayDetail);
         if (DiagnosticFailureText is not null)
             SetText(DiagnosticFailureText, "Dynamic.Diagnostics.Failure", stage, firstLine);
         if (DiagnosticFailurePanel is not null)
             DiagnosticFailurePanel.Visibility = _showingDiagnostics ? Visibility.Collapsed : Visibility.Visible;
         NoteDiagnosticAttachmentFailure(stage);
+    }
+
+    /// <summary>
+    /// 清除上一轮诊断失败展示与完整明细存储，重检查成功或重新开始时不再残留旧失败。
+    /// 工作日志与历史检查结果不受影响。
+    /// </summary>
+    private void ClearDiagnosticFailure()
+    {
+        _diagnosticLastFailureFullDetail = null;
+        if (DiagnosticFailureText is not null)
+        {
+            _localizedProperties.Remove((DiagnosticFailureText, "Text"));
+            DiagnosticFailureText.Text = string.Empty;
+        }
+        if (DiagnosticFailurePanel is not null)
+            DiagnosticFailurePanel.Visibility = Visibility.Collapsed;
     }
 
     private void OnExportDiagnostics(object sender, RoutedEventArgs e)

@@ -35,6 +35,27 @@ public partial class MainWindow
     private void AppendFirstInstallDiagnosticSummary(StringBuilder sb)
     {
         var check = _internalInstallDeviceCheck;
+        if (check?.Succeeded != true && _diagnosticLastSuccessfulCheck is { } last)
+        {
+            // 当前没有可确认结果：单独标注历史成功快照，时间戳与本轮快照严格区分。
+            sb.AppendLine("HistoricalCheckSucceeded: true");
+            sb.AppendLine(
+                "HistoricalCheckObservedAtUtc: "
+                + last.ObservedUtc.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
+            if (!string.IsNullOrWhiteSpace(last.Result.FastbootProduct))
+                sb.AppendLine("HistoricalCheckFastbootProduct: " + last.Result.FastbootProduct);
+            if (!string.IsNullOrWhiteSpace(last.Result.CurrentSlot))
+                sb.AppendLine("HistoricalCheckCurrentSlot: " + last.Result.CurrentSlot);
+            sb.AppendLine("HistoricalCheckFastbootLockState: " + last.Result.FastbootLockState);
+
+            var historicalFirmware = last.Result.Android?.Identity.Firmware;
+            if (historicalFirmware is not null)
+            {
+                AppendFirmwareDiagnosticSummary(sb, "Historical", historicalFirmware);
+                sb.AppendLine("HistoricalAndroidReportedBootloaderState: " + historicalFirmware.AndroidReportedBootloaderState);
+            }
+        }
+
         if (check is not null)
         {
             if (!string.IsNullOrWhiteSpace(check.FastbootProduct)) sb.AppendLine("DeviceCheckFastbootProduct: " + check.FastbootProduct);
@@ -45,10 +66,7 @@ public partial class MainWindow
             var firmware = check.Android?.Identity.Firmware;
             if (firmware is not null)
             {
-                if (!string.IsNullOrWhiteSpace(firmware.DisplayId)) sb.AppendLine("AndroidDisplayId: " + firmware.DisplayId);
-                if (!string.IsNullOrWhiteSpace(firmware.AndroidRelease)) sb.AppendLine("AndroidRelease: " + firmware.AndroidRelease);
-                if (!string.IsNullOrWhiteSpace(firmware.SecurityPatch)) sb.AppendLine("AndroidSecurityPatch: " + firmware.SecurityPatch);
-                if (!string.IsNullOrWhiteSpace(firmware.BuildFingerprint)) sb.AppendLine("AndroidBuildFingerprint: " + firmware.BuildFingerprint);
+                AppendFirmwareDiagnosticSummary(sb, string.Empty, firmware);
                 sb.AppendLine("AndroidReportedBootloaderState: " + firmware.AndroidReportedBootloaderState);
             }
         }
@@ -76,6 +94,15 @@ public partial class MainWindow
         sb.AppendLine("ExitResetAttempted: " + (_internalInstallExitResetAttempted ? "true" : "false"));
         sb.AppendLine("ExitConfirmed: " + (_internalInstallExitConfirmed ? "true" : "false"));
         sb.AppendLine("ExitActive: " + (_internalInstallExitActive ? "true" : "false"));
+    }
+
+    /// <summary>Firmware 字段的稳定标签输出；<paramref name="prefix"/> 为空或 "Historical"。</summary>
+    private static void AppendFirmwareDiagnosticSummary(StringBuilder sb, string prefix, FirmwareSnapshot firmware)
+    {
+        if (!string.IsNullOrWhiteSpace(firmware.DisplayId)) sb.AppendLine(prefix + "AndroidDisplayId: " + firmware.DisplayId);
+        if (!string.IsNullOrWhiteSpace(firmware.AndroidRelease)) sb.AppendLine(prefix + "AndroidRelease: " + firmware.AndroidRelease);
+        if (!string.IsNullOrWhiteSpace(firmware.SecurityPatch)) sb.AppendLine(prefix + "AndroidSecurityPatch: " + firmware.SecurityPatch);
+        if (!string.IsNullOrWhiteSpace(firmware.BuildFingerprint)) sb.AppendLine(prefix + "AndroidBuildFingerprint: " + firmware.BuildFingerprint);
     }
 
     /// <summary>Validated package facts already exposed by the importer (no whole-object dump).</summary>
