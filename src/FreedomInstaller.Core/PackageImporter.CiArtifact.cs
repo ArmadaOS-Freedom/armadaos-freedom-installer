@@ -198,10 +198,33 @@ public static partial class PackageImporter
             watchedNames.Add(normalizedPrefix + part.Name);
         }
 
-        // Pre-scan every declared part and every same-base numeric left-over that would be an
-        // extra volume. Match the original resolver's extra-volume refusal, but never trust
+        // Pre-scan every non-directory entry before staging. Any final path component matching
+        // ".zip." (case-insensitive) followed by a nonempty ASCII-digit suffix must be declared,
+        // regardless of base name or directory; otherwise it is an undeclared volume. Never trust
         // parts.json entries for selection. Validation above already guaranteed normalized names,
         // uniqueness, and no traversal, duplicates or symlinks.
+        foreach (var item in items)
+        {
+            if (item.IsDirectory || watchedNames.Contains(item.Name))
+            {
+                continue;
+            }
+
+            var finalComponent = item.Name[(item.Name.LastIndexOf('/') + 1)..];
+            var dotZipIndex = finalComponent.LastIndexOf(".zip.", StringComparison.OrdinalIgnoreCase);
+            if (dotZipIndex < 0)
+            {
+                continue;
+            }
+
+            var suffix = finalComponent[(dotZipIndex + ".zip.".Length)..];
+            if (suffix.Length > 0 && suffix.All(char.IsAsciiDigit))
+            {
+                throw new InvalidDataException(
+                    $"CI 下载包包含签名未声明的额外分卷：{item.Name}。");
+            }
+        }
+
         var stagedPlan = new List<(ArchiveItem Item, long Expected)>(declaredParts.Count);
         for (int index = 0; index < declaredParts.Count; index++)
         {
@@ -219,25 +242,6 @@ public static partial class PackageImporter
                     $"CI 下载包分卷长度不匹配：{declared.Name} 实际 {matched.Entry.Length}，签名 {declared.Bytes}。");
             }
             stagedPlan.Add((matched, declared.Bytes));
-        }
-
-        var archiveNumericPrefix = normalizedPrefix + archiveFileName + ".";
-        foreach (var item in items)
-        {
-            if (item.IsDirectory || !item.Name.StartsWith(archiveNumericPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-            var suffix = item.Name[archiveNumericPrefix.Length..];
-            if (suffix.Length == 0 || !suffix.All(char.IsAsciiDigit))
-            {
-                continue;
-            }
-            if (!watchedNames.Contains(item.Name))
-            {
-                throw new InvalidDataException(
-                    $"CI 下载包包含签名未声明的额外分卷：{item.Name[normalizedPrefix.Length..]}。");
-            }
         }
 
         // Stage the signed descriptor, its signature, and each declared volume into a private

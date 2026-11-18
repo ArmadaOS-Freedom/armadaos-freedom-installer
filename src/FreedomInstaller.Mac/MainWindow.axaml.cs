@@ -53,16 +53,11 @@ public partial class MainWindow : Window
 
     private void AppendLog(UiMessage message)
     {
-        var row = _l.NewLogRow(message, MaxLogRows, out var dropped);
+        var row = _l.AppendLogRow(InternalInstallLogList, message, MaxLogRows);
         row.FontSize = 12;
         row.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
         row.Margin = new Thickness(0, 0, 0, 4);
         row[!TextBlock.ForegroundProperty] = row.GetResourceObservable("MutedBrush").ToBinding();
-        InternalInstallLogList.Children.Add(row);
-        if (dropped is not null)
-        {
-            InternalInstallLogList.Children.Remove(dropped);
-        }
 
         InternalInstallLogEmptyText.IsVisible = false;
         InternalInstallLogScrollViewer.ScrollToEnd();
@@ -101,6 +96,7 @@ public partial class MainWindow : Window
 
         _pageBeforeSupport = EnvironmentPage.IsVisible ? EnvironmentPage
             : HomePage.IsVisible ? HomePage
+            : GlobalRecoveryPage.IsVisible ? GlobalRecoveryPage
             : WorkflowScrollViewer;
         AboutVersionText.Text = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? string.Empty;
         AboutCopyStatus.IsVisible = false;
@@ -123,6 +119,7 @@ public partial class MainWindow : Window
         EnvironmentPage.IsVisible = ReferenceEquals(view, EnvironmentPage);
         HomePage.IsVisible = ReferenceEquals(view, HomePage);
         SupportPage.IsVisible = ReferenceEquals(view, SupportPage);
+        GlobalRecoveryPage.IsVisible = ReferenceEquals(view, GlobalRecoveryPage);
         var wizard = ReferenceEquals(view, WorkflowScrollViewer);
         WorkflowScrollViewer.IsVisible = wizard;
         WorkflowSidebar.IsVisible = wizard;
@@ -151,6 +148,10 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// The home cards dispatch on their Tag like the WPF window. A page that holds a 9008 session keeps the other
+    /// page closed, so one window never drives the tablet from two places.
+    /// </summary>
     private void OnSelectOperation(object? sender, RoutedEventArgs e)
     {
         if (_busy || !_environmentReady)
@@ -158,8 +159,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        ShowView(WorkflowScrollViewer);
-        NavigateInternalInstallStep(_internalInstallStep);
+        switch ((sender as Control)?.Tag as string)
+        {
+            case "global-backup" when !HasInternalInstallDeviceSession:
+                ShowGlobalRecoveryPage(GlobalRecoveryMode.Backup);
+                break;
+            case "global-restore" when !HasInternalInstallDeviceSession:
+                ShowGlobalRecoveryPage(GlobalRecoveryMode.Restore);
+                break;
+            case "install" when !HasGlobalRecoveryProtectedState:
+                ShowView(WorkflowScrollViewer);
+                NavigateInternalInstallStep(_internalInstallStep);
+                break;
+        }
     }
 
     private void OnBackToFunctions(object? sender, RoutedEventArgs e)
@@ -277,6 +289,52 @@ public partial class MainWindow : Window
     {
         if (_closeConfirmed)
         {
+            return;
+        }
+
+        if (_globalOperationActive)
+        {
+            // A global connect / backup / restore / reset is running: the window stays open until it ends.
+            e.Cancel = true;
+            await MessageDialog.ShowAsync(
+                this,
+                T("Dynamic.Mac.Close.BusyTitle"),
+                T("Dynamic.Mac.Close.BusyBody"),
+                T("Dynamic.Mac.Dialog.Ok"));
+            return;
+        }
+
+        if (HasGlobalRecoveryProtectedState)
+        {
+            // The global page holds a 9008 session or an unresolved outcome: close only after the same explicit
+            // warning as the WPF page. Nothing is reset on close and no backup or evidence is deleted.
+            e.Cancel = true;
+            if (_closePromptActive)
+            {
+                return;
+            }
+
+            _closePromptActive = true;
+            try
+            {
+                if (await MessageDialog.AskAsync(
+                        this,
+                        T("Dynamic.Global.Dialog.Title"),
+                        T("Dynamic.Global.Dialog.CloseWarning"),
+                        T("Dynamic.Mac.Dialog.Yes"),
+                        T("Dynamic.Mac.Dialog.No")))
+                {
+                    _closeConfirmed = true;
+                    DisposeGlobalRecoveryOnClose();
+                    DisposeInternalInstall();
+                    Close();
+                }
+            }
+            finally
+            {
+                _closePromptActive = false;
+            }
+
             return;
         }
 
@@ -415,6 +473,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        DisposeGlobalRecoveryOnClose();
         DisposeInternalInstall();
     }
 

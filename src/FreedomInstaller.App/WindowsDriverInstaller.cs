@@ -15,12 +15,28 @@ internal enum DriverInstallOutcome
     Failed,
 }
 
-internal record DriverInstallResult(DriverInstallOutcome Outcome, int? ExitCode, string? Error);
+internal record DriverInstallResult(DriverInstallOutcome Outcome, int? ExitCode, string? Error)
+{
+    internal bool EarlierPackageCompleted { get; init; }
+}
+
+internal readonly record struct DriverPackageSelection(bool InstallQualcomm, bool InstallAndroid);
 
 internal static class WindowsDriverInstaller
 {
     private const int ErrorCancelled = 1223;
     private const int RebootRequiredExitCode = 3010;
+
+    /// <summary>
+    /// 只做纯选择：任一组确实缺失 / 有问题时只处理指示的类别；
+    /// 两组都就绪时允许用户主动「修复」两个随附驱动组。
+    /// </summary>
+    internal static DriverPackageSelection SelectPackages(bool qualcommNeedsInstall, bool androidNeedsInstall)
+    {
+        if (qualcommNeedsInstall || androidNeedsInstall)
+            return new DriverPackageSelection(qualcommNeedsInstall, androidNeedsInstall);
+        return new DriverPackageSelection(true, true);
+    }
 
     internal static async Task<DriverInstallResult> InstallAsync(QualcommDriverFiles files)
     {
@@ -59,7 +75,10 @@ internal static class WindowsDriverInstaller
     {
         var google = await install(files.GoogleInfPath).ConfigureAwait(false);
         if (google.Outcome != DriverInstallOutcome.Completed) return google;
-        return await install(files.OplusInfPath).ConfigureAwait(false);
+        var oplus = await install(files.OplusInfPath).ConfigureAwait(false);
+        // 只有 Google 明确 Completed 后才走到这里：把「前一个包已完成」标记带到第二步结果上，
+        // 供调用方在后续步骤被取消时决定是否需要重新自检。
+        return oplus with { EarlierPackageCompleted = true };
     }
 
     private static async Task<DriverInstallResult> InstallInfAsync(string infPath)

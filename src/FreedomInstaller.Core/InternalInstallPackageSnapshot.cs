@@ -1395,13 +1395,17 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         var available = TryGetAvailableFreeBytes(parent);
         if (available is null)
         {
-            throw new IOException(
+            throw new InternalInstallWorkDiskSpaceException(
+                required,
+                null,
                 $"The free space of the expansion parent could not be determined: {parent}.");
         }
 
         if (required > available.Value)
         {
-            throw new IOException(
+            throw new InternalInstallWorkDiskSpaceException(
+                required,
+                available.Value,
                 $"The expansion parent holds {available.Value} free bytes, but the expanded images need "
                 + $"{required} bytes: {parent}.");
         }

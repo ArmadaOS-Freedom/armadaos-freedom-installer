@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
@@ -31,6 +32,14 @@ namespace FreedomInstaller.Core
         private const string PythonArchiveName = "python314.zip";
         private const string PythonPathFileName = "python314._pth";
         private const string PythonPathContents = "python314.zip\n.\n../scripts\n";
+
+        // macOS runtime: the unmodified python-build-standalone install_only_stripped archive expands to a
+        // "python/" tree; the interpreter is called by its versioned name, so the archive's convenience
+        // symlinks (python3 -> python3.14 and the like) are never materialized.
+        private const string MacPythonExecutableRelativePath = "python/bin/python3.14";
+        private const string MacPythonStdlibMarkerRelativePath = "python/lib/python3.14/os.py";
+        private const int MacPythonMaxEntries = 10000;
+        private const long MacPythonMaxExpandedBytes = 512L * 1024 * 1024;
 
         // Roles common to every trusted profile, with their reviewed paths and fixed pins, per host platform.
         // The loader payloads (one for G4, nine for G5) are never listed here: they come from the selected
@@ -107,9 +116,10 @@ namespace FreedomInstaller.Core
             hasPythonRuntime: true,
             clientNeedsExecuteBit: false);
 
-        // macOS on Apple silicon: the same modified edl-ng built for osx-arm64 with its libusb dylib. The
-        // install route needs no Python, so this toolchain has no python role and an empty PythonPath. The client
-        // pin is the compiled one: a macOS build of the installer generates CompiledToolPins from the osx-arm64
+        // macOS on Apple silicon: the same modified edl-ng built for osx-arm64 with its libusb dylib, and the
+        // Python runtime of the uninstall bridges. python.org has no embeddable macOS build, so the runtime is the
+        // pinned, unmodified python-build-standalone archive of the same CPython 3.14.8 (it links only system
+        // libraries). The client pin is the compiled one: a macOS build of the installer generates CompiledToolPins from the osx-arm64
         // edl-ng it bundles, as the Windows build does from edl-ng.exe.
         internal static readonly ToolchainPlatform MacOSPlatform = new ToolchainPlatform(
             "macos-arm64",
@@ -118,6 +128,7 @@ namespace FreedomInstaller.Core
                 "client",
                 "usbLibrary",
                 "license",
+                "python",
                 "avb",
                 "avbCli",
                 "gpt",
@@ -128,6 +139,7 @@ namespace FreedomInstaller.Core
                 { "client", "tools/edl-ng" },
                 { "usbLibrary", "tools/libusb-1.0.dylib" },
                 { "license", "tools/LICENSE.txt" },
+                { "python", "python/cpython-3.14.8-20261020-aarch64-apple-darwin-install_only_stripped.tar.gz" },
                 { "avb", "scripts/avb_stock.py" },
                 { "avbCli", "scripts/avb_stock_cli.py" },
                 { "gpt", "scripts/portable_gpt.py" },
@@ -138,9 +150,13 @@ namespace FreedomInstaller.Core
                 {
                     "client",
                     (CompiledToolPins.ClientBytes, CompiledToolPins.ClientSha256)
+                },
+                {
+                    "python",
+                    (26694605L, "f0f1402b45a8a655fc78c8ee62462fddcb9dc8717a022e79700d07e44fd18d4a")
                 }
             },
-            hasPythonRuntime: false,
+            hasPythonRuntime: true,
             clientNeedsExecuteBit: true);
 
         private static ToolchainPlatform ReadPlatform(JsonObject root)
@@ -170,6 +186,7 @@ namespace FreedomInstaller.Core
             string usbLibraryPath,
             string firehosePath,
             string pythonPath,
+            IReadOnlyList<string> pythonOptions,
             string avbCliPath,
             string gptCliPath,
             string profileId,
@@ -183,6 +200,7 @@ namespace FreedomInstaller.Core
             UsbLibraryPath = usbLibraryPath;
             FirehosePath = firehosePath;
             PythonPath = pythonPath;
+            PythonOptions = pythonOptions;
             AvbCliPath = avbCliPath;
             GptCliPath = gptCliPath;
             StagingDirectory = stagingDirectory;
@@ -200,6 +218,14 @@ namespace FreedomInstaller.Core
         public string FirehosePath { get; }
 
         public string PythonPath { get; }
+
+        /// <summary>
+        /// Interpreter options that come before every bridge invocation. Empty for the Windows runtime, whose
+        /// ._pth file already isolates it; <c>-E -s</c> for the macOS runtime.
+        /// </summary>
+        public IReadOnlyList<string> PythonOptions { get; }
+
+        internal static readonly IReadOnlyList<string> MacPythonOptions = new[] { "-E", "-s" };
 
         public string AvbCliPath { get; }
 
@@ -266,7 +292,20 @@ namespace FreedomInstaller.Core
                     var platform = manifest.Platform;
                     var clientPath = StagedPath(stagingDirectory, platform.RolePaths["client"]);
                     var pythonPath = string.Empty;
-                    if (platform.HasPythonRuntime)
+                    IReadOnlyList<string> pythonOptions = Array.Empty<string>();
+                    if (ReferenceEquals(platform, MacOSPlatform))
+                    {
+                        var runtimeDirectory = Path.Combine(stagingDirectory, PythonRuntimeDirectoryName);
+                        pythonPath = await ExpandMacPythonRuntimeAsync(
+                                StagedPath(stagingDirectory, MacOSPlatform.RolePaths["python"]),
+                                runtimeDirectory,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        // No ._pth file isolates this interpreter as on Windows: -E ignores PYTHON* variables and
+                        // -s the user site directory, while the bridge script's own directory stays on sys.path.
+                        pythonOptions = MacPythonOptions;
+                    }
+                    else if (platform.HasPythonRuntime)
                     {
                         await ExpandPythonRuntimeAsync(stagingDirectory, cancellationToken).ConfigureAwait(false);
                         pythonPath = Path.Combine(stagingDirectory, PythonRuntimeDirectoryName, PythonExecutableName);
@@ -285,6 +324,7 @@ namespace FreedomInstaller.Core
                         StagedPath(stagingDirectory, platform.RolePaths["usbLibrary"]),
                         StagedPath(stagingDirectory, manifest.Profile.LoaderEntryPath),
                         pythonPath,
+                        pythonOptions,
                         StagedPath(stagingDirectory, platform.RolePaths["avbCli"]),
                         StagedPath(stagingDirectory, platform.RolePaths["gptCli"]),
                         manifest.ProfileId,
@@ -896,6 +936,147 @@ namespace FreedomInstaller.Core
             }
 
             File.WriteAllBytes(pathFilePath, Encoding.UTF8.GetBytes(PythonPathContents));
+        }
+
+        /// <summary>
+        /// Expands the pinned macOS runtime archive (already verified against its pin) into
+        /// <paramref name="runtimeDirectory"/> and returns the interpreter path. Only directories and regular
+        /// files are written; a symbolic link is accepted only when it names a sibling in the same directory and
+        /// is skipped, and every other entry type, unsafe path, duplicate or case collision is refused. Entry
+        /// count and expanded size are bounded.
+        /// </summary>
+        internal static async Task<string> ExpandMacPythonRuntimeAsync(
+            string archivePath,
+            string runtimeDirectory,
+            CancellationToken cancellationToken)
+        {
+            if (!File.Exists(archivePath))
+            {
+                throw new InvalidDataException("The staged python runtime archive '" + archivePath + "' is missing.");
+            }
+
+            Directory.CreateDirectory(runtimeDirectory);
+            var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var entries = 0;
+            long expanded = 0;
+
+            using (var source = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var gzip = new GZipStream(source, CompressionMode.Decompress))
+            using (var reader = new TarReader(gzip, leaveOpen: false))
+            {
+                TarEntry? entry;
+                while ((entry = await reader.GetNextEntryAsync(copyData: false, cancellationToken).ConfigureAwait(false)) != null)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (++entries > MacPythonMaxEntries)
+                    {
+                        throw new InvalidDataException(
+                            "The python runtime archive has more than " + MacPythonMaxEntries + " entries.");
+                    }
+
+                    var name = entry.Name;
+                    if (name.StartsWith("./", StringComparison.Ordinal))
+                    {
+                        name = name.Substring(2);
+                    }
+
+                    var isDirectory = entry.EntryType == TarEntryType.Directory;
+                    var normalized = isDirectory ? name.TrimEnd('/') : name;
+                    ValidateRelativePath(normalized, allowTrailingSlash: false);
+                    if (!seenNames.Add(normalized))
+                    {
+                        throw new InvalidDataException(
+                            "The python runtime entry '" + name + "' duplicates or case-collides with another entry.");
+                    }
+
+                    var targetPath = StagedPath(runtimeDirectory, normalized);
+                    switch (entry.EntryType)
+                    {
+                        case TarEntryType.Directory:
+                            Directory.CreateDirectory(targetPath);
+                            break;
+
+                        case TarEntryType.RegularFile:
+                        case TarEntryType.V7RegularFile:
+                        {
+                            expanded += entry.Length;
+                            if (entry.Length < 0 || expanded > MacPythonMaxExpandedBytes)
+                            {
+                                throw new InvalidDataException(
+                                    "The python runtime archive expands beyond " + MacPythonMaxExpandedBytes + " bytes.");
+                            }
+
+                            var parent = Path.GetDirectoryName(targetPath);
+                            if (!string.IsNullOrEmpty(parent))
+                            {
+                                Directory.CreateDirectory(parent);
+                            }
+
+                            using (var target = new FileStream(
+                                       targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, BufferSize, useAsync: true))
+                            {
+                                if (entry.DataStream != null)
+                                {
+                                    await CopyAsync(entry.DataStream, target, cancellationToken).ConfigureAwait(false);
+                                }
+
+                                if (target.Length != entry.Length)
+                                {
+                                    throw new InvalidDataException(
+                                        "The python runtime entry '" + name + "' is truncated.");
+                                }
+                            }
+
+                            if (!OperatingSystem.IsWindows())
+                            {
+                                var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                                if ((entry.Mode & UnixFileMode.UserExecute) != 0)
+                                {
+                                    mode |= UnixFileMode.UserExecute;
+                                }
+
+                                File.SetUnixFileMode(targetPath, mode);
+                            }
+
+                            break;
+                        }
+
+                        case TarEntryType.SymbolicLink:
+                        {
+                            var link = entry.LinkName;
+                            if (string.IsNullOrEmpty(link) || link.IndexOf('/') >= 0 || link.IndexOf('\\') >= 0 ||
+                                link == "." || link == "..")
+                            {
+                                throw new InvalidDataException(
+                                    "The python runtime entry '" + name + "' is a symlink outside its own directory.");
+                            }
+
+                            break;
+                        }
+
+                        default:
+                            throw new InvalidDataException(
+                                "The python runtime entry '" + name + "' has the unsupported type " + entry.EntryType + ".");
+                    }
+                }
+            }
+
+            var interpreter = StagedPath(runtimeDirectory, MacPythonExecutableRelativePath);
+            if (!File.Exists(interpreter) ||
+                !File.Exists(StagedPath(runtimeDirectory, MacPythonStdlibMarkerRelativePath)))
+            {
+                throw new InvalidDataException(
+                    "The python runtime archive is incomplete; " + MacPythonExecutableRelativePath + " and " +
+                    MacPythonStdlibMarkerRelativePath + " are required.");
+            }
+
+            if (!OperatingSystem.IsWindows() &&
+                (File.GetUnixFileMode(interpreter) & UnixFileMode.UserExecute) == 0)
+            {
+                throw new InvalidDataException("The python runtime interpreter is not executable.");
+            }
+
+            return interpreter;
         }
 
         private static async Task CopyAsync(

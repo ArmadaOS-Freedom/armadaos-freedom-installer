@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
+using FreedomInstaller.Core;
 
 namespace FreedomInstaller.App;
 
@@ -13,6 +14,22 @@ namespace FreedomInstaller.App;
 /// «serial · state» keeps switching language as a whole.
 /// </summary>
 internal sealed record UiMessage(string Key, params object?[] Arguments);
+
+/// <summary>
+/// Thrown when a preparation step fails with text that is already localized in the UI catalog.
+/// Carries the <see cref="UiMessage"/> so the failure mapper reproduces the same key instead of
+/// falling back to the generic message.
+/// </summary>
+internal sealed class LocalizedInvalidOperationException : InvalidOperationException
+{
+    public LocalizedInvalidOperationException(UiMessage message, string? diagnostic = null)
+        : base(diagnostic ?? message.Key)
+    {
+        UserMessage = message;
+    }
+
+    public UiMessage UserMessage { get; }
+}
 
 /// <summary>
 /// Localized UI text. Reads the embedded catalogs <c>FreedomInstaller.Strings.Static.&lt;lang&gt;.json</c>
@@ -142,6 +159,64 @@ internal sealed class UiText
     /// </summary>
     internal string Get(string key, params object?[] args) =>
         string.IsNullOrEmpty(key) ? string.Empty : FormatKey(key, args, 0);
+
+    /// <summary>
+    /// Maps a preparation failure to a localizable message. Known cases (disk space, the four
+    /// backend prefix diagnostics, already-localized preparation failures) get dedicated text;
+    /// other reasons keep the generic message without the raw exception text.
+    /// </summary>
+    internal static UiMessage InternalInstallPreparationFailure(Exception exception)
+    {
+        if (exception is InternalInstallWorkDiskSpaceException space)
+        {
+            return space.AvailableBytes is long available
+                ? new UiMessage(
+                    "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceKnown",
+                    RoundGiBDown(available),
+                    RoundGiBUp(space.RequiredBytes))
+                : new UiMessage(
+                    "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceUnknown",
+                    RoundGiBUp(space.RequiredBytes));
+        }
+
+        if (exception is LocalizedInvalidOperationException localized)
+        {
+            return localized.UserMessage;
+        }
+
+        if (exception is InvalidOperationException problem)
+        {
+            if (problem.Message.StartsWith("requires-complete-backup-with-efisp:", StringComparison.Ordinal))
+            {
+                return new UiMessage("Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired");
+            }
+
+            if (problem.Message.StartsWith("gbl-boot-chain-key-mismatch:", StringComparison.Ordinal))
+            {
+                return new UiMessage("Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch");
+            }
+
+            if (problem.Message.StartsWith("gbl-runtime-region-unknown:", StringComparison.Ordinal))
+            {
+                return new UiMessage("Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown");
+            }
+
+            if (problem.Message.StartsWith("requires-compatible-bootloader:", StringComparison.Ordinal))
+            {
+                return new UiMessage("Dynamic.InternalInstall.Prepared.CompatibilityRequired");
+            }
+        }
+
+        return new UiMessage("Dynamic.InternalInstall.Prepared.Failed");
+    }
+
+    private const decimal BytesPerGiB = 1073741824m;
+
+    private static decimal RoundGiBDown(long bytes) =>
+        decimal.Floor(((decimal)bytes / BytesPerGiB) * 100m) / 100m;
+
+    private static decimal RoundGiBUp(long bytes) =>
+        decimal.Ceiling(((decimal)bytes / BytesPerGiB) * 100m) / 100m;
 
     /// <summary>Resolves a message, including nested <see cref="UiMessage"/> arguments.</summary>
     internal string Format(UiMessage message) =>

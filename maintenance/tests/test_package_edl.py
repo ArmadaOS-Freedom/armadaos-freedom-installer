@@ -148,10 +148,12 @@ class PackageTests(unittest.TestCase):
 
     def _macos_args(self, with_pins: bool) -> argparse.Namespace:
         common = _common_fixtures(self.root)
-        common.pop("python")
         materials = _material_fixtures(self.root, edl.G4_PROFILE)
         args = _args(common, self.out, "tb322fc", firehose=materials["firehose"], platform="macos-arm64")
         self._material_pins = _patched_pins(materials, edl.G4_PROFILE)
+        with open(common["python"], "rb") as handle:
+            runtime = handle.read()
+        self._python_pin = {"python": (len(runtime), _sha(runtime))}
         if with_pins:
             with open(common["client"], "rb") as handle:
                 client = handle.read()
@@ -170,10 +172,11 @@ class PackageTests(unittest.TestCase):
         self.assertIn("--build-pins-json", str(ctx.exception))
         self.assertFalse(os.path.exists(self.out))
 
-    def test_macos_roundtrip_has_no_python_and_names_the_platform(self) -> None:
+    def test_macos_roundtrip_carries_the_pinned_runtime_and_names_the_platform(self) -> None:
         args = self._macos_args(with_pins=True)
         new_profile = _replace_profile_pins(edl.G4_PROFILE, self._material_pins)
-        with mock.patch.dict(edl.G4_PROFILE, new_profile, clear=True):
+        with mock.patch.dict(edl.G4_PROFILE, new_profile, clear=True), \
+             mock.patch.dict(edl.MACOS_PINS, self._python_pin, clear=True):
             edl.package(args)
         with zipfile.ZipFile(self.out) as archive:
             names = archive.namelist()
@@ -181,7 +184,26 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(manifest["platform"], "macos-arm64")
         self.assertIn("tools/edl-ng", names)
         self.assertIn("tools/libusb-1.0.dylib", names)
-        self.assertFalse(any(name.startswith("python/") for name in names))
+        runtime = "python/cpython-3.14.8-20261020-aarch64-apple-darwin-install_only_stripped.tar.gz"
+        self.assertEqual([name for name in names if name.startswith("python/")], [runtime])
+        self.assertNotIn("python/python-3.14.8-embed-amd64.zip", names)
+
+    def test_macos_requires_the_runtime(self) -> None:
+        args = self._macos_args(with_pins=True)
+        args.python = None
+        with self.assertRaises(edl.PackagingError) as ctx:
+            edl.package(args)
+        self.assertIn("--python-zip", str(ctx.exception))
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_macos_rejects_an_unpinned_runtime(self) -> None:
+        args = self._macos_args(with_pins=True)
+        new_profile = _replace_profile_pins(edl.G4_PROFILE, self._material_pins)
+        with mock.patch.dict(edl.G4_PROFILE, new_profile, clear=True):
+            with self.assertRaises(edl.PackagingError) as ctx:
+                edl.package(args)
+        self.assertIn("python", str(ctx.exception))
+        self.assertFalse(os.path.exists(self.out))
 
     def test_roundtrip_g5(self) -> None:
         self._roundtrip("tb323fu", edl.G5_PROFILE)

@@ -1,7 +1,7 @@
 <!--
     macOS 主窗口：版式逐块照搬 FreedomInstaller.App/MainWindow.xaml（顶栏品牌与切换按钮、准备页、
     功能首页、左侧步骤 + 右侧页面、底栏），控件名称与 Windows 版相同，文字一律引用同一份
-    Static.* / Dynamic.* 文案。macOS 版目前只开放「安装到内部存储」，其余功能卡片保留但不可用。
+    Static.* / Dynamic.* 文案。macOS 版开放「安装到内部存储」与「9008 全局备份 / 全局恢复」，其余功能卡片保留但不可用。
 -->
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -663,7 +663,7 @@
                                 </StackPanel>
                             </Grid>
                         </Button>
-                        <Button IsEnabled="False" Theme="{StaticResource FunctionCard}" Margin="0,0,12,12">
+                        <Button Tag="global-backup" Click="OnSelectOperation" Theme="{StaticResource FunctionCard}" Margin="0,0,12,12">
                             <Grid ColumnDefinitions="Auto,*">
                                 <Border Grid.Column="0" Classes="FunctionCardIcon">
                                     <Path Data="M 12 3 V 14 M 8 10 L 12 14 L 16 10 M 4 19 H 20" Width="18" Height="18" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.8" />
@@ -671,11 +671,10 @@
                                 <StackPanel Grid.Column="1">
                                     <TextBlock Text="{DynamicResource Static.Function.GlobalBackup.Title}" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource InkBrush}" TextWrapping="Wrap" />
                                     <TextBlock Text="{DynamicResource Static.Function.GlobalBackup.Desc}" FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                                    <TextBlock Text="{DynamicResource Static.Mac.WindowsOnly}" FontSize="11" Foreground="{DynamicResource WarnBrush}" Margin="0,6,0,0" />
                                 </StackPanel>
                             </Grid>
                         </Button>
-                        <Button IsEnabled="False" Theme="{StaticResource FunctionCard}" Margin="0,0,12,12">
+                        <Button Tag="global-restore" Click="OnSelectOperation" Theme="{StaticResource FunctionCard}" Margin="0,0,12,12">
                             <Grid ColumnDefinitions="Auto,*">
                                 <Border Grid.Column="0" Classes="FunctionCardIcon">
                                     <Path Data="M 12 15 V 4 M 8 8 L 12 4 L 16 8 M 4 19 H 20" Width="18" Height="18" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.8" />
@@ -683,11 +682,158 @@
                                 <StackPanel Grid.Column="1">
                                     <TextBlock Text="{DynamicResource Static.Function.GlobalRestore.Title}" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource InkBrush}" TextWrapping="Wrap" />
                                     <TextBlock Text="{DynamicResource Static.Function.GlobalRestore.Desc}" FontSize="12" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                                    <TextBlock Text="{DynamicResource Static.Mac.WindowsOnly}" FontSize="11" Foreground="{DynamicResource WarnBrush}" Margin="0,6,0,0" />
                                 </StackPanel>
                             </Grid>
                         </Button>
                     </UniformGrid>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ================= 9008 全局备份 / 全局恢复（与 WPF 窗口的全局救援页一致） ================= -->
+            <ScrollViewer x:Name="GlobalRecoveryPage"
+                          Grid.Column="0"
+                          Grid.ColumnSpan="3"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          IsVisible="False"
+                          Padding="0,0,14,0"
+                          Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock x:Name="GlobalBackupTitleText" Text="{DynamicResource Static.Global.BackupTitle}" Classes="H1Text" />
+                    <TextBlock x:Name="GlobalRestoreTitleText" Text="{DynamicResource Static.Global.RestoreTitle}" Classes="H1Text" IsVisible="False" />
+                    <TextBlock x:Name="GlobalBackupLeadText" Text="{DynamicResource Static.Global.BackupLead}" Classes="BodyText" Margin="0,6,0,0" />
+                    <TextBlock x:Name="GlobalRestoreLeadText" Text="{DynamicResource Static.Global.RestoreLead}" Classes="BodyText" Margin="0,6,0,0" IsVisible="False" />
+
+                    <WrapPanel Margin="0,12,0,0">
+                        <Button x:Name="GlobalBackHomeButton"
+                                Content="{DynamicResource Static.Global.BackHome}"
+                                Click="OnGlobalBackHome"
+                                Theme="{StaticResource SecondaryButton}"
+                                Margin="0,0,8,8" />
+                    </WrapPanel>
+
+                    <!-- 连接：型号由连接时自动识别；进入本页不会自动访问设备。 -->
+                    <Border Classes="CardBorder" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Static.Global.ConnectionGuideLead}" Classes="BodyText" />
+                            <TextBlock Text="{DynamicResource Static.Global.AutoDetect}" Classes="CaptionText" Margin="0,8,0,0" />
+                            <WrapPanel Margin="0,10,0,10">
+                                <Button x:Name="GlobalConnectButton"
+                                        Content="{DynamicResource Static.Global.Connect}"
+                                        Click="OnGlobalConnect"
+                                        Theme="{StaticResource PrimaryButton}"
+                                        Margin="0,0,8,8" />
+                            </WrapPanel>
+                            <TextBlock x:Name="GlobalConnectionText" Text="{DynamicResource Dynamic.Global.Idle}" Classes="BodyInkText" FontWeight="SemiBold" />
+                            <TextBlock x:Name="GlobalPowerText" Text="{DynamicResource Static.Global.PowerInitial}" Classes="CaptionText" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 公共保存位置：备份与恢复都要有工作记录目录，标签随视图切换。 -->
+                    <Border Classes="CardBorder" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock x:Name="GlobalOutputBackupLabelText" Text="{DynamicResource Static.Global.BackupDirectoryLabel}" Classes="CaptionText" />
+                            <TextBlock x:Name="GlobalOutputRestoreLabelText" Text="{DynamicResource Static.Global.OutputDirectoryLabelRestore}" Classes="CaptionText" IsVisible="False" />
+                            <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+                                <TextBox x:Name="GlobalBackupDirectoryBox" Grid.Column="0" Theme="{StaticResource InputTextBox}" IsReadOnly="True" />
+                                <Button x:Name="GlobalBrowseBackupButton"
+                                        Grid.Column="1"
+                                        Content="{DynamicResource Static.Global.Browse}"
+                                        Click="OnGlobalBrowseBackup"
+                                        Theme="{StaticResource SecondaryButton}"
+                                        Margin="10,0,0,0" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 视图 1：全局备份 -->
+                    <Border x:Name="GlobalBackupCard" Classes="CardBorder" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Static.Global.BackupBody}" Classes="BodyText" />
+                            <WrapPanel Margin="0,10,0,0">
+                                <Button x:Name="GlobalBackupButton"
+                                        Content="{DynamicResource Static.Global.BackupButton}"
+                                        Click="OnGlobalBackupAction"
+                                        Theme="{StaticResource PrimaryButton}"
+                                        Margin="0,0,8,8" />
+                            </WrapPanel>
+                            <TextBlock x:Name="GlobalBackupSummaryText" Text="{DynamicResource Dynamic.Global.NoBackup}" Classes="CaptionText" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 视图 2：全局恢复。必须绑定这台平板自己的完整备份，默认不显示。 -->
+                    <Border x:Name="GlobalRestoreCard" Classes="CardBorder" Margin="0,12,0,0" IsVisible="False">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Static.Global.RestoreBody}" Classes="BodyText" />
+                            <TextBlock Text="{DynamicResource Static.Global.RestoreDirectoryLabel}" Classes="CaptionText" Margin="0,10,0,0" />
+                            <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+                                <TextBox x:Name="GlobalRestoreDirectoryBox" Grid.Column="0" Theme="{StaticResource InputTextBox}" IsReadOnly="True" />
+                                <Button x:Name="GlobalBrowseRestoreButton"
+                                        Grid.Column="1"
+                                        Content="{DynamicResource Static.Global.Browse}"
+                                        Click="OnGlobalBrowseRestore"
+                                        Theme="{StaticResource SecondaryButton}"
+                                        Margin="10,0,0,0" />
+                            </Grid>
+                            <WrapPanel Margin="0,10,0,0">
+                                <Button x:Name="GlobalPrepareRestoreButton"
+                                        Content="{DynamicResource Static.Global.PrepareRestore}"
+                                        Click="OnGlobalPrepareRestoreAction"
+                                        Theme="{StaticResource PrimaryButton}"
+                                        Margin="0,0,8,8" />
+                            </WrapPanel>
+                            <TextBlock x:Name="GlobalRestoreSummaryText" Text="{DynamicResource Dynamic.Global.NoRestorePlan}" Classes="CaptionText" Margin="0,0,0,8" />
+                            <CheckBox x:Name="GlobalRestoreConfirmCheck"
+                                      Theme="{StaticResource RiskCheckBox}"
+                                      IsChecked="False"
+                                      IsCheckedChanged="OnGlobalRestoreConsentChanged"
+                                      Margin="0,10,0,10">
+                                <TextBlock Text="{DynamicResource Static.Global.RestoreConsent}" TextWrapping="Wrap" FontSize="13" />
+                            </CheckBox>
+                            <WrapPanel>
+                                <Button x:Name="GlobalRestoreButton"
+                                        Content="{DynamicResource Static.Global.RestoreButton}"
+                                        Click="OnGlobalRestoreAction"
+                                        Theme="{StaticResource PrimaryButton}"
+                                        IsEnabled="False"
+                                        Margin="0,0,8,8" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 公共进度：不提供虚假的完成或成功状态。 -->
+                    <Border Classes="CardBorder" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock x:Name="GlobalProgressStatusText" Text="{DynamicResource Dynamic.Global.Idle}" Classes="BodyInkText" FontWeight="SemiBold" />
+                            <ProgressBar x:Name="GlobalProgressBar" Minimum="0" Maximum="100" Value="0" Height="6" Margin="0,8,0,0" />
+                            <WrapPanel Margin="0,12,0,0">
+                                <Button x:Name="GlobalRestartButton"
+                                        Content="{DynamicResource Static.Global.Restart}"
+                                        Click="OnGlobalRestart"
+                                        Theme="{StaticResource SecondaryButton}"
+                                        IsEnabled="False"
+                                        Margin="0,0,8,8" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="CardBorder" Margin="0,12,0,0">
+                        <Expander Theme="{StaticResource SectionExpander}" Margin="0" IsExpanded="False">
+                            <Expander.Header>
+                                <TextBlock Text="{DynamicResource Static.Global.LogTitle}" Classes="H2Text" />
+                            </Expander.Header>
+                            <ScrollViewer x:Name="GlobalLogScrollViewer"
+                                          Height="180"
+                                          Margin="0,8,0,0"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel>
+                                    <TextBlock x:Name="GlobalLogEmptyText" Text="{DynamicResource Dynamic.Global.LogEmpty}" Classes="CaptionText" />
+                                    <StackPanel x:Name="GlobalLogList" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Expander>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
 

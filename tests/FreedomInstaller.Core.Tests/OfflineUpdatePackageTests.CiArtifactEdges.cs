@@ -17,6 +17,9 @@ public sealed partial class OfflineUpdatePackageTests
     [InlineData("traversal")]
     [InlineData("duplicate-case")]
     [InlineData("ambiguous")]
+    [InlineData("foreign-volume")]
+    [InlineData("foreign-dir-volume")]
+    [InlineData("foreign-dir-volume-mixed-case")]
     public async Task CiWrapperRejectsIntegrityMutationsWithoutStaging(string mode)
     {
         var label = "ciwrap-" + mode;
@@ -48,6 +51,15 @@ public sealed partial class OfflineUpdatePackageTests
                     break;
                 case "ambiguous":
                     entries["other/update.zip.update.json"] = c.DescriptorBytes;
+                    break;
+                case "foreign-volume":
+                    entries["other-package.zip.001"] = new byte[] { 0 };
+                    break;
+                case "foreign-dir-volume":
+                    entries["other/foreign-package.zip.001"] = new byte[] { 0 };
+                    break;
+                case "foreign-dir-volume-mixed-case":
+                    entries["other/ForEIgn-Package.ZIP.001"] = new byte[] { 0 };
                     break;
             }
         });

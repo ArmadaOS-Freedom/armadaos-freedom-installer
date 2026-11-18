@@ -16,6 +16,42 @@ using NewPartition = FreedomInstaller.Core.InternalInstallArtifacts.NewPartition
 namespace FreedomInstaller.Core;
 
 /// <summary>
+/// Refuses an internal install work-disk operation whose actual volume cannot hold the checked future
+/// bytes. It carries the structured requirement and, when known, the actual free bytes.
+/// </summary>
+public sealed class InternalInstallWorkDiskSpaceException : IOException
+{
+    /// <summary>
+    /// The number of free bytes the operation required.
+    /// </summary>
+    public long RequiredBytes { get; }
+
+    /// <summary>
+    /// The free bytes actually observed, or <c>null</c> when the free space could not be determined.
+    /// </summary>
+    public long? AvailableBytes { get; }
+
+    internal InternalInstallWorkDiskSpaceException(
+        long requiredBytes,
+        long? availableBytes,
+        string? diagnosticMessage = null)
+        : base(
+            diagnosticMessage
+                ?? (availableBytes is null
+                    ? "insufficient-direct-execution-space: the free space of the evidence volume could not be "
+                        + "determined."
+                    : "insufficient-direct-execution-space: the evidence volume holds "
+                        + availableBytes.Value
+                        + " free bytes, but the direct execution needs "
+                        + requiredBytes
+                        + " bytes."))
+    {
+        RequiredBytes = requiredBytes;
+        AvailableBytes = availableBytes;
+    }
+}
+
+/// <summary>
 /// The single-use, verified preparation state of one internal install.
 /// <para>
 /// A context only ever comes out of <see cref="InternalInstallBackend.CreatePreparedAsync"/>. It owns the read
@@ -1306,16 +1342,12 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
         if (availableBytes is null)
         {
-            throw new IOException(
-                "insufficient-direct-execution-space: the free space of the evidence volume could not be "
-                + "determined.");
+            throw new InternalInstallWorkDiskSpaceException(requiredBytes, null);
         }
 
         if (availableBytes.Value < requiredBytes)
         {
-            throw new IOException(
-                "insufficient-direct-execution-space: the evidence volume holds " + availableBytes.Value
-                + " free bytes, but the direct execution needs " + requiredBytes + " bytes.");
+            throw new InternalInstallWorkDiskSpaceException(requiredBytes, availableBytes.Value);
         }
     }
 
