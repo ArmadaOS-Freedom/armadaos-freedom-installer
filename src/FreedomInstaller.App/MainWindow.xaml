@@ -3009,21 +3009,40 @@
                 启动后先停在这一页：只做只读自检与显式安装随附驱动，准备完成后点「继续」才进入功能首页。
                 页面里的状态文字全部来自控制器登记的本地化消息；可见性只由 ApplyFunctionView() 改。
             -->
-            <ScrollViewer x:Name="EnvironmentPage"
-                          Grid.Column="0"
-                          Grid.ColumnSpan="3"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled"
-                          Padding="0,0,6,0"
-                          Margin="0,0,0,12">
-                <StackPanel>
+            <DockPanel x:Name="EnvironmentPage"
+                       Grid.Column="0"
+                       Grid.ColumnSpan="3"
+                       Margin="0,0,0,12">
+                <StackPanel DockPanel.Dock="Top">
                     <TextBlock Text="{DynamicResource Static.Environment.Title}"
                                Style="{StaticResource H1Text}" />
                     <TextBlock Text="{DynamicResource Static.Environment.Lead}"
                                Style="{StaticResource BodyText}"
                                TextWrapping="Wrap"
                                Margin="0,6,0,0" />
-
+                </StackPanel>
+                <WrapPanel DockPanel.Dock="Bottom" Margin="0,8,6,0">
+                    <Button x:Name="EnvironmentCheckButton"
+                            Content="{DynamicResource Static.Environment.Check}"
+                            Click="OnEnvironmentCheck"
+                            Style="{StaticResource PrimaryButton}"
+                            Margin="0,0,8,8" />
+                    <Button x:Name="EnvironmentContinueButton"
+                            Content="{DynamicResource Static.Environment.Continue}"
+                            Click="OnEnvironmentContinue"
+                            Style="{StaticResource SecondaryButton}"
+                            IsEnabled="False"
+                            Margin="0,0,8,8" />
+                    <Button x:Name="EnvironmentInstallDriverButton"
+                            Content="{DynamicResource Static.Environment.InstallDriver}"
+                            Click="OnEnvironmentInstall"
+                            Style="{StaticResource SecondaryButton}"
+                            IsEnabled="False"
+                            Margin="0,0,8,8" />
+                </WrapPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="0,0,6,0">
                     <Border Style="{StaticResource CardBorder}" Margin="0,12,0,0">
                         <StackPanel>
                             <!-- 六行状态：系统 / 运行组件 / 连接工具 / 驱动 / ADB / Fastboot。✓ 就绪，✗ 未就绪，… 检查中。 -->
@@ -3266,28 +3285,6 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- 英文或窄窗口时按钮自动换行，不挤压状态文字。 -->
-                            <WrapPanel Margin="0,12,0,0">
-                                <Button x:Name="EnvironmentCheckButton"
-                                        Content="{DynamicResource Static.Environment.Check}"
-                                        Click="OnEnvironmentCheck"
-                                        Style="{StaticResource PrimaryButton}"
-                                        Margin="0,0,8,8" />
-                                <Button x:Name="EnvironmentInstallDriverButton"
-                                        Content="{DynamicResource Static.Environment.InstallDriver}"
-                                        Click="OnEnvironmentInstall"
-                                        Style="{StaticResource SecondaryButton}"
-                                        Visibility="Collapsed"
-                                        IsEnabled="False"
-                                        Margin="0,0,8,8" />
-                                <Button x:Name="EnvironmentContinueButton"
-                                        Content="{DynamicResource Static.Environment.Continue}"
-                                        Click="OnEnvironmentContinue"
-                                        Style="{StaticResource SecondaryButton}"
-                                        IsEnabled="False"
-                                        Margin="0,0,8,8" />
-                            </WrapPanel>
-
                             <!-- 检查 / 安装记录默认收起，检查与安装期间也保持可展开、可滚动。 -->
                             <Expander Style="{StaticResource SectionExpander}"
                                       IsExpanded="False"
@@ -3305,8 +3302,8 @@
                             </Expander>
                         </StackPanel>
                     </Border>
-                </StackPanel>
-            </ScrollViewer>
+                </ScrollViewer>
+            </DockPanel>
 
             <!--
                 ================= 9008 全局备份 / 恢复（两个独立视图） =================
