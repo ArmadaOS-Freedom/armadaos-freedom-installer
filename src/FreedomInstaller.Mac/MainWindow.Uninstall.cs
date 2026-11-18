@@ -1787,9 +1787,9 @@ public partial class MainWindow
         var fresh = _uninstallBackup;
         var parent = _uninstallBackupParent;
         var workRoot = UninstallWorkRoot;
-        // The lock state the check proved (the page shows the same value). On TB710FU the check reads it from the
-        // boot properties while the Android identity keeps the ADB "Unknown", so the identity value would refuse a
-        // default preparation the check accepted.
+        // The lock state the check proved (the page shows the same value). A check that reads it from the boot
+        // properties instead of fastboot (the TB710FU route, once its write route is open) leaves the Android
+        // identity at the ADB "Unknown"; the proven value keeps both routes consistent.
         var lockState = HasCheckedUninstallDevice
             ? _uninstallDeviceCheck!.FastbootLockState
             : BootloaderState.Unknown;
