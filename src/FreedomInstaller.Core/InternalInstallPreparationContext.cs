@@ -16,13 +16,13 @@ using NewPartition = FreedomInstaller.Core.InternalInstallArtifacts.NewPartition
 namespace FreedomInstaller.Core;
 
 /// <summary>
-/// Refuses a direct preparation whose actual evidence volume cannot hold the checked future evidence
+/// Refuses an internal install work-disk operation whose actual volume cannot hold the checked future
 /// bytes. It carries the structured requirement and, when known, the actual free bytes.
 /// </summary>
-public sealed class InsufficientDirectExecutionSpaceException : IOException
+public sealed class InternalInstallWorkDiskSpaceException : IOException
 {
     /// <summary>
-    /// The number of free bytes the direct execution required.
+    /// The number of free bytes the operation required.
     /// </summary>
     public long RequiredBytes { get; }
 
@@ -31,16 +31,20 @@ public sealed class InsufficientDirectExecutionSpaceException : IOException
     /// </summary>
     public long? AvailableBytes { get; }
 
-    internal InsufficientDirectExecutionSpaceException(long requiredBytes, long? availableBytes)
+    internal InternalInstallWorkDiskSpaceException(
+        long requiredBytes,
+        long? availableBytes,
+        string? diagnosticMessage = null)
         : base(
-            availableBytes is null
-                ? "insufficient-direct-execution-space: the free space of the evidence volume could not be "
-                    + "determined."
-                : "insufficient-direct-execution-space: the evidence volume holds "
-                    + availableBytes.Value
-                    + " free bytes, but the direct execution needs "
-                    + requiredBytes
-                    + " bytes.")
+            diagnosticMessage
+                ?? (availableBytes is null
+                    ? "insufficient-direct-execution-space: the free space of the evidence volume could not be "
+                        + "determined."
+                    : "insufficient-direct-execution-space: the evidence volume holds "
+                        + availableBytes.Value
+                        + " free bytes, but the direct execution needs "
+                        + requiredBytes
+                        + " bytes."))
     {
         RequiredBytes = requiredBytes;
         AvailableBytes = availableBytes;
@@ -1338,12 +1342,12 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
         if (availableBytes is null)
         {
-            throw new InsufficientDirectExecutionSpaceException(requiredBytes, null);
+            throw new InternalInstallWorkDiskSpaceException(requiredBytes, null);
         }
 
         if (availableBytes.Value < requiredBytes)
         {
-            throw new InsufficientDirectExecutionSpaceException(requiredBytes, availableBytes.Value);
+            throw new InternalInstallWorkDiskSpaceException(requiredBytes, availableBytes.Value);
         }
     }
 

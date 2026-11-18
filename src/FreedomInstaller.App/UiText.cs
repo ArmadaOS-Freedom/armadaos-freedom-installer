@@ -16,6 +16,22 @@ namespace FreedomInstaller.App;
 internal sealed record UiMessage(string Key, params object?[] Arguments);
 
 /// <summary>
+/// Thrown when a preparation step fails with text that is already localized in the UI catalog.
+/// Carries the <see cref="UiMessage"/> so the failure mapper reproduces the same key instead of
+/// falling back to the generic message.
+/// </summary>
+internal sealed class LocalizedInvalidOperationException : InvalidOperationException
+{
+    public LocalizedInvalidOperationException(UiMessage message, string? diagnostic = null)
+        : base(diagnostic ?? message.Key)
+    {
+        UserMessage = message;
+    }
+
+    public UiMessage UserMessage { get; }
+}
+
+/// <summary>
 /// Localized UI text. Reads the embedded catalogs <c>FreedomInstaller.Strings.Static.&lt;lang&gt;.json</c>
 /// and <c>FreedomInstaller.Strings.Dynamic.&lt;lang&gt;.json</c> from the executing assembly and depends on
 /// the BCL only (no WPF types), so it can be linked into the test assembly and exercised on Linux.
@@ -146,22 +162,26 @@ internal sealed class UiText
 
     /// <summary>
     /// Maps a preparation failure to a localizable message. Known cases (disk space, the four
-    /// backend prefix diagnostics) get dedicated text; other reasons keep the generic message
-    /// with the App-localized exception message so it stays meaningful.
+    /// backend prefix diagnostics, already-localized preparation failures) get dedicated text;
+    /// other reasons keep the generic message without the raw exception text.
     /// </summary>
     internal static UiMessage InternalInstallPreparationFailure(Exception exception)
     {
-        if (exception is InsufficientDirectExecutionSpaceException space)
+        if (exception is InternalInstallWorkDiskSpaceException space)
         {
-            const double gib = 1073741824d;
             return space.AvailableBytes is long available
                 ? new UiMessage(
                     "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceKnown",
-                    available / gib,
-                    space.RequiredBytes / gib)
+                    RoundGiBDown(available),
+                    RoundGiBUp(space.RequiredBytes))
                 : new UiMessage(
                     "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceUnknown",
-                    space.RequiredBytes / gib);
+                    RoundGiBUp(space.RequiredBytes));
+        }
+
+        if (exception is LocalizedInvalidOperationException localized)
+        {
+            return localized.UserMessage;
         }
 
         if (exception is InvalidOperationException problem)
@@ -187,8 +207,16 @@ internal sealed class UiText
             }
         }
 
-        return new UiMessage("Dynamic.InternalInstall.Prepared.Failed", exception.Message);
+        return new UiMessage("Dynamic.InternalInstall.Prepared.Failed");
     }
+
+    private const decimal BytesPerGiB = 1073741824m;
+
+    private static decimal RoundGiBDown(long bytes) =>
+        decimal.Floor(((decimal)bytes / BytesPerGiB) * 100m) / 100m;
+
+    private static decimal RoundGiBUp(long bytes) =>
+        decimal.Ceiling(((decimal)bytes / BytesPerGiB) * 100m) / 100m;
 
     /// <summary>Resolves a message, including nested <see cref="UiMessage"/> arguments.</summary>
     internal string Format(UiMessage message) =>

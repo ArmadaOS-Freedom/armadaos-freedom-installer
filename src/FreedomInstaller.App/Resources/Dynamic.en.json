@@ -301,7 +301,7 @@
   "Dynamic.InternalInstall.Confirm.BootPending": "The full A/B boot backup is not available yet, so the boot write plan is not shown.",
   "Dynamic.InternalInstall.Prepared.Preparing": "Preparing the 9008 direct install: expanding and verifying the prebuilt partition images, preparing the 2 GiB recovery area with the complete compressed recovery backup, and generating and verifying this device's A/B boot candidates…",
   "Dynamic.InternalInstall.Prepared.Cancelled": "Preparation was cancelled; no confirmation page was created.",
-  "Dynamic.InternalInstall.Prepared.Failed": "Preparation did not complete: {0}",
+  "Dynamic.InternalInstall.Prepared.Failed": "Preparation did not complete. See the technical details in the install log.",
   "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceKnown": "Not enough free space on the disk that holds the installer's working directory on the PC. Available {0:0.00} GiB, required {1:0.00} GiB. Free up space on that disk and try again.",
   "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceUnknown": "Could not determine the free space on the disk that holds the installer's working directory on the PC. Required {0:0.00} GiB. Make sure the disk is accessible and try again.",
   "Dynamic.InternalInstall.Prepared.TechnicalDetails": "Preparation failure (technical details): {0}",

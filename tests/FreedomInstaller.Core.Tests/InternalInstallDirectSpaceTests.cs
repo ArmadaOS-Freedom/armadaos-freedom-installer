@@ -84,7 +84,7 @@ public sealed class InternalInstallDirectSpaceTests
     [Fact]
     public void Insufficient_free_space_is_refused_with_the_stable_token()
     {
-        InsufficientDirectExecutionSpaceException error = Assert.Throws<InsufficientDirectExecutionSpaceException>(
+        InternalInstallWorkDiskSpaceException error = Assert.Throws<InternalInstallWorkDiskSpaceException>(
             () => RequireSpace(DummyRequiredBytes, 99L));
 
         Assert.Contains("insufficient-direct-execution-space", error.Message);
@@ -95,7 +95,7 @@ public sealed class InternalInstallDirectSpaceTests
     [Fact]
     public void Unknown_free_space_is_the_same_refusal_never_an_unbounded_permission()
     {
-        InsufficientDirectExecutionSpaceException error = Assert.Throws<InsufficientDirectExecutionSpaceException>(
+        InternalInstallWorkDiskSpaceException error = Assert.Throws<InternalInstallWorkDiskSpaceException>(
             () => RequireSpace(DummyRequiredBytes, null));
 
         Assert.Contains("insufficient-direct-execution-space", error.Message);
