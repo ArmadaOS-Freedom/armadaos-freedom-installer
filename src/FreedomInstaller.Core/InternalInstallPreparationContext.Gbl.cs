@@ -512,7 +512,7 @@ internal sealed partial class InternalInstallPreparationContext
             if (entry.Status != EfispLoad.Yes)
             {
                 throw new InvalidOperationException(
-                    "requires-compatible-bootloader: static entry unavailable or undetermined: " + entry.Reason);
+                    "requires-compatible-bootloader: static entry unavailable or undetermined from " + ("abl_" + source) + ": " + entry.Reason);
             }
 
             var vendorRole = "vendor_boot_" + source;

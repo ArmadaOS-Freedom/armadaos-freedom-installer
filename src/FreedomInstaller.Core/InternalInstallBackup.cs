@@ -79,6 +79,14 @@ public static partial class InternalInstallBackup
         CancellationToken token = default)
         => CreateCoreAsync(client, chosenParent, progress, token, null);
 
+    public static Task<InternalBackupSet> CreateForFirstInstallAsync(
+        EdlClient client,
+        string chosenParent,
+        InternalDeviceCheckResult deviceCheck,
+        IProgress<InternalBackupProgress>? progress = null,
+        CancellationToken token = default)
+        => CreateCoreAsync(client, chosenParent, progress, token, null, deviceCheck);
+
     public static Task<InternalBackupSet> CreatePreparationSnapshotAsync(
         EdlClient client, InternalBackupSet recovery, string temporaryParent,
         IProgress<InternalBackupProgress>? progress = null, CancellationToken token = default)
@@ -92,7 +100,7 @@ public static partial class InternalInstallBackup
 
     private static async Task<InternalBackupSet> CreateCoreAsync(
         EdlClient client, string chosenParent, IProgress<InternalBackupProgress>? progress,
-        CancellationToken token, InternalBackupSet? recovery)
+        CancellationToken token, InternalBackupSet? recovery, InternalDeviceCheckResult? deviceCheck = null)
     {
         token.ThrowIfCancellationRequested();
 
@@ -259,6 +267,36 @@ public static partial class InternalInstallBackup
             reporter.Plan(roles.TotalFileCount, totalBytes);
             reporter.Report(ReadingPartitionStage, role: null);
 
+            string? earlyRole = null;
+            SealedFile? earlyAbl = null;
+            if (profile.Model == "TB323FU"
+                && deviceCheck?.FastbootLockState == BootloaderState.Locked
+                && deviceCheck.CurrentSlot is "a" or "b")
+            {
+                string role = "abl_" + deviceCheck.CurrentSlot;
+                if (targets.TryGetValue(role, out PartitionTarget? ablTarget)
+                    && ablTarget.Partition.SectorCount <= (8L * 1024 * 1024) / ablTarget.Geometry.SectorSize)
+                {
+                    earlyRole = role;
+                    earlyAbl = await ReadSealedAsync(
+                        client,
+                        ablTarget.Geometry,
+                        ablTarget.Partition.StartSector,
+                        ablTarget.Partition.SectorCount,
+                        Path.Combine(directory, role + ".bin"),
+                        locks,
+                        token).ConfigureAwait(false);
+                    byte[] raw = await ReadHeldAsync(earlyAbl.Stream, earlyAbl.Length, token).ConfigureAwait(false);
+                    RequireFirstInstallAblCompatibility(
+                        raw,
+                        profile.Model,
+                        profile.AndroidBuild,
+                        deviceCheck.FastbootLockState,
+                        deviceCheck.CurrentSlot,
+                        token);
+                }
+            }
+
             foreach (string name in roles.PartitionNames)
             {
                 PartitionTarget target = targets[name];
@@ -268,7 +306,9 @@ public static partial class InternalInstallBackup
                 // are read afresh because installation prepares candidates from the current device.
                 var reuse = recovery is not null && name is
                     "persist" or "modemst1" or "modemst2" or "fsg" or "fsc" or "ssd" or "keystore" or "frp" or "cdt";
-                SealedFile sealedFile = reuse
+                SealedFile sealedFile = earlyAbl is not null && name == earlyRole
+                    ? earlyAbl
+                    : reuse
                     ? await CopyRecoveryFileAsync(recovery!, name, target, Path.Combine(directory, fileName), locks, token).ConfigureAwait(false)
                     : await ReadSealedAsync(
                     client,
@@ -582,6 +622,30 @@ public static partial class InternalInstallBackup
             return new SealedFile(path, held.Length, sha256, held);
         }
         catch { held.Dispose(); throw; }
+    }
+
+    internal static void RequireFirstInstallAblCompatibility(
+        byte[] raw,
+        string model,
+        string firmware,
+        BootloaderState lockState,
+        string slot,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        string where =
+            "model=" + model + ", firmware=" + firmware + ", lock=" + lockState + ", slot=" + slot;
+        if (!InternalSlotLoaderStructure.TryDecodeAblForGbl(raw, token, out byte[] pe))
+        {
+            throw new InvalidOperationException(
+                "requires-compatible-bootloader: " + where + ": decode failure");
+        }
+        var entry = Gbl.EfispLoadDetector.Detect(pe);
+        if (entry.Status != Gbl.EfispLoad.Yes)
+        {
+            throw new InvalidOperationException(
+                "requires-compatible-bootloader: " + where + ": " + entry.Status + ": " + entry.Reason);
+        }
     }
 
     private static async Task<SealedFile> ReadSealedAsync(

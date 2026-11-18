@@ -825,6 +825,13 @@ public partial class MainWindow
                             existingDirectory!,
                             progress,
                             token)
+                        : internalAutoBranch && _internalInstallDeviceCheck is { } checkedDevice
+                        ? await InternalInstallBackup.CreateForFirstInstallAsync(
+                            activeClient,
+                            parentPath,
+                            checkedDevice,
+                            progress,
+                            token)
                         : await InternalInstallBackup.CreateAsync(
                             activeClient,
                             parentPath,

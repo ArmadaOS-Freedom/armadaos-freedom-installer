@@ -330,6 +330,50 @@ public sealed class Gen5InternalInstallBackupTests : IClassFixture<Gen5EdlToolch
 
     // ---------------------------------------------------------------- helpers
 
+    [Theory]
+    [InlineData("a")]
+    [InlineData("b")]
+    public async Task G5_05_CreateForFirstInstall_refuses_before_any_partition_read_and_never_writes_or_resets(string slot)
+    {
+        string parent = _fixture.NewCaseDirectory(
+            nameof(G5_05_CreateForFirstInstall_refuses_before_any_partition_read_and_never_writes_or_resets) + "-" + slot);
+        IB001SyntheticDevice device = IB001SyntheticDevice.Create(gen5: true);
+        IB001FakeEdlRunner runner = new(device, hardwareId: Gen5HardwareId);
+        EdlClient client = NewClient(runner);
+
+        InternalDeviceCheckResult check = new(
+            android: client.Binding.AndroidIdentity,
+            fastbootSerial: null,
+            fastbootProduct: null,
+            fastbootLockState: BootloaderState.Locked,
+            otaState: default,
+            androidReturn: default,
+            cancelled: false,
+            failedStage: null,
+            error: null,
+            currentSlot: slot);
+
+        Exception error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => InternalInstallBackup.CreateForFirstInstallAsync(client, parent, check));
+
+        string message = error.Message;
+        Assert.Contains("requires-compatible-bootloader", message, StringComparison.Ordinal);
+        Assert.Contains("firmware=" + Gen5AndroidBuild, message, StringComparison.Ordinal);
+        Assert.Contains("lock=Locked", message, StringComparison.Ordinal);
+        Assert.Contains("slot=" + slot, message, StringComparison.Ordinal);
+
+        // Early refusal: twelve GPT windows plus exactly one selected ABL, then nothing else.
+        Assert.Equal(13, runner.Reads.Count);
+        IB001Read last = runner.Reads[runner.Reads.Count - 1];
+        (int lun, long start, long count, string? partUuid) = device.Expectation("abl_" + slot);
+        Assert.Equal(lun, last.Lun);
+        Assert.Equal(start, last.StartSector);
+        Assert.Equal(count, last.SectorCount);
+
+        Assert.Equal(0, runner.WriteOrResetCount);
+    }
+
+
     private EdlClient NewClient(IB001FakeEdlRunner runner) => new(
         _fixture.Toolchain,
         NewBinding(),
