@@ -470,7 +470,15 @@ public static partial class PackageImporter
         }
 
         EnsureSafeDirectoryTree(canonicalWorkRoot, canonicalWorkRoot);
-        if (!Path.Exists(canonicalStageRoot))
+        try
+        {
+            File.GetAttributes(canonicalStageRoot);
+        }
+        catch (FileNotFoundException)
+        {
+            return;
+        }
+        catch (DirectoryNotFoundException)
         {
             return;
         }

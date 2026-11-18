@@ -176,6 +176,30 @@ public sealed partial class OfflineUpdatePackageTests
     }
 
     [Fact]
+    public void CiWrapperRootBundleWithUnrelatedValidNamesIsNotWrapperLayout()
+    {
+        var label = "ciwrap-root-bundle-unrelated-names";
+        var c = new Case(Path.Combine(root, label), splitCount: 3, operation: "install");
+        var source = WriteCiWrapper(c, label, "", entries =>
+        {
+            entries.Clear();
+            entries["bundle.json"] = Encoding.UTF8.GetBytes("{}");
+            entries["docs/sample.zip.update.json"] = Encoding.UTF8.GetBytes("{\"docs\":true}");
+            entries["fixtures/reference.zip.001"] = new byte[] { 0x50, 0x4b, 0x03, 0x04 };
+            entries["README.md"] = "fixture notes"u8.ToArray();
+        });
+        var work = Directory.CreateDirectory(Path.Combine(root, label + "-work")).FullName;
+        File.WriteAllText(Path.Combine(work, "sentinel"), "keep");
+
+        var result = PackageImporter.PrepareCiArtifactSource(
+            source, Model, "install", "1.0.0", work, c.Verify, CancellationToken.None);
+
+        Assert.Null(result);
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(work, "sentinel")));
+        Assert.Equal(new[] { "sentinel" }, Directory.EnumerateFileSystemEntries(work).Select(Path.GetFileName).Order());
+    }
+
+    [Fact]
     public void CiWrapperDisposeRetriesAfterRejectedStagePath()
     {
         var label = "ciwrap-dispose-retry";

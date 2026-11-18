@@ -357,8 +357,7 @@ public static partial class PackageImporter
             return false;
         }
 
-        var hasUpdateJson = false;
-        var hasVolume = false;
+        var descriptorLeaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in items)
         {
             if (item.IsDirectory)
@@ -367,26 +366,41 @@ public static partial class PackageImporter
             }
 
             var name = item.Name;
-            if (!hasUpdateJson && name.EndsWith(CiUpdateJsonSuffix, StringComparison.OrdinalIgnoreCase))
+            if (name.EndsWith(CiUpdateJsonSuffix, StringComparison.OrdinalIgnoreCase))
             {
-                hasUpdateJson = true;
+                var leaf = name[(name.LastIndexOf('/') + 1)..];
+                descriptorLeaves.Add(leaf[..^CiUpdateJsonSuffix.Length]);
+            }
+        }
+
+        if (descriptorLeaves.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var item in items)
+        {
+            if (item.IsDirectory)
+            {
+                continue;
             }
 
-            if (!hasVolume)
+            var name = item.Name;
+            var leaf = name[(name.LastIndexOf('/') + 1)..];
+            var dotZipIndex = leaf.LastIndexOf(".zip.", StringComparison.OrdinalIgnoreCase);
+            if (dotZipIndex < 0)
             {
-                var finalComponent = name[(name.LastIndexOf('/') + 1)..];
-                var dotZipIndex = finalComponent.LastIndexOf(".zip.", StringComparison.OrdinalIgnoreCase);
-                if (dotZipIndex >= 0)
-                {
-                    var suffix = finalComponent[(dotZipIndex + ".zip.".Length)..];
-                    if (suffix.Length > 0 && suffix.All(char.IsAsciiDigit))
-                    {
-                        hasVolume = true;
-                    }
-                }
+                continue;
             }
 
-            if (hasUpdateJson && hasVolume)
+            var suffix = leaf[(dotZipIndex + ".zip.".Length)..];
+            if (suffix.Length == 0 || !suffix.All(char.IsAsciiDigit))
+            {
+                continue;
+            }
+
+            var volumeLeaf = leaf[..dotZipIndex];
+            if (descriptorLeaves.Contains(volumeLeaf))
             {
                 return true;
             }
@@ -401,7 +415,7 @@ public static partial class PackageImporter
         {
             CleanupOfflineUpdateStage(workRoot, stageRoot);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Thread.Sleep(50);
             CleanupOfflineUpdateStage(workRoot, stageRoot);
