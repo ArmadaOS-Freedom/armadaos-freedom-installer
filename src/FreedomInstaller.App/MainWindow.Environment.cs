@@ -30,6 +30,10 @@ public partial class MainWindow
     private bool _environmentBootVerified;
     private bool _environmentStateUnknown;
     private bool _environmentPendingReboot;
+    private bool _environmentWorkCheckCompleted;
+    private DateTime? _environmentCheckStartUtc;
+    private DateTime? _environmentCheckFinishUtc;
+    private string _environmentScanState = "not-run";
 
     /// <summary>最近一次确认过的启动标识；读取失败时保留旧值，不无根据清空内存门禁。</summary>
     private string? _environmentBootIdentity;
@@ -79,8 +83,8 @@ public partial class MainWindow
         await RunBusyAsync(async token =>
         {
             try { await CheckEnvironmentCoreAsync(token); }
-            catch (OperationCanceledException) { MarkEnvironmentCheckFailed(); throw; }
-            catch (Exception) { MarkEnvironmentCheckFailed(); }
+            catch (OperationCanceledException failure) { MarkEnvironmentCheckFailed(failure); throw; }
+            catch (Exception failure) { MarkEnvironmentCheckFailed(failure); }
         });
     }
 
@@ -146,6 +150,10 @@ public partial class MainWindow
     /// <summary>安装流程已持有 <c>_busy</c> 时也会直接调用，所以这里不碰忙碌状态、不创建取消源。</summary>
     private async Task CheckEnvironmentCoreAsync(CancellationToken cancellationToken)
     {
+        _environmentScanState = "checking";
+        _environmentCheckStartUtc = DateTime.UtcNow;
+        _environmentCheckFinishUtc = null;
+        _environmentWorkCheckCompleted = false;
         _environmentCheckCompleted = false;
         _environmentSystemSupported = false;
         _environmentToolsReady = false;
@@ -209,7 +217,11 @@ public partial class MainWindow
         WindowsDriverCheckResult? result = null;
         try { result = await Task.Run(() => new WindowsQualcommDriver().Inspect(), cancellationToken); }
         catch (OperationCanceledException) { throw; }
-        catch (Exception) { _environmentStateUnknown = true; }
+        catch (Exception failure)
+        {
+            _environmentStateUnknown = true;
+            AppendWorkLogLine("probe-qualcomm: " + InstallerLog.DescribeFailure(failure));
+        }
 
         if (_closed) return;
         cancellationToken.ThrowIfCancellationRequested();
@@ -228,13 +240,20 @@ public partial class MainWindow
             _environmentFastbootResult = android.Fastboot;
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception) { _environmentAdbResult = null; _environmentFastbootResult = null; }
+        catch (Exception failure)
+        {
+            _environmentAdbResult = null;
+            _environmentFastbootResult = null;
+            AppendWorkLogLine("probe-android: " + InstallerLog.DescribeFailure(failure));
+        }
         RenderAndroidDriverStates();
         // 宿主侧完成状态不再依赖 Android 驱动探测：探测异常只清空其结果，由渲染层显示 CheckFailed。
         _environmentCheckCompleted = _environmentSystemSupported && _environmentToolsReady
             && _environmentBootVerified && result is not null && !_environmentStateUnknown;
         await CheckTemporaryWorkDirectoryAsync(cancellationToken);
         if (_closed) return;
+        _environmentCheckFinishUtc = DateTime.UtcNow;
+        _environmentScanState = "finished";
         RenderEnvironmentStatus();
         RefreshEnvironmentActions();
     }
@@ -295,8 +314,11 @@ public partial class MainWindow
             ? "Dynamic.Environment.DriverState." + stateName
             : "Dynamic.Environment.DriverState.Unknown";
 
-    private void MarkEnvironmentCheckFailed()
+    private void MarkEnvironmentCheckFailed(Exception failure)
     {
+        _environmentCheckFinishUtc = DateTime.UtcNow;
+        _environmentScanState = failure is OperationCanceledException ? "cancelled" : "failed";
+        AppendWorkLogLine("environment: " + InstallerLog.DescribeFailure(failure));
         _environmentCheckCompleted = false;
         _environmentDriverResult = null;
         _environmentAdbResult = null;
@@ -534,8 +556,8 @@ public partial class MainWindow
                 _environmentCheckCompleted = false;
                 ReportEnvironment(M("Dynamic.Environment.InstallCompleted"));
                 try { await CheckEnvironmentCoreAsync(CancellationToken.None); }
-                catch (OperationCanceledException) { MarkEnvironmentCheckFailed(); }
-                catch (Exception) { MarkEnvironmentCheckFailed(); }
+                catch (OperationCanceledException failure) { MarkEnvironmentCheckFailed(failure); }
+                catch (Exception failure) { MarkEnvironmentCheckFailed(failure); }
                 return;
 
             case "Cancelled":
@@ -550,8 +572,8 @@ public partial class MainWindow
                     _environmentCheckCompleted = false;
                     // 已持有 _busy，直接调用只读核心自检，不进入 RunBusyAsync。
                     try { await CheckEnvironmentCoreAsync(CancellationToken.None); }
-                    catch (OperationCanceledException) { MarkEnvironmentCheckFailed(); }
-                    catch (Exception) { MarkEnvironmentCheckFailed(); }
+                    catch (OperationCanceledException failure) { MarkEnvironmentCheckFailed(failure); }
+                    catch (Exception failure) { MarkEnvironmentCheckFailed(failure); }
                 }
                 return;
 

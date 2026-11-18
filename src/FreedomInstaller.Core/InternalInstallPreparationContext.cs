@@ -623,6 +623,12 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 inactiveTargets,
                 cancellationToken).ConfigureAwait(false);
 
+            // Direct core readiness point: BindBackup re-verified source image hashes and
+            // DetermineDirectSourceSlotsAsync checked both target source slots. Only now may a
+            // diagnostic boot-source proof attach. Notify before the direct ABL/AVB chain gate so
+            // failures in that gate are diagnosable. Direct installs only; nothing else changed.
+            services.DiagnosticBootSourcesVerified?.Invoke();
+
             // A locked TB322FC whose current ABL already references the AOSP key beside the OEM key gets a
             // direct proof from this backup alone. It is decided before the GBL gate, so a first install
             // without efisp is not refused as unavailable GBL. A null proof leaves every existing path as is,

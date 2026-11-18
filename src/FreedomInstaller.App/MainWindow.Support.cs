@@ -1,18 +1,17 @@
-using System.Runtime.InteropServices;
 using System.Windows;
-using System.Windows.Controls;
 
 namespace FreedomInstaller.App;
 
 public partial class MainWindow
 {
     private const string AboutQqGroupNumber = "487945399";
+    private const string QqGroupInviteUrl = "https://qm.qq.com/q/hKBry3C7Cg";
 
     private bool _showingSupport;
 
     private void OnShowSupport(object sender, RoutedEventArgs e)
     {
-        if (_busy)
+        if (_busy || _showingDiagnostics)
         {
             return;
         }
@@ -20,8 +19,7 @@ public partial class MainWindow
         _showingSupport = true;
 
         AboutVersionText.Text = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? string.Empty;
-        AboutCopyStatus.Visibility = Visibility.Collapsed;
-        AboutCopyStatus.ClearValue(TextBlock.TextProperty);
+        AboutJoinQqButton.ToolTip = QqGroupInviteUrl;
 
         ApplyFunctionView();
     }
@@ -49,6 +47,12 @@ public partial class MainWindow
     private void OnOpenH0CheungBilibili(object sender, RoutedEventArgs e)
         => OpenExternalLink(BilibiliLabelKey, "https://space.bilibili.com/33282562");
 
+    private void OnOpenCodyGithub(object sender, RoutedEventArgs e)
+        => OpenExternalLink("Dynamic.AboutCodyName", "https://github.com/corebear6010");
+
+    private void OnOpenCodyBilibili(object sender, RoutedEventArgs e)
+        => OpenExternalLink(BilibiliLabelKey, "https://space.bilibili.com/68995");
+
     private void OnOpenLichWangBilibili(object sender, RoutedEventArgs e)
         => OpenExternalLink(BilibiliLabelKey, "https://space.bilibili.com/170842457");
 
@@ -58,20 +62,6 @@ public partial class MainWindow
     private void OnOpenBilibiliThanks(object sender, RoutedEventArgs e)
         => OpenExternalLink("Dynamic.Link.AboutBilibiliThanks", "https://space.bilibili.com/509773383");
 
-    private void OnCopyQqGroup(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            Clipboard.SetText(AboutQqGroupNumber);
-        }
-        catch (ExternalException)
-        {
-            AboutCopyStatus.SetResourceReference(TextBlock.TextProperty, "Dynamic.AboutCopyFailed");
-            AboutCopyStatus.Visibility = Visibility.Visible;
-            return;
-        }
-
-        AboutCopyStatus.SetResourceReference(TextBlock.TextProperty, "Dynamic.AboutCopySucceeded");
-        AboutCopyStatus.Visibility = Visibility.Visible;
-    }
+    private void OnOpenQqGroupInvite(object sender, RoutedEventArgs e)
+        => OpenExternalLink("Dynamic.AboutJoinQq", QqGroupInviteUrl);
 }

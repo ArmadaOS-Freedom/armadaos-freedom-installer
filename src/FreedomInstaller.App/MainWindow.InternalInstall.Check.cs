@@ -275,6 +275,9 @@ public partial class MainWindow
                     {
                         AppendLocalizedLog(M("Dynamic.InternalInstall.Check.FailedStage", M(InternalInstallCheckStageKey(result.FailedStage))));
                         AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", Placeholder(result.Error)));
+                        RecordDiagnosticFailure(
+                            M("Dynamic.Diagnostics.Stage.Check"),
+                            $"{T(InternalInstallCheckStageKey(result.FailedStage))}: {Placeholder(result.Error)}");
                     }
 
                     RenderInternalInstallPower();
@@ -304,6 +307,7 @@ public partial class MainWindow
                     SetInternalInstallCheckProgress(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
                     SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
                     AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
+                    RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Check"), diagnostic);
                 }
             });
         }

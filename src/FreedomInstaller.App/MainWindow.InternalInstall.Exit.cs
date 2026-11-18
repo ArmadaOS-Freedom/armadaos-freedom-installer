@@ -641,6 +641,17 @@ public partial class MainWindow
         }
 
         SetText(InternalInstallExitMaintenanceStatusText, message);
+        switch (message.Key)
+        {
+            case "Dynamic.InternalInstall.Exit.NeedIdentity":
+            case "Dynamic.InternalInstall.Exit.EntryUnconfirmed":
+            case "Dynamic.InternalInstall.Exit.ProofFailed":
+            case "Dynamic.InternalInstall.Exit.Mismatch":
+            case "Dynamic.InternalInstall.Exit.ResetUnknownUnconfirmed":
+            case "Dynamic.InternalInstall.Exit.ReturnUnconfirmed":
+                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Exit"), _uiText.Format(message));
+                break;
+        }
     }
 
     /// <summary>同一阶段不重复写，避免 500ms 轮询反复刷新同一条状态。</summary>

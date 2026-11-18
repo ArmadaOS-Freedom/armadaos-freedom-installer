@@ -326,6 +326,7 @@ public partial class MainWindow
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
                 M("Dynamic.InternalInstall.Capacity.ImportFailed", exception.Message));
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
         }
         catch (Exception exception)
         {
@@ -333,6 +334,7 @@ public partial class MainWindow
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
                 M("Dynamic.InternalInstall.Capacity.ImportFailed", exception.Message));
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
         }
         finally
         {
@@ -354,6 +356,7 @@ public partial class MainWindow
             var reasons = string.Join(T("Dynamic.Package.ReasonSeparator"), validation.Reasons);
             SetInternalInstallCapacityPackageStatus(
                 M("Dynamic.InternalInstall.Capacity.Invalid", reasons));
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), reasons);
             return;
         }
 
@@ -424,6 +427,7 @@ public partial class MainWindow
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Capacity"), exception.Message);
             DisableInternalInstallCapacitySlider(
                 M("Dynamic.InternalInstall.Capacity.RangeFailed", exception.Message));
             return false;
@@ -667,6 +671,10 @@ public partial class MainWindow
             return;
         }
 
+        // 进入真正的新准备工作前清空旧的引导文件证据与最近一次附件失败判决；
+        // 即使哈希命中等缓存路径不进入此处，旧证据也不会被新失败复用。
+        ResetDiagnosticBootEvidence();
+
         var rendered = false;
 
         SetInternalInstallConfirmProgressIndeterminate(true);
@@ -755,6 +763,7 @@ public partial class MainWindow
                     SetInternalInstallConfirmStatus(failure);
                     AppendLocalizedLog(failure);
                     AppendWorkLogLine(T("Dynamic.InternalInstall.Prepared.TechnicalDetails", InstallerLog.DescribeFailure(exception)));
+                    RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Prepare"), exception.Message);
                 }
                 finally
                 {
