@@ -9,6 +9,7 @@ namespace FreedomInstaller.Mac;
 public partial class MainWindow
 {
     private const string AboutQqGroupNumber = "487945399";
+    private const string QqGroupInviteUrl = "https://qm.qq.com/q/hKBry3C7Cg";
 
     private Task<bool> OpenLinkAsync(string url) => Launcher.LaunchUriAsync(new Uri(url));
 
@@ -33,23 +34,12 @@ public partial class MainWindow
     private async void OnOpenBilibiliThanks(object? sender, RoutedEventArgs e) =>
         await OpenLinkAsync("https://space.bilibili.com/509773383");
 
-    private async void OnCopyQqGroup(object? sender, RoutedEventArgs e)
-    {
-        var copied = false;
-        if (Clipboard is { } clipboard)
-        {
-            try
-            {
-                await clipboard.SetTextAsync(AboutQqGroupNumber);
-                copied = true;
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException)
-            {
-                copied = false;
-            }
-        }
+    private async void OnOpenCodyGithub(object? sender, RoutedEventArgs e) =>
+        await OpenLinkAsync("https://github.com/corebear6010");
 
-        SetText(AboutCopyStatus, copied ? "Dynamic.AboutCopySucceeded" : "Dynamic.AboutCopyFailed");
-        AboutCopyStatus.IsVisible = true;
-    }
+    private async void OnOpenCodyBilibili(object? sender, RoutedEventArgs e) =>
+        await OpenLinkAsync("https://space.bilibili.com/68995");
+
+    private async void OnOpenQqGroupInvite(object? sender, RoutedEventArgs e) =>
+        await OpenLinkAsync(QqGroupInviteUrl);
 }

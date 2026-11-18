@@ -99,7 +99,6 @@ public partial class MainWindow : Window
             : GlobalRecoveryPage.IsVisible ? GlobalRecoveryPage
             : WorkflowScrollViewer;
         AboutVersionText.Text = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? string.Empty;
-        AboutCopyStatus.IsVisible = false;
         ShowView(SupportPage);
     }
 
