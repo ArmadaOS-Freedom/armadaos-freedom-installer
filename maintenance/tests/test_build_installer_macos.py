@@ -106,7 +106,7 @@ class MacPrepareTests(unittest.TestCase):
         self.assertEqual([ns.profile for ns in calls], ["tb322fc", "tb323fu", "tb710fu"])
         for ns in calls:
             self.assertEqual(ns.platform, "macos-arm64")
-            self.assertIsNone(ns.python)
+            self.assertEqual(Path(ns.python).read_bytes(), b"pythonMacos\n")
             self.assertEqual(Path(ns.build_pins_json), Path(record["toolPinsJson"]))
             self.assertEqual(Path(ns.usbLibrary).read_bytes(), DYLIB)
         pins = json.loads(Path(record["toolPinsJson"]).read_text(encoding="utf-8"))

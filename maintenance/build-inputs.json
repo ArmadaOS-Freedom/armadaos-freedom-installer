@@ -21,6 +21,15 @@
       "version": "37.0.1"
     },
     {
+      "name": "cpython-3.14.8-20261020-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "id": "pythonMacos",
+      "source": "https://github.com/astral-sh/python-build-standalone",
+      "sha256": "f0f1402b45a8a655fc78c8ee62462fddcb9dc8717a022e79700d07e44fd18d4a",
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261020/cpython-3.14.8%2B20261020-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "bytes": 26694605,
+      "version": "3.14.8+20261020"
+    },
+    {
       "name": "python-3.14.8-embed-amd64.zip",
       "id": "python",
       "source": "https://github.com/python/cpython",
