@@ -134,4 +134,49 @@ public sealed partial class OfflineUpdatePackageTests
         result.Dispose();
         Assert.Empty(Directory.EnumerateFileSystemEntries(work));
     }
+
+    [Fact]
+    public void CiWrapperRootBundleIsRejectedWithoutStaging()
+    {
+        var label = "ciwrap-root-bundle";
+        var c = new Case(Path.Combine(root, label), splitCount: 3, operation: "install");
+        var source = WriteCiWrapper(c, label, "", entries =>
+            entries["bundle.json"] = Encoding.UTF8.GetBytes("{}"));
+        var work = Directory.CreateDirectory(Path.Combine(root, label + "-work")).FullName;
+        File.WriteAllText(Path.Combine(work, "sentinel"), "keep");
+
+        Assert.ThrowsAny<InvalidDataException>(() => PackageImporter.PrepareCiArtifactSource(
+            source, Model, "install", "1.0.0", work, c.Verify, CancellationToken.None));
+
+        var remaining = Directory.EnumerateFileSystemEntries(work).Select(Path.GetFileName).ToArray();
+        Assert.Equal(new[] { "sentinel" }, remaining);
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(work, "sentinel")));
+    }
+
+    [Fact]
+    public void CiWrapperDisposeRetriesAfterRejectedStagePath()
+    {
+        var label = "ciwrap-dispose-retry";
+        var c = new Case(Path.Combine(root, label), splitCount: 3, operation: "install");
+        var source = WriteCiWrapper(c, label);
+        var work = Directory.CreateDirectory(Path.Combine(root, label + "-work")).FullName;
+        var result = PackageImporter.PrepareCiArtifactSource(
+            source, Model, "install", "1.0.0", work, c.Verify, CancellationToken.None)!;
+        var stageRoot = Path.GetDirectoryName(result.MediaPath)!;
+        var spare = stageRoot + "-spare";
+        Directory.Move(stageRoot, spare);
+        File.WriteAllText(stageRoot, "blocker");
+        try
+        {
+            Assert.ThrowsAny<Exception>(() => result.Dispose());
+        }
+        finally
+        {
+            File.Delete(stageRoot);
+            Directory.Move(spare, stageRoot);
+        }
+
+        result.Dispose();
+        Assert.False(Directory.Exists(stageRoot));
+    }
 }

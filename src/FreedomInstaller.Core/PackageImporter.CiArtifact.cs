@@ -12,7 +12,8 @@ internal sealed class PreparedCiArtifactSource : IDisposable
 {
     private readonly string _workRoot;
     private readonly string _stageRoot;
-    private int _disposed;
+    private readonly object _disposeLock = new();
+    private bool _disposed;
 
     internal PreparedCiArtifactSource(string workRoot, string stageRoot, string mediaPath)
     {
@@ -26,12 +27,16 @@ internal sealed class PreparedCiArtifactSource : IDisposable
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        lock (_disposeLock)
         {
-            return;
-        }
+            if (_disposed)
+            {
+                return;
+            }
 
-        PackageImporter.CleanupOfflineUpdateStage(_workRoot, _stageRoot);
+            PackageImporter.CleanupOfflineUpdateStage(_workRoot, _stageRoot);
+            _disposed = true;
+        }
     }
 }
 
@@ -83,11 +88,15 @@ public static partial class PackageImporter
             throw new InvalidDataException("CI 下载包条目校验失败：" + string.Join(" ", indexReasons));
         }
 
-        // Root bundle.json means a normal direct bundle: never wrap it.
         foreach (var item in items)
         {
             if (!item.IsDirectory && string.Equals(item.Name, BundleFileName, StringComparison.OrdinalIgnoreCase))
             {
+                if (HasCiWrapperLayout(items))
+                {
+                    throw new InvalidDataException(
+                        "CI 下载包根目录同时包含 bundle.json 和拆分分卷，拒绝按直接包处理。");
+                }
                 return null;
             }
         }
@@ -307,10 +316,77 @@ public static partial class PackageImporter
             }
             catch (Exception cleanupEx)
             {
-                throw new AggregateException(ex, cleanupEx);
+                ex.Data["CiArtifactStagingCleanupFailure"] = cleanupEx;
             }
             throw;
         }
+    }
+
+    private static bool HasCiWrapperLayout(List<ArchiveItem> items)
+    {
+        if (items is null)
+        {
+            return false;
+        }
+
+        const string updateJsonSuffix = ".update.json";
+        var archiveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in items)
+        {
+            if (item.IsDirectory)
+            {
+                continue;
+            }
+
+            if (item.Name.EndsWith(CiUpdateJsonSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                var name = item.Name[..^updateJsonSuffix.Length];
+                if (name.Length > 0)
+                {
+                    archiveNames.Add(name);
+                }
+            }
+        }
+
+        if (archiveNames.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var item in items)
+        {
+            if (item.IsDirectory)
+            {
+                continue;
+            }
+
+            var name = item.Name;
+            var dotZipIndex = name.LastIndexOf(".zip", StringComparison.OrdinalIgnoreCase);
+            if (dotZipIndex < 0)
+            {
+                continue;
+            }
+
+            var prefixEnd = dotZipIndex + ".zip".Length;
+            if (prefixEnd >= name.Length || name[prefixEnd] != '.')
+            {
+                continue;
+            }
+
+            var suffix = name[(prefixEnd + 1)..];
+            if (suffix.Length == 0 || !suffix.All(char.IsAsciiDigit))
+            {
+                continue;
+            }
+
+            var normalizedArchivePath = name[..prefixEnd];
+            if (archiveNames.Contains(normalizedArchivePath))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string GetNormalizedPrefix(string entryName)
