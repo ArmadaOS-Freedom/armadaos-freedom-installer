@@ -47,11 +47,16 @@ public partial class MainWindow
         && _environmentAdbResult is { IsReady: true } && _environmentFastbootResult is { IsReady: true }
         && _workDirectoryReady;
 
-    /// <summary>与驱动是否就绪无关的平台前置条件：安装按钮也只在此基础上开放。</summary>
-    private bool EnvironmentPlatformReady =>
+    /// <summary>仅宿主平台就绪：不要求 Android 驱动探测结果，供环境页与恢复入口共用。</summary>
+    private bool EnvironmentRestorePlatformReady =>
         _environmentCheckCompleted && _environmentSystemSupported && _environmentToolsReady
         && _transport is not null && _environmentBootVerified && _environmentBootIdentity is not null
         && !_environmentPendingReboot && !_environmentStateUnknown;
+
+    /// <summary>与驱动是否就绪无关的平台前置条件：安装按钮也只在此基础上开放。</summary>
+    private bool EnvironmentPlatformReady =>
+        EnvironmentRestorePlatformReady
+        && _environmentAdbResult is not null && _environmentFastbootResult is not null;
 
     private static bool NeedsDriverInstall(WindowsDriverCheckResult? result) =>
         result?.State is WindowsDriverCheckState.Missing or WindowsDriverCheckState.Problem;
@@ -223,11 +228,11 @@ public partial class MainWindow
             _environmentFastbootResult = android.Fastboot;
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception) { _environmentStateUnknown = true; }
+        catch (Exception) { _environmentAdbResult = null; _environmentFastbootResult = null; }
         RenderAndroidDriverStates();
+        // 宿主侧完成状态不再依赖 Android 驱动探测：探测异常只清空其结果，由渲染层显示 CheckFailed。
         _environmentCheckCompleted = _environmentSystemSupported && _environmentToolsReady
-            && _environmentBootVerified && result is not null
-            && _environmentAdbResult is not null && _environmentFastbootResult is not null && !_environmentStateUnknown;
+            && _environmentBootVerified && result is not null && !_environmentStateUnknown;
         await CheckTemporaryWorkDirectoryAsync(cancellationToken);
         if (_closed) return;
         RenderEnvironmentStatus();
@@ -276,6 +281,7 @@ public partial class MainWindow
             : !_environmentBootVerified ? "Dynamic.Environment.BootUnknown"
             : _environmentStateUnknown ? "Dynamic.Environment.CheckFailed"
             : _environmentPendingReboot ? "Dynamic.Environment.PendingReboot"
+            : _environmentAdbResult is null || _environmentFastbootResult is null ? "Dynamic.Environment.CheckFailed"
             : EnvironmentIsReady ? "Dynamic.Environment.Ready"
             : EnvironmentDriverMissing ? "Dynamic.Environment.NeedDriver"
             : !_workDirectoryReady ? "Dynamic.Environment.WorkNotReady"
@@ -584,6 +590,16 @@ public partial class MainWindow
         EnvironmentCheckButton.IsEnabled = idle;
         EnvironmentInstallDriverButton.IsEnabled = idle && CanInstallDriverNow();
         EnvironmentContinueButton.IsEnabled = idle && EnvironmentIsReady;
+
+        // 快捷入口只在完整环境门禁阻止正常访问时出现；环境就绪后隐藏。
+        if (EnvironmentGlobalRestoreButton is not null)
+        {
+            EnvironmentGlobalRestoreButton.Visibility = EnvironmentIsReady
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            EnvironmentGlobalRestoreButton.IsEnabled = idle && !HasGlobalRecoveryProtectedState && !HasPendingTfTabletRecovery;
+        }
+
         RefreshTemporaryWorkDirectoryActions();
         // 受保护 TF 现场存在时不允许经环境页「返回首页」丢掉已知状态。
         HomeEnvironmentButton.IsEnabled = idle && !ProtectedModernTfInstallState && !HasPendingTfTabletRecovery;
