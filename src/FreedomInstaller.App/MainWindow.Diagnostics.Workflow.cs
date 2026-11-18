@@ -35,7 +35,14 @@ public partial class MainWindow
     private void AppendFirstInstallDiagnosticSummary(StringBuilder sb)
     {
         var check = _internalInstallDeviceCheck;
-        if (check?.Succeeded != true && _diagnosticLastSuccessfulCheck is { } last)
+        if (check?.Succeeded != true
+            && _diagnosticLastSuccessfulCheck is { } last
+            && !string.IsNullOrWhiteSpace(_diagnosticLastDeviceSerial)
+            && !string.IsNullOrWhiteSpace(last.Result.Android?.Identity.Serial)
+            && string.Equals(
+                last.Result.Android.Identity.Serial,
+                _diagnosticLastDeviceSerial,
+                StringComparison.Ordinal))
         {
             // 当前没有可确认结果：单独标注历史成功快照，时间戳与本轮快照严格区分。
             sb.AppendLine("HistoricalCheckSucceeded: true");
