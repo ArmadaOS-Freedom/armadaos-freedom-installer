@@ -2802,6 +2802,28 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// The explicit pre-write close-only exits (an unproven client, or a leave whose probe failed): nothing was written
+    /// and the window is closing, so this page's local resources (plan objects, staged tools, the extracted 9008
+    /// toolchain with its Python runtime) are released even though a 9008 session may still be bound. No device
+    /// command is sent; backups, evidence and records stay. Active operations and unresolved outcomes keep everything.
+    /// </summary>
+    private void ReleaseUninstallLocalResourcesForPrewriteClose()
+    {
+        if (_uninstallOperationActive || _uninstallDeviceOperationActive || HasUnresolvedUninstallState)
+        {
+            return;
+        }
+
+        _uninstallBackend?.Dispose();
+        _uninstallBackend = null;
+        _uninstallMenu?.Dispose();
+        _uninstallMenu = null;
+        _uninstallOriginal?.Dispose();
+        _uninstallOriginal = null;
+        DisposeUninstallSession();
+    }
+
+    /// <summary>
     /// The uninstall part of the window's close handler (WPF HandleModernUserdataUninstallClosingAsync): returns true
     /// when it handled (and cancelled) this close.
     /// </summary>
@@ -2856,8 +2878,8 @@ public partial class MainWindow
                     _closeConfirmed = true;
                     if (unproven)
                     {
-                        // Pre-write: release what this window owns, like the normal close path; no device command.
-                        DisposeUninstallOnClose();
+                        // Pre-write: release what this window owns; no device command.
+                        ReleaseUninstallLocalResourcesForPrewriteClose();
                         DisposeInternalInstall();
                     }
 
@@ -2880,9 +2902,9 @@ public partial class MainWindow
                         T("Dynamic.Mac.Dialog.Yes"),
                         T("Dynamic.Mac.Dialog.No")))
                 {
-                    // Pre-write: release what this window owns, like the normal close path; no device command.
+                    // Pre-write: release what this window owns; no device command.
                     _closeConfirmed = true;
-                    DisposeUninstallOnClose();
+                    ReleaseUninstallLocalResourcesForPrewriteClose();
                     DisposeInternalInstall();
                     Close();
                 }
