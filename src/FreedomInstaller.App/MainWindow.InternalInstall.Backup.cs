@@ -719,6 +719,20 @@ public partial class MainWindow
                             return;
                         }
 
+                        if (internalAutoBranch && !useBoardBackup && !useExisting
+                            && profile.Model == "TB323FU"
+                            && _internalInstallDeviceCheck is { FastbootLockState: BootloaderState.Locked, CurrentSlot: "a" or "b" } checkedSlot)
+                        {
+                            var slotCheck = new InternalInstallDeviceCheck(
+                                transport.AdbPath,
+                                transport.FastbootPath,
+                                _runner);
+                            await slotCheck.RequireUnchangedAndroidSlotAsync(
+                                freshIdentity.Serial,
+                                checkedSlot.CurrentSlot!,
+                                token);
+                        }
+
                         // 已有采样时才在进入 9008 之前刷新一次；没有采样就不凭空补一个。
                         if (_internalInstallPower is not null)
                         {
