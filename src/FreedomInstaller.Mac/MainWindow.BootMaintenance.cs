@@ -2647,7 +2647,11 @@ public partial class MainWindow
                         T("Dynamic.Mac.Dialog.Yes"),
                         T("Dynamic.Mac.Dialog.No")))
                 {
+                    // Pre-write session: release what this window owns (imported package extraction, staged tools)
+                    // exactly like the normal close path; no device command is sent and evidence stays.
                     _closeConfirmed = true;
+                    DisposeBootMaintenanceOnClose();
+                    DisposeInternalInstall();
                     Close();
                 }
 
