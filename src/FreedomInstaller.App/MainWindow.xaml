@@ -3285,6 +3285,15 @@
                                 </StackPanel>
                             </Border>
 
+                            <WrapPanel Margin="0,8,0,0">
+                                <Button x:Name="EnvironmentGlobalRestoreButton"
+                                        Content="{DynamicResource Static.Global.RestoreTitle}"
+                                        Click="OnOpenGlobalRestoreFromEnvironment"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Visibility="Collapsed"
+                                        Margin="0,0,8,8" />
+                            </WrapPanel>
+
                             <!-- 检查 / 安装记录默认收起，检查与安装期间也保持可展开、可滚动。 -->
                             <Expander Style="{StaticResource SectionExpander}"
                                       IsExpanded="False"
@@ -3337,7 +3346,7 @@
                                TextWrapping="Wrap"
                                Margin="0,6,0,0" />
                     <TextBlock x:Name="GlobalRestoreLeadText"
-                               Text="{DynamicResource Static.Global.RestoreLead}"
+                               Text="{DynamicResource Static.Global.ManualRestoreLead}"
                                Style="{StaticResource BodyText}"
                                TextWrapping="Wrap"
                                Margin="0,6,0,0"
@@ -3353,7 +3362,8 @@
                     </WrapPanel>
 
                     <!-- 连接前的准备：可折叠的连接图示与说明，默认展开；进入本页不会自动访问设备。 -->
-                    <Expander Style="{StaticResource SectionExpander}"
+                    <Expander x:Name="GlobalAndroidConnectionGuide"
+                              Style="{StaticResource SectionExpander}"
                               IsExpanded="True"
                               Margin="0,12,0,0"
                               Header="{DynamicResource Static.Global.ConnectionGuideTitle}">
@@ -3365,10 +3375,142 @@
                         </StackPanel>
                     </Expander>
 
+                    <!-- 仅恢复视图显示的 9008 手动进入指南；默认折叠但展开状态为 True，不自动访问设备。 -->
+                    <Expander x:Name="GlobalManualEdlGuide"
+                              Style="{StaticResource SectionExpander}"
+                              IsExpanded="True"
+                              Visibility="Collapsed"
+                              Margin="0,12,0,0"
+                              Header="{DynamicResource Static.Global.ManualEdlGuideTitle}">
+                        <StackPanel Margin="0,6,0,0">
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlForceShutdown}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,0" />
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlStep1}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlTb323fu}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0" />
+                            <Viewbox Stretch="Uniform" MaxWidth="360" MaxHeight="154"
+                                     HorizontalAlignment="Left" Margin="0,8,0,0">
+                                <Canvas Width="360" Height="154">
+                                    <!-- 顶部标签区：按 TB323FU 正面横向渲染，音量加键位于上长边靠左。 -->
+                                    <TextBlock Canvas.Left="10" Canvas.Top="3" Width="210"
+                                               Text="{DynamicResource Static.Global.ManualEdlVolumeUp}"
+                                               Foreground="{DynamicResource AccentBrush}"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
+                                               TextWrapping="NoWrap"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextAlignment="Left" />
+                                    <!-- 引线：从文字下方起始，绕至音量加键上缘，不穿越文字。 -->
+                                    <Path Data="M 36,17 L 36,26 L 39,30"
+                                          Stroke="{DynamicResource AccentBrush}"
+                                          StrokeThickness="1.5" />
+                                    <!-- 平板：屏幕面向用户横向放置。 -->
+                                    <Rectangle Canvas.Left="12" Canvas.Top="34" Width="144" Height="90"
+                                               RadiusX="8" RadiusY="8"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="2" />
+                                    <Rectangle Canvas.Left="18" Canvas.Top="40" Width="132" Height="78"
+                                               RadiusX="4" RadiusY="4"
+                                               Fill="#0F1115" />
+                                    <!-- 上长边按键：音量加键高亮部分偏左端，中间为中性其余部分，电源键靠右。 -->
+                                    <Rectangle Canvas.Left="32" Canvas.Top="30" Width="13" Height="5"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource AccentBrush}" />
+                                    <Rectangle Canvas.Left="45" Canvas.Top="30" Width="8" Height="5"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <Rectangle Canvas.Left="59" Canvas.Top="30" Width="11" Height="5"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <!-- 右侧短边次要接口：开口状态，保持低调。 -->
+                                    <Rectangle Canvas.Left="156" Canvas.Top="76" Width="4" Height="10"
+                                               RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource MutedBrush}"
+                                               Opacity="0.5" />
+                                    <!-- 下长边中央 USB-C 接口与插头。 -->
+                                    <Rectangle Canvas.Left="76" Canvas.Top="121" Width="16" Height="6"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <Rectangle Canvas.Left="79" Canvas.Top="126" Width="10" Height="9"
+                                               RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <!-- 下长边中央 USB-C 接口标注：单行，避开 y145 走线。 -->
+                                    <TextBlock Canvas.Left="100" Canvas.Top="124" Width="110"
+                                               Text="{DynamicResource Static.Global.ManualEdlLongEdgePort}"
+                                               Foreground="{DynamicResource MutedBrush}"
+                                               FontSize="10"
+                                               TextWrapping="NoWrap"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextAlignment="Left" />
+                                    <!-- 电脑：底座与上盖。 -->
+                                    <Rectangle Canvas.Left="244" Canvas.Top="36" Width="100" Height="51"
+                                               RadiusX="4" RadiusY="4"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="2" />
+                                    <Rectangle Canvas.Left="234" Canvas.Top="87" Width="120" Height="10"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="2" />
+                                    <!-- 电脑侧插头：底座外左侧，接触底座左缘 x234。 -->
+                                    <Rectangle Canvas.Left="222" Canvas.Top="87" Width="12" Height="10"
+                                               RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <!-- 数据线：从平板下长边插头向下，右折至 x212 上行接电脑侧插头。 -->
+                                    <Path Data="M 84,135 L 84,145 L 212,145 L 212,92 L 222,92"
+                                          Stroke="{DynamicResource MutedBrush}"
+                                          StrokeThickness="3"
+                                          StrokeLineJoin="Round" />
+                                    <!-- 黑屏说明置于深色屏幕内部，固定浅色避免与 #0F1115 重影。 -->
+                                    <TextBlock Canvas.Left="18" Canvas.Top="68" Width="132"
+                                               Text="{DynamicResource Static.Global.ManualEdlScreenDark}"
+                                               Foreground="#DFE2E7"
+                                               FontSize="10"
+                                               TextWrapping="Wrap"
+                                               TextAlignment="Center" />
+                                    <TextBlock Canvas.Left="244" Canvas.Top="106" Width="100"
+                                               Text="{DynamicResource Static.Global.ManualEdlPc}"
+                                               Foreground="{DynamicResource MutedBrush}"
+                                               FontSize="10"
+                                               TextWrapping="Wrap"
+                                               TextAlignment="Center" />
+                                </Canvas>
+                            </Viewbox>
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlStep2}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlStep3}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Expander>
+
                     <!-- 连接：型号由连接时自动识别，页面没有手动选择；进入本页不会自动访问设备。 -->
                     <Border Style="{StaticResource CardBorder}" Margin="0,12,0,0">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource Static.Global.AutoDetect}"
+                            <TextBlock x:Name="GlobalAutoDetectText"
+                                       Text="{DynamicResource Static.Global.AutoDetect}"
                                        FontSize="12"
                                        Foreground="{DynamicResource MutedBrush}"
                                        TextWrapping="Wrap" />
@@ -3397,23 +3539,13 @@
                         </StackPanel>
                     </Border>
 
-                    <!--
-                        公共保存位置：备份与恢复都要有工作记录目录，标签随视图切换，
-                        因此恢复视图即使隐藏备份动作也仍然可以选目录。
-                    -->
+                    <!-- 备份保存位置：只在备份视图出现；恢复的工作记录目录由程序自动使用启动时选定目录下的 records。 -->
                     <Border x:Name="GlobalOutputSection" Style="{StaticResource CardBorder}" Margin="0,12,0,0">
                         <StackPanel>
-                            <TextBlock x:Name="GlobalOutputBackupLabelText"
-                                       Text="{DynamicResource Static.Global.BackupDirectoryLabel}"
+                            <TextBlock Text="{DynamicResource Static.Global.BackupDirectoryLabel}"
                                        FontSize="12"
                                        Foreground="{DynamicResource MutedBrush}"
                                        TextWrapping="Wrap" />
-                            <TextBlock x:Name="GlobalOutputRestoreLabelText"
-                                       Text="{DynamicResource Static.Global.OutputDirectoryLabelRestore}"
-                                       FontSize="12"
-                                       Foreground="{DynamicResource MutedBrush}"
-                                       TextWrapping="Wrap"
-                                       Visibility="Collapsed" />
                             <Grid Margin="0,4,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />

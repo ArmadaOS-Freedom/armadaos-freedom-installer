@@ -584,6 +584,16 @@ public partial class MainWindow
         EnvironmentCheckButton.IsEnabled = idle;
         EnvironmentInstallDriverButton.IsEnabled = idle && CanInstallDriverNow();
         EnvironmentContinueButton.IsEnabled = idle && EnvironmentIsReady;
+
+        // 快捷入口只在完整环境门禁阻止正常访问时出现；环境就绪后隐藏。
+        if (EnvironmentGlobalRestoreButton is not null)
+        {
+            EnvironmentGlobalRestoreButton.Visibility = EnvironmentIsReady
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            EnvironmentGlobalRestoreButton.IsEnabled = idle && !HasGlobalRecoveryProtectedState;
+        }
+
         RefreshTemporaryWorkDirectoryActions();
         // 受保护 TF 现场存在时不允许经环境页「返回首页」丢掉已知状态。
         HomeEnvironmentButton.IsEnabled = idle && !ProtectedModernTfInstallState && !HasPendingTfTabletRecovery;

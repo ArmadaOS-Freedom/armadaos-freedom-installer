@@ -202,6 +202,7 @@ public partial class MainWindow : Window
     {
         EnvironmentCheckButton.IsEnabled = false;
         EnvironmentContinueButton.IsEnabled = false;
+        EnvironmentGlobalRestoreButton.IsEnabled = false;
         SetText(EnvironmentStatusText, "Dynamic.Environment.Checking");
         try
         {
@@ -249,6 +250,7 @@ public partial class MainWindow : Window
             }
 
             var toolsOk = missing.Count == 0;
+            _globalRestoreEnvironmentReady = systemOk && edlModels.Count > 0;
             SetText(
                 EnvironmentToolsStatusText,
                 toolsOk
@@ -268,11 +270,14 @@ public partial class MainWindow : Window
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             _environmentReady = false;
+            _globalRestoreEnvironmentReady = false;
             SetText(EnvironmentStatusText, "Dynamic.Environment.CheckFailed");
         }
         finally
         {
             EnvironmentCheckButton.IsEnabled = true;
+            EnvironmentGlobalRestoreButton.IsVisible = !_environmentReady;
+            EnvironmentGlobalRestoreButton.IsEnabled = true;
         }
     }
 

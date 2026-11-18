@@ -47,6 +47,7 @@ public partial class MainWindow
     private string? _globalProgressStage;
     private DateTime _globalLastProgressAt = DateTime.MinValue;
     private string? _globalSessionDirectory;
+    private bool _globalRestoreEnvironmentReady;
 
     /// <summary>The tablet is (or may be) in 9008 for this page, or a write or reset outcome is still unresolved.</summary>
     private bool HasGlobalRecoveryProtectedState =>
@@ -67,7 +68,7 @@ public partial class MainWindow
     /// <summary>Opens the page in one view; a protected session keeps the view it belongs to.</summary>
     private void ShowGlobalRecoveryPage(GlobalRecoveryMode mode)
     {
-        if (!_environmentReady)
+        if (mode == GlobalRecoveryMode.Backup && !_environmentReady)
         {
             return;
         }
@@ -83,7 +84,21 @@ public partial class MainWindow
         RefreshGlobalRecoveryActions();
         RenderGlobalConnection();
         RenderGlobalPower();
+        if (mode == GlobalRecoveryMode.Restore && !_globalRestoreEnvironmentReady)
+        {
+            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.RestoreEnvironmentRequired");
+        }
         GlobalRecoveryPage.ScrollToHome();
+    }
+
+    private void OnOpenGlobalRestoreFromEnvironment(object? sender, RoutedEventArgs e)
+    {
+        if (!EnvironmentPage.IsVisible || _environmentReady || _busy || HasLiveDeviceSession || !EnvironmentGlobalRestoreButton.IsEnabled)
+        {
+            return;
+        }
+
+        ShowGlobalRecoveryPage(GlobalRecoveryMode.Restore);
     }
 
     private void ApplyGlobalRecoveryModeView()
@@ -93,10 +108,15 @@ public partial class MainWindow
         GlobalRestoreTitleText.IsVisible = !backup;
         GlobalBackupLeadText.IsVisible = backup;
         GlobalRestoreLeadText.IsVisible = !backup;
-        GlobalOutputBackupLabelText.IsVisible = backup;
-        GlobalOutputRestoreLabelText.IsVisible = !backup;
+        GlobalOutputSection.IsVisible = backup;
         GlobalBackupCard.IsVisible = backup;
         GlobalRestoreCard.IsVisible = !backup;
+        GlobalAndroidConnectionGuide.IsVisible = backup;
+        GlobalAutoDetectText.IsVisible = backup;
+        GlobalPowerText.IsVisible = backup;
+        GlobalManualEdlGuide.IsVisible = !backup;
+        GlobalConnectButton[!ContentControl.ContentProperty] = GlobalConnectButton.GetResourceObservable(backup ? "Static.Global.Connect" : "Static.Global.RestoreConnect").ToBinding();
+        GlobalBackHomeButton[!ContentControl.ContentProperty] = GlobalBackHomeButton.GetResourceObservable(_environmentReady ? "Static.Global.BackHome" : "Static.Environment.Title").ToBinding();
     }
 
     private void OnGlobalBackHome(object? sender, RoutedEventArgs e)
@@ -112,7 +132,7 @@ public partial class MainWindow
             return;
         }
 
-        ShowView(HomePage);
+        ShowView(_environmentReady ? HomePage : EnvironmentPage);
         RefreshActions();
     }
 
@@ -154,14 +174,15 @@ public partial class MainWindow
         var proof = _globalEdlClient?.HasInitialSaharaProof == true;
         var idleConnect = _globalEdlClient is null && !_globalEntryAttempted;
         var reprobeConnect = _globalEdlClient is not null && !proof;
-        GlobalConnectButton.IsEnabled = !busy && !frozen && !writesAttempted && (idleConnect || reprobeConnect);
+        var restoreHostReady = !restoreView || _globalRestoreEnvironmentReady;
+        GlobalConnectButton.IsEnabled = !busy && !frozen && !writesAttempted
+            && (idleConnect || reprobeConnect) && restoreHostReady;
 
         GlobalBackupButton.IsEnabled = backupView && !busy && !frozen && !writesAttempted && proof;
 
         GlobalPrepareRestoreButton.IsEnabled = restoreView && !busy && !frozen && !writesAttempted
-            && !string.IsNullOrWhiteSpace(_globalRestoreSource)
-            && !string.IsNullOrWhiteSpace(_globalOutputParent)
-            && GlobalRestoreDirectoriesValid();
+            && _globalRestoreEnvironmentReady
+            && !string.IsNullOrWhiteSpace(_globalRestoreSource);
 
         GlobalRestoreConfirmCheck.IsEnabled = restoreView && !busy && !frozen && !writesAttempted
             && _globalRestorePlan is not null;
@@ -235,13 +256,6 @@ public partial class MainWindow
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(_globalOutputParent)
-            && !IsGlobalOutputOutsideSource(_globalOutputParent!, chosen))
-        {
-            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.OutputInsideRestoreSource");
-            return;
-        }
-
         _globalRestoreSource = chosen;
         GlobalRestoreDirectoryBox.Text = chosen;
         InvalidateGlobalRestorePreparation();
@@ -260,11 +274,6 @@ public partial class MainWindow
         var path = folders.Count == 1 ? folders[0].TryGetLocalPath() : null;
         return !string.IsNullOrWhiteSpace(path) && Directory.Exists(path) ? path : null;
     }
-
-    private bool GlobalRestoreDirectoriesValid() =>
-        !string.IsNullOrWhiteSpace(_globalRestoreSource)
-        && !string.IsNullOrWhiteSpace(_globalOutputParent)
-        && IsGlobalOutputOutsideSource(_globalOutputParent!, _globalRestoreSource!);
 
     /// <summary>
     /// The output parent may be a sibling or an ancestor of the restore source, never the source itself or a folder
@@ -538,6 +547,12 @@ public partial class MainWindow
             return;
         }
 
+        if (_globalRecoveryMode == GlobalRecoveryMode.Restore && !_globalRestoreEnvironmentReady)
+        {
+            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.RestoreEnvironmentRequired");
+            return;
+        }
+
         // An entry left no client: never resend the Android command on our own.
         if (_globalEdlTools is not null && _globalEdlClient is null)
         {
@@ -573,7 +588,8 @@ public partial class MainWindow
         }
 
         // The Android route reboots into 9008; an existing 9008 endpoint is not rebooted.
-        if (!await MessageDialog.AskAsync(
+        if (_globalRecoveryMode == GlobalRecoveryMode.Backup
+            && !await MessageDialog.AskAsync(
                 this,
                 T("Dynamic.Global.Dialog.Title"),
                 T("Dynamic.Global.Dialog.ConnectWarning"),
@@ -706,6 +722,12 @@ public partial class MainWindow
 
         var present = await Task.Run(() => Discovery.ReadPresent(), token);
         var anyPresentEdl = present.Any(endpoint => endpoint is not null && IsGlobalEdlInstance(endpoint.DeviceInstanceId));
+
+        if (!anyPresentEdl && _globalRecoveryMode == GlobalRecoveryMode.Restore)
+        {
+            // A restore only connects when a 9008 endpoint is already present: never reboot Android into 9008.
+            throw new InvalidOperationException(T("Dynamic.Global.Error.ManualEdlRequired"));
+        }
 
         if (anyPresentEdl)
         {
@@ -982,44 +1004,37 @@ public partial class MainWindow
             return;
         }
 
+        if (!_globalRestoreEnvironmentReady)
+        {
+            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.RestoreEnvironmentRequired");
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(_globalRestoreSource))
         {
             SetText(GlobalProgressStatusText, "Dynamic.Global.Error.RestoreSourceRequired");
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_globalOutputParent))
-        {
-            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.OutputRequired");
-            return;
-        }
-
-        if (!GlobalRestoreDirectoriesValid())
-        {
-            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.OutputInsideRestoreSource");
-            return;
-        }
-
-        // Preparing connects an unconnected tablet implicitly: say so once (Android reboot or 9008 takeover).
-        if (_globalEdlClient is null
-            && !await MessageDialog.AskAsync(
-                this,
-                T("Dynamic.Global.Dialog.Title"),
-                T("Dynamic.Global.Dialog.ConnectWarning"),
-                T("Dynamic.Mac.Dialog.Yes"),
-                T("Dynamic.Mac.Dialog.No")))
-        {
-            return;
-        }
-
         var source = _globalRestoreSource!;
-        var output = _globalOutputParent!;
         await RunGlobalOperationAsync(async token =>
         {
             try
             {
                 InvalidateGlobalRestorePreparation();
                 var progress = new Progress<GlobalEdlProgress>(RenderGlobalProgress);
+
+                // Operation records live under the app work root, never inside the chosen backup source.
+                var recordsParent = Path.Combine(MacCacheRoot, "records");
+                if (!IsGlobalOutputOutsideSource(recordsParent, source))
+                {
+                    throw new InvalidOperationException(T("Dynamic.Global.Error.RestoreRecordsInsideSource"));
+                }
+
+                if (!Directory.Exists(recordsParent))
+                {
+                    Directory.CreateDirectory(recordsParent);
+                }
 
                 SetText(GlobalProgressStatusText, "Dynamic.Global.Status.VerifyingRestoreSource");
                 var set = await Task.Run(() => GlobalEdlBackup.OpenAsync(source, progress, token), token);
@@ -1060,7 +1075,7 @@ public partial class MainWindow
 
                 SetText(GlobalProgressStatusText, "Dynamic.Global.Status.PreparingRestore");
                 var client = _globalEdlClient!;
-                var plan = await Task.Run(() => GlobalEdlRestore.PrepareAsync(client, set, output, progress, token), token);
+                var plan = await Task.Run(() => GlobalEdlRestore.PrepareAsync(client, set, recordsParent, progress, token), token);
                 _globalRestorePlan = plan;
                 GlobalRestoreConfirmCheck.IsChecked = false;
 
