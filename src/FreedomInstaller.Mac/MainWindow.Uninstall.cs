@@ -928,7 +928,17 @@ public partial class MainWindow
         var parent = _uninstallBackupParent;
         if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
         {
-            parent = UninstallRecoveryOutputDirectory();
+            try
+            {
+                parent = UninstallRecoveryOutputDirectory();
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // 缓存目录不可写：在本流程的状态里报告失败，保留会话，不让异常逃出 async void 处理程序。
+                SetText(UninstallCheckStatusText, M("Dynamic.RecoverySource.Failed", error.Message));
+                AppendUninstallLog(M("Dynamic.RecoverySource.Failed", error.Message));
+                return;
+            }
         }
 
         _uninstallBackupParent = parent;
@@ -1733,7 +1743,18 @@ public partial class MainWindow
 
             if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
             {
-                workParent = UninstallRecoveryOutputDirectory();
+                try
+                {
+                    workParent = UninstallRecoveryOutputDirectory();
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    // 同上：按准备失败显示，既有准备与会话保持不变。
+                    _uninstallError = error.Message;
+                    RenderUninstallPreparationError();
+                    AppendUninstallLog(M("Dynamic.RawValue", $"{error.GetType().FullName}: {error.Message}"));
+                    return;
+                }
             }
 
             if (string.IsNullOrWhiteSpace(workParent))
