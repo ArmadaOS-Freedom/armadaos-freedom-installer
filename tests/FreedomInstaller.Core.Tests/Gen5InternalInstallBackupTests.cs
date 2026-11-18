@@ -331,19 +331,22 @@ public sealed class Gen5InternalInstallBackupTests : IClassFixture<Gen5EdlToolch
     // ---------------------------------------------------------------- helpers
 
     [Theory]
-    [InlineData("a")]
-    [InlineData("b")]
-    public async Task G5_05_CreateForFirstInstall_refuses_before_any_partition_read_and_never_writes_or_resets(string slot)
+    [InlineData("a", false)]
+    [InlineData("b", false)]
+    [InlineData("a", true)]
+    public async Task G5_05_CreateForFirstInstall_refuses_before_any_partition_read_and_never_writes_or_resets(string slot, bool mismatchedSerial)
     {
         string parent = _fixture.NewCaseDirectory(
-            nameof(G5_05_CreateForFirstInstall_refuses_before_any_partition_read_and_never_writes_or_resets) + "-" + slot);
+            nameof(G5_05_CreateForFirstInstall_refuses_before_any_partition_read_and_never_writes_or_resets) + "-" + slot + (mismatchedSerial ? "-mismatch" : ""));
         IB001SyntheticDevice device = IB001SyntheticDevice.Create(gen5: true);
         IB001FakeEdlRunner runner = new(device, hardwareId: Gen5HardwareId);
         EdlClient client = NewClient(runner);
+        string? boundSerial = client.Binding.AndroidIdentity?.Identity?.Serial;
+        Assert.False(string.IsNullOrEmpty(boundSerial));
 
         InternalDeviceCheckResult check = new(
             android: client.Binding.AndroidIdentity,
-            fastbootSerial: null,
+            fastbootSerial: mismatchedSerial ? "MISMATCHED-SERIAL" : boundSerial,
             fastbootProduct: null,
             fastbootLockState: BootloaderState.Locked,
             otaState: default,
@@ -352,6 +355,17 @@ public sealed class Gen5InternalInstallBackupTests : IClassFixture<Gen5EdlToolch
             failedStage: null,
             error: null,
             currentSlot: slot);
+
+        if (mismatchedSerial)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => InternalInstallBackup.CreateForFirstInstallAsync(client, parent, check));
+
+            Assert.Empty(runner.Reads);
+            Assert.Empty(runner.ProbedLuns);
+            Assert.Equal(0, runner.WriteOrResetCount);
+            return;
+        }
 
         Exception error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => InternalInstallBackup.CreateForFirstInstallAsync(client, parent, check));

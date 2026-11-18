@@ -132,6 +132,24 @@ public static partial class InternalInstallBackup
             client.Toolchain.HardwareId);
         RequireProfile(profile);
 
+        // The strict Gen5 install gate must reject a mismatched Android identity before any directory or
+        // device command exists. It is scoped to TB323FU with a locked bootloader on slot a or b, and it
+        // performs no new probes; the caller-supplied device check supplies every observed value.
+        if (profile.Model == "TB323FU"
+            && deviceCheck is not null
+            && deviceCheck.FastbootLockState == BootloaderState.Locked
+            && (deviceCheck.CurrentSlot == "a" || deviceCheck.CurrentSlot == "b"))
+        {
+            if (deviceCheck.Android is not { } android
+                || client.Binding.AndroidIdentity is not { } boundAndroid
+                || !InternalInstallBackend.SameAndroidIdentity(boundAndroid, android)
+                || !string.Equals(deviceCheck.FastbootSerial, android.Identity.Serial, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "device-binding-mismatch: TB323FU install gate requires the fastboot-checked Android identity and serial to match the bound session identity.");
+            }
+        }
+
         // The install backup belongs to the install route: a model whose install route is not open is refused
         // before any directory or device command exists.
         DeviceModelRoutes.RequireInstallRoute(profile.Model);

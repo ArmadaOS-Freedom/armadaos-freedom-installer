@@ -401,7 +401,7 @@ public sealed partial class InternalInstallBackend : IDisposable
         && right.AndroidIdentity is not null
         && SameAndroidIdentity(left.AndroidIdentity, right.AndroidIdentity);
 
-    private static bool SameAndroidIdentity(
+    internal static bool SameAndroidIdentity(
         AndroidMaintenanceIdentity left,
         AndroidMaintenanceIdentity right) =>
         string.Equals(left.SocSerial, right.SocSerial, StringComparison.Ordinal)
