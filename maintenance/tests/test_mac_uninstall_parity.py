@@ -333,6 +333,19 @@ class MacUninstallParityTests(unittest.TestCase):
         self.assertIn("bool sessionOver = _uninstallCompleted", close_only)
         self.assertIn("(!sessionOver && _uninstallEdlClient is { HasInitialSaharaProof: false })", close_only)
 
+    def test_prewrite_close_only_releases_local_resources(self):
+        # The normal close release skips a live 9008 session; the explicit pre-write close-only exits must still
+        # free the staged toolchain, without a device command.
+        code = MAC_CODE[0].read_text(encoding="utf-8")
+        closing = code[code.index("private async Task<bool> OnUninstallClosingAsync"):]
+        self.assertEqual(2, closing.count("ReleaseUninstallLocalResourcesForPrewriteClose();"))
+        release = code[code.index("private void ReleaseUninstallLocalResourcesForPrewriteClose"):]
+        release = release[:release.index("\n    }\n")]
+        self.assertNotIn("HasUninstallLiveEdlState", release)
+        self.assertIn("HasUnresolvedUninstallState", release)
+        self.assertNotIn("ResetAsync", release)
+        self.assertNotIn("ProbeAsync", release)
+
     def test_default_preparation_uses_the_proven_lock_state(self):
         code = MAC_CODE[0].read_text(encoding="utf-8")
         self.assertIn("_uninstallDeviceCheck!.FastbootLockState", code)
