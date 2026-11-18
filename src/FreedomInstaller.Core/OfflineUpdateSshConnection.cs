@@ -201,7 +201,7 @@ public sealed class OfflineUpdateSshConnection : IOfflineUpdateConnection
             "-T", "-a", "-x",
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=yes",
-            "-o", $"UserKnownHostsFile=\"{NormalizeSlashes(knownHostsPath)}\"",
+            "-o", $"UserKnownHostsFile=\"{EncodeKnownHostsPath(knownHostsPath)}\"",
             "-o", "GlobalKnownHostsFile=none",
             "-o", "UpdateHostKeys=no",
             "-o", "VerifyHostKeyDNS=no",
@@ -344,7 +344,14 @@ public sealed class OfflineUpdateSshConnection : IOfflineUpdateConnection
         return fullPath;
     }
 
-    private static string NormalizeSlashes(string path) => path.Replace('\\', '/');
+    /// <summary>
+    /// The known-hosts path as a quoted <c>-o</c> value. OpenSSH splits option values itself and treats a
+    /// backslash before a quote, a space or another backslash as an escape. On Windows a backslash is a separator,
+    /// so it becomes '/'; elsewhere it is part of a file name, so it is doubled and OpenSSH reads the same file the
+    /// caller validated. Quotes are already rejected by <see cref="ValidateOpenSshPath"/>.
+    /// </summary>
+    internal static string EncodeKnownHostsPath(string path) =>
+        OperatingSystem.IsWindows() ? path.Replace('\\', '/') : path.Replace("\\", "\\\\", StringComparison.Ordinal);
 
     private static async Task DrainStderrAsync(Process process, CancellationToken cancellationToken, OfflineUpdateSshConnection owner)
     {
