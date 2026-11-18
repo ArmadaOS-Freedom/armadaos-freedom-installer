@@ -716,10 +716,18 @@ public sealed partial class BootMaintenanceBackend
                 }
                 else
                 {
-                    EdlRawBootEnvelope envelope = await EdlRawBootBuilder
-                        .RepackEnvelopeAsync(
-                            envelopeSourceBoot, raw, bounds[androidSource], candidatePath, cancellationToken)
-                        .ConfigureAwait(false);
+                    // The envelope source is always the Android source slot's own boot (the target equals the source
+                    // whenever the target's own boot is used), so the analyzer's kShim verdict on that source's
+                    // material selects the entry exactly as the build core does.
+                    EdlRawBootEnvelope envelope = materialsBySource[androidSource].IsKshim
+                        ? await EdlRawBootBuilder
+                            .RepackKshimHybridEnvelopeAsync(
+                                envelopeSourceBoot, raw, bounds[androidSource], candidatePath, cancellationToken)
+                            .ConfigureAwait(false)
+                        : await EdlRawBootBuilder
+                            .RepackEnvelopeAsync(
+                                envelopeSourceBoot, raw, bounds[androidSource], candidatePath, cancellationToken)
+                            .ConfigureAwait(false);
                     candidate = envelope.CandidateBoot;
                 }
 
