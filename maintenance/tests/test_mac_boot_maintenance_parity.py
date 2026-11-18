@@ -245,10 +245,13 @@ class MacBootMaintenanceParityTests(unittest.TestCase):
         )
         self.assertIsNotNone(guarded, "the failed leave probe does not offer the close-only warning")
         body = guarded.group("body")
-        # Approving the warning reaches the same cleanup as a normal close, then really closes.
-        for step in ("_closeConfirmed = true;", "DisposeBootMaintenanceOnClose();", "DisposeInternalInstall();", "Close();"):
-            self.assertIn(step, body)
-        self.assertLess(body.index("DisposeBootMaintenanceOnClose();"), body.index("Close();"))
+        # Approving the warning reaches the same cleanup as a normal close, in this order, then really closes; nothing
+        # in the approved branch may leave it before Close().
+        steps = ("_closeConfirmed = true;", "DisposeBootMaintenanceOnClose();", "DisposeInternalInstall();", "Close();")
+        self.assertNotRegex(body, r"\breturn\b", "the approved close-only branch returns before closing")
+        # Every statement of the approved branch is one of the expected steps, so nothing else can intervene.
+        statements = [line.strip() for line in body.splitlines() if line.strip() and not line.strip().startswith("//")]
+        self.assertEqual(list(steps), statements)
         self.assertNotRegex(refused[:refused.index("_bootMaintenanceLeaveProbeFailed")], r"\breturn true;")
         self.assertIn("_bootMaintenanceLeaveProbeFailed = true;", code)
 
