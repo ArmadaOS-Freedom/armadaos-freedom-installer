@@ -84,17 +84,23 @@ public sealed class InternalInstallDirectSpaceTests
     [Fact]
     public void Insufficient_free_space_is_refused_with_the_stable_token()
     {
-        IOException error = Assert.Throws<IOException>(() => RequireSpace(DummyRequiredBytes, 99L));
+        InsufficientDirectExecutionSpaceException error = Assert.Throws<InsufficientDirectExecutionSpaceException>(
+            () => RequireSpace(DummyRequiredBytes, 99L));
 
         Assert.Contains("insufficient-direct-execution-space", error.Message);
+        Assert.Equal(DummyRequiredBytes, error.RequiredBytes);
+        Assert.Equal(99L, error.AvailableBytes);
     }
 
     [Fact]
     public void Unknown_free_space_is_the_same_refusal_never_an_unbounded_permission()
     {
-        IOException error = Assert.Throws<IOException>(() => RequireSpace(DummyRequiredBytes, null));
+        InsufficientDirectExecutionSpaceException error = Assert.Throws<InsufficientDirectExecutionSpaceException>(
+            () => RequireSpace(DummyRequiredBytes, null));
 
         Assert.Contains("insufficient-direct-execution-space", error.Message);
+        Assert.Equal(DummyRequiredBytes, error.RequiredBytes);
+        Assert.Null(error.AvailableBytes);
     }
 
     [Fact]

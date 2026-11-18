@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using FreedomInstaller.App;
+using FreedomInstaller.Core;
 using Xunit;
 
 namespace FreedomInstaller.Core.Tests;
@@ -27,6 +28,40 @@ public sealed class UiTextTests
     private static readonly Regex PlaceholderPattern = new(
         @"\{(\d+)(?:,[^}]*)?(?::[^}]*)?\}",
         RegexOptions.CultureInvariant);
+
+    [Fact]
+    public void InternalInstallPreparationFailure_MessageIsLocalizedInBothLanguages()
+    {
+        var exception = Assert.Throws<InsufficientDirectExecutionSpaceException>(
+            () => InternalInstallPreparationContext.RequireDirectExecutionSpaceAvailable(38408839168L, 14706802688L));
+        var message = UiText.InternalInstallPreparationFailure(exception);
+
+        var text = new UiText(UiText.ChineseLanguage);
+        var chinese = text.Format(message);
+        Assert.Contains("电脑上安装器工作目录所在磁盘空间不足", chinese);
+        Assert.Contains("13.70 GiB", chinese);
+        Assert.Contains("35.77 GiB", chinese);
+        Assert.DoesNotContain("insufficient-direct-execution-space", chinese);
+
+        text.SetLanguage(UiText.EnglishLanguage);
+        var english = text.Format(message);
+        Assert.Contains("Not enough free space", english);
+        Assert.Contains("13.70 GiB", english);
+        Assert.Contains("35.77 GiB", english);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_UnknownFreeSpaceIsLocalized()
+    {
+        var exception = Assert.Throws<InsufficientDirectExecutionSpaceException>(
+            () => InternalInstallPreparationContext.RequireDirectExecutionSpaceAvailable(38408839168L, null));
+        var message = UiText.InternalInstallPreparationFailure(exception);
+
+        var chinese = new UiText(UiText.ChineseLanguage).Format(message);
+        Assert.Contains("无法确定电脑上安装器工作目录所在磁盘的剩余空间", chinese);
+        Assert.Contains("35.77 GiB", chinese);
+        Assert.Contains("请确认该磁盘可访问", chinese);
+    }
 
     [Fact]
     public void EmbeddedCatalogs_ResolveAuthorNameInBothLanguagesAndDefaultToChinese()

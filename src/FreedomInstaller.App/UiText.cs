@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
+using FreedomInstaller.Core;
 
 namespace FreedomInstaller.App;
 
@@ -142,6 +143,52 @@ internal sealed class UiText
     /// </summary>
     internal string Get(string key, params object?[] args) =>
         string.IsNullOrEmpty(key) ? string.Empty : FormatKey(key, args, 0);
+
+    /// <summary>
+    /// Maps a preparation failure to a localizable message. Known cases (disk space, the four
+    /// backend prefix diagnostics) get dedicated text; other reasons keep the generic message
+    /// with the App-localized exception message so it stays meaningful.
+    /// </summary>
+    internal static UiMessage InternalInstallPreparationFailure(Exception exception)
+    {
+        if (exception is InsufficientDirectExecutionSpaceException space)
+        {
+            const double gib = 1073741824d;
+            return space.AvailableBytes is long available
+                ? new UiMessage(
+                    "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceKnown",
+                    available / gib,
+                    space.RequiredBytes / gib)
+                : new UiMessage(
+                    "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceUnknown",
+                    space.RequiredBytes / gib);
+        }
+
+        if (exception is InvalidOperationException problem)
+        {
+            if (problem.Message.StartsWith("requires-complete-backup-with-efisp:", StringComparison.Ordinal))
+            {
+                return new UiMessage("Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired");
+            }
+
+            if (problem.Message.StartsWith("gbl-boot-chain-key-mismatch:", StringComparison.Ordinal))
+            {
+                return new UiMessage("Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch");
+            }
+
+            if (problem.Message.StartsWith("gbl-runtime-region-unknown:", StringComparison.Ordinal))
+            {
+                return new UiMessage("Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown");
+            }
+
+            if (problem.Message.StartsWith("requires-compatible-bootloader:", StringComparison.Ordinal))
+            {
+                return new UiMessage("Dynamic.InternalInstall.Prepared.CompatibilityRequired");
+            }
+        }
+
+        return new UiMessage("Dynamic.InternalInstall.Prepared.Failed", exception.Message);
+    }
 
     /// <summary>Resolves a message, including nested <see cref="UiMessage"/> arguments.</summary>
     internal string Format(UiMessage message) =>

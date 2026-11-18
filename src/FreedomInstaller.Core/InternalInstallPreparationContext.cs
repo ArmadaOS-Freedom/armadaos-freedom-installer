@@ -16,6 +16,38 @@ using NewPartition = FreedomInstaller.Core.InternalInstallArtifacts.NewPartition
 namespace FreedomInstaller.Core;
 
 /// <summary>
+/// Refuses a direct preparation whose actual evidence volume cannot hold the checked future evidence
+/// bytes. It carries the structured requirement and, when known, the actual free bytes.
+/// </summary>
+public sealed class InsufficientDirectExecutionSpaceException : IOException
+{
+    /// <summary>
+    /// The number of free bytes the direct execution required.
+    /// </summary>
+    public long RequiredBytes { get; }
+
+    /// <summary>
+    /// The free bytes actually observed, or <c>null</c> when the free space could not be determined.
+    /// </summary>
+    public long? AvailableBytes { get; }
+
+    internal InsufficientDirectExecutionSpaceException(long requiredBytes, long? availableBytes)
+        : base(
+            availableBytes is null
+                ? "insufficient-direct-execution-space: the free space of the evidence volume could not be "
+                    + "determined."
+                : "insufficient-direct-execution-space: the evidence volume holds "
+                    + availableBytes.Value
+                    + " free bytes, but the direct execution needs "
+                    + requiredBytes
+                    + " bytes.")
+    {
+        RequiredBytes = requiredBytes;
+        AvailableBytes = availableBytes;
+    }
+}
+
+/// <summary>
 /// The single-use, verified preparation state of one internal install.
 /// <para>
 /// A context only ever comes out of <see cref="InternalInstallBackend.CreatePreparedAsync"/>. It owns the read
@@ -1306,16 +1338,12 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
         if (availableBytes is null)
         {
-            throw new IOException(
-                "insufficient-direct-execution-space: the free space of the evidence volume could not be "
-                + "determined.");
+            throw new InsufficientDirectExecutionSpaceException(requiredBytes, null);
         }
 
         if (availableBytes.Value < requiredBytes)
         {
-            throw new IOException(
-                "insufficient-direct-execution-space: the evidence volume holds " + availableBytes.Value
-                + " free bytes, but the direct execution needs " + requiredBytes + " bytes.");
+            throw new InsufficientDirectExecutionSpaceException(requiredBytes, availableBytes.Value);
         }
     }
 
