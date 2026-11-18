@@ -56,7 +56,7 @@
   "Dynamic.Global.Error.SelectModel": "尚未识别到受支持的型号。",
   "Dynamic.Global.Error.RestoreSourceRequired": "请先选择已存在的备份目录。",
   "Dynamic.Global.Error.OutputInsideRestoreSource": "请选择备份来源之外的保存位置。",
-  "Dynamic.Global.Error.RestoreRecordsInsideSource": "工作目录位于所选文件夹内。请选择包含清单的 9008 全局备份文件夹。",
+  "Dynamic.Global.Error.RestoreRecordsInsideSource": "工作目录位于所选文件夹内。请将完整的备份文件夹移动到不包含该工作目录的位置，然后重新选择它以恢复。",
   "Dynamic.Global.Error.RestoreProfileMismatch": "备份身份与可信配置不一致。",
   "Dynamic.Global.Error.RestoreProfileUnsupported": "备份型号 {0} 不受支持。",
   "Dynamic.Global.Error.RestoreRoutePending": "型号 {0} 的全局恢复写入路线尚未开放，本次不会写入设备。",

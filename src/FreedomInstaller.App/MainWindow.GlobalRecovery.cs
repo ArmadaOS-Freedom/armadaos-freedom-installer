@@ -97,7 +97,7 @@ public partial class MainWindow
 
     /// <summary>恢复视图的环境闸门：整个恢复流程要求本机环境、驱动结果与工作目录同时就绪。</summary>
     private bool GlobalRestoreEnvironmentReady =>
-        EnvironmentPlatformReady
+        EnvironmentRestorePlatformReady
         && _environmentDriverResult is { IsReady: true }
         && _workDirectoryReady;
 

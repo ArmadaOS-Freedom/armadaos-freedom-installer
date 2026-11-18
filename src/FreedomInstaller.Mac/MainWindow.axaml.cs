@@ -204,6 +204,8 @@ public partial class MainWindow : Window
         EnvironmentContinueButton.IsEnabled = false;
         EnvironmentGlobalRestoreButton.IsEnabled = false;
         SetText(EnvironmentStatusText, "Dynamic.Environment.Checking");
+        _environmentReady = false;
+        _globalRestoreEnvironmentReady = false;
         try
         {
             var version = Environment.OSVersion.Version;
@@ -214,6 +216,13 @@ public partial class MainWindow : Window
                 systemOk
                     ? M("Dynamic.Mac.Environment.SystemReady", $"{version.Major}.{version.Minor}", RuntimeInformation.OSArchitecture)
                     : M("Dynamic.Mac.Environment.SystemUnsupported"));
+
+            // 9008 工具按型号各一份归档：至少找到一份才能继续，备份那一步再按平板型号取用。
+            // 先提交 EDL 闸门，后续 Android 工具与 boot packer 的 IO 失败不应清除已确认的 EDL 就绪。
+            var edlModels = EdlDeviceProfiles.Models
+                .Where(model => EdlDeviceProfiles.FindByModel(model)?.ArchiveLogicalName is { } name && MacTools.Exists(name))
+                .ToList();
+            _globalRestoreEnvironmentReady = systemOk && edlModels.Count > 0;
 
             await Task.Run(() =>
             {
@@ -234,10 +243,6 @@ public partial class MainWindow : Window
                 missing.Add("fastboot");
             }
 
-            // 9008 工具按型号各一份归档：至少找到一份才能继续，备份那一步再按平板型号取用。
-            var edlModels = EdlDeviceProfiles.Models
-                .Where(model => EdlDeviceProfiles.FindByModel(model)?.ArchiveLogicalName is { } name && MacTools.Exists(name))
-                .ToList();
             if (edlModels.Count == 0)
             {
                 missing.Add("9008 tools");
@@ -250,7 +255,6 @@ public partial class MainWindow : Window
             }
 
             var toolsOk = missing.Count == 0;
-            _globalRestoreEnvironmentReady = systemOk && edlModels.Count > 0;
             SetText(
                 EnvironmentToolsStatusText,
                 toolsOk
@@ -267,10 +271,9 @@ public partial class MainWindow : Window
             SetText(EnvironmentStatusText, _environmentReady ? "Dynamic.Environment.Ready" : "Dynamic.Environment.NotReady");
             EnvironmentContinueButton.IsEnabled = _environmentReady;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException)
         {
             _environmentReady = false;
-            _globalRestoreEnvironmentReady = false;
             SetText(EnvironmentStatusText, "Dynamic.Environment.CheckFailed");
         }
         finally

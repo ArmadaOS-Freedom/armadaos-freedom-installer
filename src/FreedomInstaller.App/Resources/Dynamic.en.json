@@ -56,7 +56,7 @@
   "Dynamic.Global.Error.SelectModel": "No supported model has been detected yet.",
   "Dynamic.Global.Error.RestoreSourceRequired": "Choose an existing backup folder first.",
   "Dynamic.Global.Error.OutputInsideRestoreSource": "Choose a save location outside the backup source.",
-  "Dynamic.Global.Error.RestoreRecordsInsideSource": "The work folder is inside the selected folder. Select the 9008 global backup folder that contains the manifest.",
+  "Dynamic.Global.Error.RestoreRecordsInsideSource": "The work folder is inside the selected folder. Move the complete backup folder to a location that does not contain the work directory, then select it again to restore.",
   "Dynamic.Global.Error.RestoreProfileMismatch": "The backup identity does not match the trusted profile.",
   "Dynamic.Global.Error.RestoreProfileUnsupported": "Backup model {0} is not supported.",
   "Dynamic.Global.Error.RestoreRoutePending": "The global restore write route of model {0} is not open yet; nothing is written to the device.",

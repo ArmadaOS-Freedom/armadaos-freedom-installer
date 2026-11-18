@@ -154,6 +154,12 @@ public partial class MainWindow
                     {
                         if (_globalRestoreSet is null && !string.IsNullOrWhiteSpace(_globalRestoreSource))
                         {
+                            // 打开备份前先只读确认在场 9008：缺失端点优先要求人工进入 EDL，绝不先打开备份。
+                            if (!await HasPresentGlobalEdlAsync(new WindowsEdlEndpointDiscovery(), token))
+                            {
+                                throw new InvalidOperationException(T("Dynamic.Global.Error.ManualEdlRequired"));
+                            }
+
                             // 备份来源必须先完成本地完整校验，之后的任何重启都只针对已核实的身份。
                             SetText(GlobalProgressStatusText, "Dynamic.Global.Status.VerifyingRestoreSource");
                             _globalRestoreSet = await GlobalEdlBackup.OpenAsync(
@@ -259,8 +265,7 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested();
 
         var discovery = new WindowsEdlEndpointDiscovery();
-        bool anyPresentEdl = discovery.ReadPresent()
-            .Any(endpoint => endpoint is not null && IsGlobalEdlInstance(endpoint.DeviceInstanceId));
+        bool anyPresentEdl = await HasPresentGlobalEdlAsync(discovery, token);
 
         // 恢复视图只接管在场的 9008；不在场时在访问 ADB 之前明确要求人工进入 EDL。
         if (_globalRecoveryMode == GlobalRecoveryMode.Restore && !anyPresentEdl)
@@ -408,6 +413,17 @@ public partial class MainWindow
         AppendLocalizedLog(M("Dynamic.Global.Log.Connected", UiText.ModelName(profile.Model), entered.BusSerialHex));
         SetText(GlobalProgressStatusText, "Dynamic.Global.Status.Connected");
     }
+
+    /// <summary>只读在场检查：在工作线程上枚举端点，仅按现有 VID/PID 判定。</summary>
+    private static Task<bool> HasPresentGlobalEdlAsync(IEdlEndpointDiscovery discovery, CancellationToken token) =>
+        Task.Run(
+            () =>
+            {
+                token.ThrowIfCancellationRequested();
+                return discovery.ReadPresent()
+                    .Any(endpoint => endpoint is not null && IsGlobalEdlInstance(endpoint.DeviceInstanceId));
+            },
+            token);
 
     private static bool IsGlobalEdlInstance(string? deviceInstanceId) =>
         !string.IsNullOrEmpty(deviceInstanceId)

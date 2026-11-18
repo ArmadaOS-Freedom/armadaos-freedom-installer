@@ -609,6 +609,13 @@ public partial class MainWindow
                 {
                     if (_globalRestoreSet is null && !string.IsNullOrWhiteSpace(_globalRestoreSource))
                     {
+                        // Before opening the backup, read-only confirm a present 9008: a missing endpoint
+                        // takes priority over the backup and must never open it.
+                        if (!await HasPresentGlobalEdlAsync(Discovery, token))
+                        {
+                            throw new InvalidOperationException(T("Dynamic.Global.Error.ManualEdlRequired"));
+                        }
+
                         SetText(GlobalProgressStatusText, "Dynamic.Global.Status.VerifyingRestoreSource");
                         var source = _globalRestoreSource!;
                         var openProgress = new Progress<GlobalEdlProgress>(RenderGlobalProgress);
@@ -720,8 +727,7 @@ public partial class MainWindow
 
         token.ThrowIfCancellationRequested();
 
-        var present = await Task.Run(() => Discovery.ReadPresent(), token);
-        var anyPresentEdl = present.Any(endpoint => endpoint is not null && IsGlobalEdlInstance(endpoint.DeviceInstanceId));
+        var anyPresentEdl = await HasPresentGlobalEdlAsync(Discovery, token);
 
         if (!anyPresentEdl && _globalRecoveryMode == GlobalRecoveryMode.Restore)
         {
@@ -847,6 +853,17 @@ public partial class MainWindow
         AppendGlobalLog(M("Dynamic.Global.Log.Connected", UiText.ModelName(profile.Model), entered.BusSerialHex));
         SetText(GlobalProgressStatusText, "Dynamic.Global.Status.Connected");
     }
+
+    /// <summary>Read-only presence check: enumerate on a worker thread and match only the existing VID/PID.</summary>
+    private static Task<bool> HasPresentGlobalEdlAsync(IEdlEndpointDiscovery discovery, CancellationToken token) =>
+        Task.Run(
+            () =>
+            {
+                token.ThrowIfCancellationRequested();
+                return discovery.ReadPresent()
+                    .Any(endpoint => endpoint is not null && IsGlobalEdlInstance(endpoint.DeviceInstanceId));
+            },
+            token);
 
     private static bool IsGlobalEdlInstance(string? deviceInstanceId) =>
         !string.IsNullOrEmpty(deviceInstanceId)
