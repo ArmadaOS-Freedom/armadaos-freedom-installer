@@ -67,6 +67,22 @@ public sealed class Tb710fuBootOnlyMaintenanceTests
         Assert.Equal(3, (int)BootMaintenanceBootTrust.AospPreserved);
     }
 
+    [Theory]
+    [InlineData("TB322FC", true)]
+    [InlineData("TB323FU", true)]
+    [InlineData("TB710FU", true)]
+    [InlineData("tb710fu", false)]
+    [InlineData("TB710FU ", false)]
+    [InlineData("TB999XX", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void An_all_zero_misc_defers_to_the_gpt_slot_only_for_the_exact_qualcomm_models(string? model, bool expected)
+    {
+        // TB710FU's bootloader leaves the AOSP boot_control block zero, so every write route (install, boot
+        // maintenance, uninstall) resolves its current slot from the GPT flags; anything else stays refused.
+        Assert.Equal(expected, CurrentBootSlot.UsesQualcommGptSlot(model));
+    }
+
     [Fact]
     public void The_profile_declares_the_boot_only_route_for_tb710fu_only()
     {

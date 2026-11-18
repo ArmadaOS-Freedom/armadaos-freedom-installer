@@ -131,6 +131,29 @@ public sealed class Tb710fuLiveChainTests
             new Dictionary<string, string> { ["a"] = "a", ["b"] = "a" }, files, CancellationToken.None));
     }
 
+    [Fact]
+    public void The_real_all_zero_misc_resolves_the_current_slot_from_the_boot_gpt()
+    {
+        string? directory = LiveDirectory();
+        if (directory is null || !File.Exists(Path.Combine(directory, "gpt_lun4_primary.img")))
+            return;
+
+        // The live TB710FU keeps the AOSP boot_control block at misc offset 2048 entirely zero, so the current slot
+        // must come from the boot_a/boot_b GPT flags, exactly as on the Y700.
+        byte[] misc = File.ReadAllBytes(Path.Combine(directory, "misc.img"));
+        Assert.True(misc.AsSpan(2048, 32).IndexOfAnyExcept((byte)0) < 0);
+        Assert.True(CurrentBootSlot.UsesQualcommGptSlot("TB710FU"));
+
+        byte[] primary = File.ReadAllBytes(Path.Combine(directory, "gpt_lun4_primary.img"));
+        byte[] backup = File.ReadAllBytes(Path.Combine(directory, "gpt_lun4_backup.img"));
+        const int sectorSize = 4096;
+        long alternateLba = BinaryPrimitives.ReadInt64LittleEndian(primary.AsSpan(sectorSize + 32));
+        GptTable table = OriginalGptImporter.Parse(primary, backup, sectorSize, (alternateLba + 1) * sectorSize);
+
+        // Read on 2026-11-18: boot_a active, priority 3, successful; boot_b marked unbootable.
+        Assert.Equal("a", CurrentBootSlot.ResolveActiveSlot(table));
+    }
+
     private static EdlCapturedRegion Region(string role, string path)
     {
         VerifiedEdlFile claim = Claim(path);
