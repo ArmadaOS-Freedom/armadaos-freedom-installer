@@ -218,6 +218,6 @@ public sealed class UpdatePackageImportTests
     {
         var version = typeof(PackageImporter).Assembly.GetName().Version;
         Assert.NotNull(version);
-        Assert.Equal("0.9.1", version!.ToString(3));
+        Assert.Equal("0.9.5", version!.ToString(3));
     }
 }

@@ -454,10 +454,12 @@ public partial class MainWindow
 
             QualcommDriverFiles? files = null;
             AndroidDriverFiles? androidFiles = null;
+            var selection = WindowsDriverInstaller.SelectPackages(
+                NeedsDriverInstall(_environmentDriverResult), EnvironmentAndroidDriverMissing);
             try
             {
-                if (NeedsDriverInstall(_environmentDriverResult)) files = BundledQualcommDriver.EnsureAvailable();
-                if (EnvironmentAndroidDriverMissing) androidFiles = BundledAndroidDriver.EnsureAvailable();
+                if (selection.InstallQualcomm) files = BundledQualcommDriver.EnsureAvailable();
+                if (selection.InstallAndroid) androidFiles = BundledAndroidDriver.EnsureAvailable();
             }
             catch (Exception)
             {
@@ -553,7 +555,7 @@ public partial class MainWindow
         }
     }
 
-    private bool CanInstallDriverNow() => EnvironmentPlatformReady && EnvironmentDriverMissing;
+    private bool CanInstallDriverNow() => EnvironmentPlatformReady;
 
     // ---------- 可用性与日志 ----------
 
@@ -562,10 +564,7 @@ public partial class MainWindow
         if (_closed) return;
         var idle = !_busy && !_environmentDriverInstalling;
         EnvironmentCheckButton.IsEnabled = idle;
-        EnvironmentInstallDriverButton.Visibility =
-            EnvironmentDriverMissing ? Visibility.Visible : Visibility.Collapsed;
-        EnvironmentInstallDriverButton.IsEnabled =
-            idle && EnvironmentDriverMissing && EnvironmentPlatformReady;
+        EnvironmentInstallDriverButton.IsEnabled = idle && CanInstallDriverNow();
         EnvironmentContinueButton.IsEnabled = idle && EnvironmentIsReady;
         RefreshTemporaryWorkDirectoryActions();
         // 受保护 TF 现场存在时不允许经环境页「返回首页」丢掉已知状态。
