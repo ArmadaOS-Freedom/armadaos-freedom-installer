@@ -181,8 +181,13 @@ class MacBootMaintenanceParityTests(unittest.TestCase):
         wpf = _messages(WPF_CODE, prefixes) - _WPF_ONLY_MESSAGES
         mac_shown = _messages(MAC_CODE, prefixes) | _keys(self.mac, "Dynamic.")
         self.assertEqual(set(), wpf - mac_shown)
-        # Anything the Mac code shows beyond the WPF code is a text the WPF markup shows (e.g. a picker title).
+        # Anything the Mac code shows beyond the WPF code is a text the WPF markup shows (e.g. a picker title), or a
+        # result text the WPF code reaches by concatenation ("...Status.Outcome." + result.Outcome).
         extra = _messages(MAC_CODE, prefixes) - _messages(WPF_CODE, prefixes)
+        outcome = "Dynamic.BootMaintenance.Status.Outcome."
+        wpf_code = "\n".join(path.read_text(encoding="utf-8") for path in WPF_CODE)
+        if f'"{outcome}" + result.Outcome' in wpf_code:
+            extra = {key for key in extra if not key.startswith(outcome)}
         self.assertEqual(set(), extra - _keys(WPF_XAML.read_text(encoding="utf-8"), "Dynamic."))
 
     def test_code_makes_the_same_core_calls(self):
@@ -228,8 +233,59 @@ class MacBootMaintenanceParityTests(unittest.TestCase):
         code = _code(MAC_CODE)
         closing = code[code.index("private async Task<bool> OnBootMaintenanceClosingAsync"):]
         fallback = closing[closing.index("await ConfirmLeaveBootMaintenanceAsync()"):]
-        self.assertIn("_bootMaintenanceLeaveProbeFailed", fallback[:fallback.index("ResetBootMaintenanceUiState();")])
+        refused = fallback[:fallback.index("ResetBootMaintenanceUiState();")]
+        # The failed probe must guard the close-only warning itself: an early "return true" on the flag would still
+        # mention it, but would leave the user with no way to close.
+        guarded = re.search(
+            r"if \(_bootMaintenanceLeaveProbeFailed\s*&& await MessageDialog\.AskAsync\(\s*this,\s*"
+            r'T\("Dynamic\.Mac\.Close\.ProbeFailedTitle"\),\s*T\("Dynamic\.Mac\.Close\.ProbeFailedBody"\),'
+            r"[^)]*\)[^)]*\)\)\)\s*\{(?P<body>.*?)\}\s*return true;",
+            refused,
+            re.S,
+        )
+        self.assertIsNotNone(guarded, "the failed leave probe does not offer the close-only warning")
+        body = guarded.group("body")
+        # Approving the warning reaches the same cleanup as a normal close, then really closes.
+        for step in ("_closeConfirmed = true;", "DisposeBootMaintenanceOnClose();", "DisposeInternalInstall();", "Close();"):
+            self.assertIn(step, body)
+        self.assertLess(body.index("DisposeBootMaintenanceOnClose();"), body.index("Close();"))
+        self.assertNotRegex(refused[:refused.index("_bootMaintenanceLeaveProbeFailed")], r"\breturn true;")
         self.assertIn("_bootMaintenanceLeaveProbeFailed = true;", code)
+
+    def test_a_completed_session_starts_no_new_backup(self):
+        code = _code(MAC_CODE)
+        gate = code[code.index("BootMaintenanceBackupButton.IsEnabled = idle"):]
+        self.assertIn("!IsBootMaintenanceCompleted", gate[:gate.index(";")])
+        for entry in ("private async Task BackupBootMaintenanceAsync()", "private async Task BackupBootMaintenanceEdlAsync()"):
+            body = code[code.index(entry):]
+            self.assertIn("IsBootMaintenanceCompleted", body[:body.index("return;")])
+
+    def test_the_9008_route_replaces_a_conflicting_backup_folder(self):
+        code = _code(MAC_CODE)
+        check = code[code.index('"Dynamic.BootMaintenance.Edl.NeedHistory"'):]
+        check = check[:check.index("ResetBootMaintenanceCheckState();")]
+        # A saved folder inside a source reopens the picker, and a newly picked folder is checked before it is saved.
+        self.assertRegex(check, r"BootMaintenanceParentConflict\(parent\) is not null\)\s*\{\s*var folder = await PickBootMaintenanceFolderAsync")
+        self.assertLess(check.index("BootMaintenanceParentConflict(folder)"), check.index("ApplyBootMaintenanceBackupParent(folder);"))
+
+    def test_an_edl_backup_attempt_clears_the_previous_result(self):
+        code = _code(MAC_CODE)
+        edl = code[code.index("private async Task BackupBootMaintenanceEdlAsync()"):]
+        start = edl[edl.index("ReleaseBootMaintenanceBackupObject();"):edl.index("await RunBusyAsync(")]
+        self.assertIn("BootMaintenanceBackupProgressBar.Value = 0;", start)
+        self.assertIn('SetText(BootMaintenanceBackupVerifiedText, M("Dynamic.InternalInstall.Backup.RunningNote"));', start)
+        failures = edl[edl.index("await RunBusyAsync("):edl.index("private void RenderBootMaintenanceBackupSuccess")]
+        self.assertEqual(failures.count('"Dynamic.InternalInstall.Backup.FailedNote"'), 2)
+
+    def test_an_execution_exception_is_not_reported_as_a_preparation_failure(self):
+        code = _code(MAC_CODE)
+        render = code[code.index("private void RenderBootMaintenanceRuntimeStatus"):]
+        error = render[render.index("else if (_bootMaintenanceLastError is not null)"):]
+        error = error[:error.index("else\n")] if "else\n" in error else error[:600]
+        self.assertIn("_bootMaintenanceExecuteAttempted", error)
+        self.assertIn("HasUnconfirmedBootMaintenanceWrite", error)
+        self.assertIn('"Dynamic.BootMaintenance.Status.Outcome.UnknownWriteOutcome"', error)
+        self.assertIn('"Dynamic.BootMaintenance.Status.Outcome.Failed"', error)
 
     def test_completed_run_is_kept_until_the_session_is_released(self):
         code = _code(MAC_CODE)

@@ -680,8 +680,11 @@ public partial class MainWindow
             && _bootMaintenanceEdlEntry is not null
             && _bootMaintenanceEdlTools is not null;
         BootMaintenanceBackupBrowseButton.IsEnabled = idle && !protectedState && checkedDevice;
+        // A completed session keeps its result and backup on screen until leave, but never starts another backup:
+        // its client belongs to a session that has ended and the tablet may already be back in Android.
         BootMaintenanceBackupButton.IsEnabled = idle
             && !protectedState
+            && !IsBootMaintenanceCompleted
             && checkedDevice
             && validParent
             && (!HasBootMaintenanceLiveEdlState || canReuseSession);
@@ -1066,9 +1069,10 @@ public partial class MainWindow
             return;
         }
 
-        // 尚无有效备份父目录时先选择：必须是已存在的独立目录，且不在来源目录里。
+        // 备份父目录必须是已存在的独立目录，且在 ResetCheck / 临时工具解包之前落在来源目录之外。已保存的目录
+        // 不满足时同样重新选择：这条路线在历史核对通过前到不了备份页，没有别处可以换掉它。
         var parent = _bootMaintenanceBackupParent;
-        if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
+        if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent) || BootMaintenanceParentConflict(parent) is not null)
         {
             var folder = await PickBootMaintenanceFolderAsync("Dynamic.InternalInstall.Backup.SelectFolderTitle");
             if (folder is null)
@@ -1077,18 +1081,15 @@ public partial class MainWindow
                 return;
             }
 
-            ApplyBootMaintenanceBackupParent(folder);
-            parent = folder;
-        }
-
-        // 无论新选还是沿用已有父目录，都必须在 ResetCheck / 临时工具解包之前落在来源目录之外。
-        foreach (var source in new[] { _bootMaintenanceOriginalDirectory, _bootMaintenanceProjectDirectory })
-        {
-            if (!string.IsNullOrWhiteSpace(source) && !IsGlobalOutputOutsideSource(parent, source!))
+            // 新选的目录先核对，冲突就不保存，下次仍会重新选择。
+            if (BootMaintenanceParentConflict(folder) is { } conflict)
             {
-                SetText(BootMaintenanceCheckStatusText, M("Dynamic.InternalInstall.Backup.ExistingWorkRootConflict", source!));
+                SetText(BootMaintenanceCheckStatusText, M("Dynamic.InternalInstall.Backup.ExistingWorkRootConflict", conflict));
                 return;
             }
+
+            ApplyBootMaintenanceBackupParent(folder);
+            parent = folder;
         }
 
         // 空闲时清掉上一轮安卓检查结论；已有 9008 会话与工具链不受影响。
@@ -1205,6 +1206,20 @@ public partial class MainWindow
         BootMaintenanceBackupFolderBox.Text = folder;
     }
 
+    /// <summary>The selected stock or project source that <paramref name="parent"/> lies inside, or null.</summary>
+    private string? BootMaintenanceParentConflict(string parent)
+    {
+        foreach (var source in new[] { _bootMaintenanceOriginalDirectory, _bootMaintenanceProjectDirectory })
+        {
+            if (!string.IsNullOrWhiteSpace(source) && !IsGlobalOutputOutsideSource(parent, source!))
+            {
+                return source;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// 「浏览…」：只选择一个已存在的文件夹，不创建目录、不触发备份、不碰设备。
     /// 换目录会作废上一份备份对象（只释放只读锁），已有的 9008 会话与工具链保持不动。
@@ -1238,7 +1253,7 @@ public partial class MainWindow
     /// </summary>
     private async Task BackupBootMaintenanceAsync()
     {
-        if (_busy || _bootMaintenanceDeviceOperationActive || ProtectedBootMaintenanceState)
+        if (_busy || _bootMaintenanceDeviceOperationActive || ProtectedBootMaintenanceState || IsBootMaintenanceCompleted)
         {
             return;
         }
@@ -1323,6 +1338,7 @@ public partial class MainWindow
         // 上一份备份对象与其派生结果先作废；客户端、工具链与 9008 证据保持原样。
         ReleaseBootMaintenanceBackupObject();
         RenderBootMaintenanceBackupDetail();
+        BootMaintenanceBackupProgressBar.Value = 0;
         BootMaintenanceBackupProgressBar.IsIndeterminate = true;
         // 正常进行中不得预告失败：这里只写「正在准备并校验」。
         SetText(BootMaintenanceBackupVerifiedText, M("Dynamic.InternalInstall.Backup.RunningNote"));
@@ -1504,7 +1520,8 @@ public partial class MainWindow
             || _bootMaintenanceDeviceOperationActive
             || !_bootMaintenanceAlreadyEdl
             || !HasBootMaintenanceDeviceProof
-            || ProtectedBootMaintenanceState)
+            || ProtectedBootMaintenanceState
+            || IsBootMaintenanceCompleted)
         {
             return;
         }
@@ -1538,8 +1555,12 @@ public partial class MainWindow
         RenderBootMaintenanceBackupDetail();
 
         _bootMaintenanceDeviceOperationActive = true;
+        // A new attempt starts from nothing: the previous attempt's 100 % and KeepEdl note must not survive a failure
+        // that happens before the first progress report (the default route does the same).
+        BootMaintenanceBackupProgressBar.Value = 0;
         BootMaintenanceBackupProgressBar.IsIndeterminate = true;
         SetText(BootMaintenanceBackupStatusText, M("Dynamic.InternalInstall.Backup.RunningNote"));
+        SetText(BootMaintenanceBackupVerifiedText, M("Dynamic.InternalInstall.Backup.RunningNote"));
 
         var parentPath = parent!;
         try
@@ -1568,14 +1589,18 @@ public partial class MainWindow
                 {
                     _bootMaintenanceBackup = null;
                     BootMaintenanceBackupProgressBar.IsIndeterminate = false;
+                    BootMaintenanceBackupProgressBar.Value = 0;
                     SetText(BootMaintenanceBackupStatusText, M("Dynamic.BootMaintenance.Edl.ReadOnlyFailed"));
+                    SetText(BootMaintenanceBackupVerifiedText, M("Dynamic.InternalInstall.Backup.FailedNote"));
                     AppendBootMaintenanceLog(M("Dynamic.RawValue", ex.Message));
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     _bootMaintenanceBackup = null;
                     BootMaintenanceBackupProgressBar.IsIndeterminate = false;
+                    BootMaintenanceBackupProgressBar.Value = 0;
                     SetText(BootMaintenanceBackupStatusText, M("Dynamic.BootMaintenance.Edl.ReadOnlyFailed"));
+                    SetText(BootMaintenanceBackupVerifiedText, M("Dynamic.InternalInstall.Backup.FailedNote"));
                     AppendBootMaintenanceLog(M("Dynamic.RawValue", $"{ex.GetType().FullName}: {ex.Message}"));
                 }
                 finally
@@ -2379,7 +2404,16 @@ public partial class MainWindow
         }
         else if (_bootMaintenanceLastError is not null)
         {
-            SetText(BootMaintenanceConfirmStatusText, M("Dynamic.BootMaintenance.Status.PrepareFailed"));
+            // An exception from ExecuteAsync is an execution failure, not a preparation one: preparation had already
+            // succeeded. When the backend snapshot still holds an unconfirmed write, say so instead of implying that
+            // nothing was written.
+            SetText(
+                BootMaintenanceConfirmStatusText,
+                !_bootMaintenanceExecuteAttempted
+                    ? M("Dynamic.BootMaintenance.Status.PrepareFailed")
+                    : HasUnconfirmedBootMaintenanceWrite
+                        ? M("Dynamic.BootMaintenance.Status.Outcome.UnknownWriteOutcome")
+                        : M("Dynamic.BootMaintenance.Status.Outcome.Failed"));
         }
         else
         {
