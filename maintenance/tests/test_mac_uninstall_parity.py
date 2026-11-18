@@ -325,6 +325,19 @@ class MacUninstallParityTests(unittest.TestCase):
         self.assertIn("_uninstallLeaveProbeFailed", fallback[:fallback.index("SafeResetUninstallState();")])
         self.assertIn("_uninstallLeaveProbeFailed = true;", code)
 
+    def test_completed_session_never_reaches_the_unproven_warning(self):
+        # An accepted reset clears the client's proof: a completed uninstall must reach the completed cleanup instead.
+        code = MAC_CODE[0].read_text(encoding="utf-8")
+        closing = code[code.index("private async Task<bool> OnUninstallClosingAsync"):]
+        close_only = closing[:closing.index("await ConfirmLeaveUninstallAsync()")]
+        self.assertIn("bool sessionOver = _uninstallCompleted", close_only)
+        self.assertIn("(!sessionOver && _uninstallEdlClient is { HasInitialSaharaProof: false })", close_only)
+
+    def test_default_preparation_uses_the_proven_lock_state(self):
+        code = MAC_CODE[0].read_text(encoding="utf-8")
+        self.assertIn("_uninstallDeviceCheck!.FastbootLockState", code)
+        self.assertNotIn("_uninstallDeviceCheck!.Android!.Identity.BootloaderState", code)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1787,8 +1787,11 @@ public partial class MainWindow
         var fresh = _uninstallBackup;
         var parent = _uninstallBackupParent;
         var workRoot = UninstallWorkRoot;
+        // The lock state the check proved (the page shows the same value). On TB710FU the check reads it from the
+        // boot properties while the Android identity keeps the ADB "Unknown", so the identity value would refuse a
+        // default preparation the check accepted.
         var lockState = HasCheckedUninstallDevice
-            ? _uninstallDeviceCheck!.Android!.Identity.BootloaderState
+            ? _uninstallDeviceCheck!.FastbootLockState
             : BootloaderState.Unknown;
 
         _uninstallOperationActive = true;
@@ -2832,13 +2835,17 @@ public partial class MainWindow
 
             // 未解决写入 / 未知复位 / 进入 9008 却没有客户端，或客户端从未取得初始 Sahara 证明（离开的热探针必然被
             // 拒绝，离开无法完成）：只提供「仅关闭窗口」的默认「否」警告，不发任何设备命令，保留全部现场。
+            // A completed uninstall (or an acknowledged leave reset) keeps its client, whose proof the reset cleared: it
+            // goes to the completed cleanup below, never to this warning.
+            bool sessionOver = _uninstallCompleted || (_uninstallResetAttempted && _uninstallResetAcked);
             if (HasUnresolvedUninstallState
                 || (HasUninstallLiveEdlState && _uninstallEdlClient is null)
-                || _uninstallEdlClient is { HasInitialSaharaProof: false })
+                || (!sessionOver && _uninstallEdlClient is { HasInitialSaharaProof: false }))
             {
                 // An unproven client is a pre-write session whose initial probe failed: say so instead of claiming
                 // an unconfirmed write.
-                bool unproven = !HasUnresolvedUninstallState && _uninstallEdlClient is { HasInitialSaharaProof: false };
+                bool unproven = !HasUnresolvedUninstallState && !sessionOver
+                    && _uninstallEdlClient is { HasInitialSaharaProof: false };
                 if (await MessageDialog.AskAsync(
                         this,
                         T(unproven ? "Dynamic.Mac.Close.ProbeFailedTitle" : "Dynamic.UserdataUninstall.Exit.CloseUnconfirmedTitle"),
@@ -2847,6 +2854,13 @@ public partial class MainWindow
                         T("Dynamic.Mac.Dialog.No")))
                 {
                     _closeConfirmed = true;
+                    if (unproven)
+                    {
+                        // Pre-write: release what this window owns, like the normal close path; no device command.
+                        DisposeUninstallOnClose();
+                        DisposeInternalInstall();
+                    }
+
                     Close();
                 }
 
@@ -2866,7 +2880,10 @@ public partial class MainWindow
                         T("Dynamic.Mac.Dialog.Yes"),
                         T("Dynamic.Mac.Dialog.No")))
                 {
+                    // Pre-write: release what this window owns, like the normal close path; no device command.
                     _closeConfirmed = true;
+                    DisposeUninstallOnClose();
+                    DisposeInternalInstall();
                     Close();
                 }
 
