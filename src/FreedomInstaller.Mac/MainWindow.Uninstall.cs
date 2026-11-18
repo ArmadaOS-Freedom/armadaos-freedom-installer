@@ -1786,7 +1786,9 @@ public partial class MainWindow
         var entry = _uninstallEdlEntry;
         var fresh = _uninstallBackup;
         var parent = _uninstallBackupParent;
-        var workRoot = UninstallWorkRoot;
+        // Created inside the caught preparation block below: an unwritable cache root is a preparation failure (backup
+        // and session kept), never an exception escaping the async void handler.
+        var workRoot = string.Empty;
         // The lock state the check proved (the page shows the same value). A check that reads it from the boot
         // properties instead of fastboot (the TB710FU route, once its write route is open) leaves the Android
         // identity at the ADB "Unknown"; the proven value keeps both routes consistent.
@@ -1807,6 +1809,7 @@ public partial class MainWindow
                 var acceptProgress = true;
                 try
                 {
+                    workRoot = UninstallWorkRoot;
                     SetText(UninstallPrepareStatusText, M("Dynamic.UserdataUninstall.Status.OpeningOriginal"));
 
                     var recoverySource = await GetUninstallRecoverySourceAsync(fresh, parent, token);
@@ -2298,10 +2301,23 @@ public partial class MainWindow
             return;
         }
 
+        // Resolved before the one-shot attempt flag: an unwritable cache root fails here as a plain pre-write failure,
+        // never as an unknown outcome or an exception escaping the async void handler.
+        string workRoot;
+        try
+        {
+            workRoot = UninstallWorkRoot;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            AppendUninstallLog(M("Dynamic.RawValue", $"{exception.GetType().FullName}: {exception.Message}"));
+            SetUninstallExitStatus(M("Dynamic.UserdataUninstall.Runtime.PrewriteFailed"));
+            return;
+        }
+
         _uninstallExecuteAttempted = true;
         _uninstallOperationActive = true;
         UninstallProgressBar.IsIndeterminate = true;
-        var workRoot = UninstallWorkRoot;
 
         try
         {
