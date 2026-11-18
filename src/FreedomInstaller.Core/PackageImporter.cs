@@ -273,187 +273,190 @@ public static partial class PackageImporter
                 return new ImportedPackage(sourcePath, fullSource, expectedModel, legacy, null, null);
             }
 
-            using var ciArtifact = PrepareCiArtifactSource(
+            var ciArtifact = PrepareCiArtifactSource(
                 fullSource, expectedModel, "install",
                 typeof(PackageImporter).Assembly.GetName().Version!.ToString(3),
                 root, UpdatePackageDescriptor.VerifyAndParse, token);
-            var source = ResolveArchiveSource(ciArtifact?.MediaPath ?? fullSource);
-            token.ThrowIfCancellationRequested();
-
-            var updateDescriptor = ReadUpdateDescriptor(
-                source,
-                expectedModel,
-                "install",
-                typeof(PackageImporter).Assembly.GetName().Version!.ToString(3),
-                required: false,
-                token);
-
-            if (source.IsNativeRar)
+            return WithPreparedCiArtifact(ciArtifact, () =>
             {
-                // A genuine RAR volume set has its own per-volume headers, so it is read by the
-                // multi-volume RAR reader in PackageImporter.Archives.cs, never by concatenation.
-                return ImportArchive(source, sourcePath, expectedModel, target, root, token);
-            }
-
-            // A signed import on a platform whose file sharing is only advisory, or from a Windows
-            // network source, verifies and extracts from one private copy of the logical archive, so
-            // the bytes that were checked are exactly the bytes that are used. A signed import from a
-            // local Windows drive keeps FileShare.Read handles on every part for the whole
-            // verification and extraction window and therefore needs no extra copy.
-            using var snapshot = SignedImportSnapshot(source, updateDescriptor, root, token);
-            using var stream = (Stream?)snapshot?.Stream ?? source.OpenStream();
-
-            if (updateDescriptor is not null)
-            {
-                VerifyUpdateMedia(source, stream, updateDescriptor, token, snapshot);
-            }
-
-            if (!HasZipHeader(stream))
-            {
-                if (snapshot is not null)
-                {
-                    // A signed descriptor was verified above, which already required a ZIP container.
-                    // Never fall back to the caller's files once the snapshot is in use.
-                    reasons.Add("签名升级包不是 ZIP 归档，拒绝使用。");
-                    return Invalid(sourcePath, expectedModel, reasons);
-                }
-
-                // Everything that is not a ZIP container goes through the general archive reader in
-                // PackageImporter.Archives.cs; the ZIP path below is untouched.
-                return ImportArchive(source, sourcePath, expectedModel, target, root, token);
-            }
-
-            using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
-
-            var items = new List<ArchiveItem>();
-            if (!TryIndexArchive(archive, items, reasons))
-            {
-                return Invalid(sourcePath, expectedModel, reasons);
-            }
-
-            var bundleItem = items.FirstOrDefault(
-                item => !item.IsDirectory
-                    && string.Equals(item.Name, BundleFileName, StringComparison.OrdinalIgnoreCase));
-
-            if (bundleItem is null)
-            {
-                reasons.Add($"合集缺少 {BundleFileName}。");
-                return Invalid(sourcePath, expectedModel, reasons);
-            }
-
-            var rawBundle = ReadLimited(bundleItem.Entry, MaxBundleIndexBytes, token);
-
-            if (!TryReadBundle(
-                rawBundle,
-                expectedModel,
-                reasons,
-                out var bundleVersion,
-                out var selectedDirectory,
-                out var sharedMappings))
-            {
-                return Invalid(sourcePath, expectedModel, reasons);
-            }
-
-            if (updateDescriptor is not null)
-            {
-                if (!string.Equals(updateDescriptor.Version, bundleVersion, StringComparison.Ordinal))
-                {
-                    reasons.Add($"升级包描述文件版本 {updateDescriptor.Version} 与合集版本 {bundleVersion} 不一致，拒绝使用。");
-                    return Invalid(sourcePath, expectedModel, reasons);
-                }
-
-                var expectedManifestEntry = selectedDirectory + "/" + ManifestFileName;
-                var declaredManifestEntry = updateDescriptor.Root
-                    .GetProperty("modelManifests")
-                    .GetProperty(expectedModel)
-                    .GetString();
-
-                if (!string.Equals(declaredManifestEntry, expectedManifestEntry, StringComparison.Ordinal))
-                {
-                    reasons.Add($"升级包型号清单路径 {declaredManifestEntry} 与合集所选路径 {expectedManifestEntry} 不一致，拒绝使用。");
-                    return Invalid(sourcePath, expectedModel, reasons);
-                }
-            }
-
-            token.ThrowIfCancellationRequested();
-
-            var nodes = items
-                .Select(item => new ArchiveNode(item.Name, item.IsDirectory))
-                .ToList();
-
-            if (!TryBuildExtractionPlan(nodes, selectedDirectory, sharedMappings, reasons, out var plan))
-            {
-                return Invalid(sourcePath, expectedModel, reasons);
-            }
-
-            var stagePath = Path.Combine(root, Guid.NewGuid().ToString("N"));
-            var stageDirectory = Directory.CreateDirectory(stagePath).FullName;
-            stage = stageDirectory;
-
-            var entriesByName = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
-            foreach (var item in items)
-            {
-                entriesByName[item.Name] = item.Entry;
-            }
-
-            foreach (var planned in plan)
-            {
+                var source = ResolveArchiveSource(ciArtifact?.MediaPath ?? fullSource);
                 token.ThrowIfCancellationRequested();
 
-                var extractionPath = Path.GetFullPath(Path.Combine(stageDirectory, planned.Destination));
-                if (!IsBeneath(extractionPath, stageDirectory))
+                var updateDescriptor = ReadUpdateDescriptor(
+                    source,
+                    expectedModel,
+                    "install",
+                    typeof(PackageImporter).Assembly.GetName().Version!.ToString(3),
+                    required: false,
+                    token);
+
+                if (source.IsNativeRar)
                 {
-                    throw new InvalidDataException($"条目路径越出解包目录，拒绝写入：{planned.SourceName}。");
+                    // A genuine RAR volume set has its own per-volume headers, so it is read by the
+                    // multi-volume RAR reader in PackageImporter.Archives.cs, never by concatenation.
+                    return ImportArchive(source, sourcePath, expectedModel, target, root, token);
                 }
 
-                if (planned.IsDirectory)
+                // A signed import on a platform whose file sharing is only advisory, or from a Windows
+                // network source, verifies and extracts from one private copy of the logical archive, so
+                // the bytes that were checked are exactly the bytes that are used. A signed import from a
+                // local Windows drive keeps FileShare.Read handles on every part for the whole
+                // verification and extraction window and therefore needs no extra copy.
+                using var snapshot = SignedImportSnapshot(source, updateDescriptor, root, token);
+                using var stream = (Stream?)snapshot?.Stream ?? source.OpenStream();
+
+                if (updateDescriptor is not null)
                 {
-                    Directory.CreateDirectory(extractionPath);
-                    continue;
+                    VerifyUpdateMedia(source, stream, updateDescriptor, token, snapshot);
                 }
 
-                if (!entriesByName.TryGetValue(planned.SourceName, out var entry))
+                if (!HasZipHeader(stream))
                 {
-                    throw new InvalidDataException($"合集缺少条目：{planned.SourceName}。");
+                    if (snapshot is not null)
+                    {
+                        // A signed descriptor was verified above, which already required a ZIP container.
+                        // Never fall back to the caller's files once the snapshot is in use.
+                        reasons.Add("签名升级包不是 ZIP 归档，拒绝使用。");
+                        return Invalid(sourcePath, expectedModel, reasons);
+                    }
+
+                    // Everything that is not a ZIP container goes through the general archive reader in
+                    // PackageImporter.Archives.cs; the ZIP path below is untouched.
+                    return ImportArchive(source, sourcePath, expectedModel, target, root, token);
                 }
 
-                var parent = Path.GetDirectoryName(extractionPath);
-                if (parent is not null)
+                using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+
+                var items = new List<ArchiveItem>();
+                if (!TryIndexArchive(archive, items, reasons))
                 {
-                    Directory.CreateDirectory(parent);
+                    return Invalid(sourcePath, expectedModel, reasons);
                 }
 
-                using var input = entry.Open();
-                using var output = new FileStream(
-                    extractionPath,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    CopyBufferSize,
-                    FileOptions.SequentialScan);
-                CopyCancellable(input, output, token);
-            }
+                var bundleItem = items.FirstOrDefault(
+                    item => !item.IsDirectory
+                        && string.Equals(item.Name, BundleFileName, StringComparison.OrdinalIgnoreCase));
 
-            token.ThrowIfCancellationRequested();
+                if (bundleItem is null)
+                {
+                    reasons.Add($"合集缺少 {BundleFileName}。");
+                    return Invalid(sourcePath, expectedModel, reasons);
+                }
 
-            var validation = PackageReader.Validate(stageDirectory, expectedModel, target);
-            token.ThrowIfCancellationRequested();
+                var rawBundle = ReadLimited(bundleItem.Entry, MaxBundleIndexBytes, token);
 
-            if (!validation.IsValid)
-            {
-                reasons.AddRange(validation.Reasons);
-                DeleteStage(stage, root, reasons);
-                return Invalid(sourcePath, expectedModel, reasons);
-            }
+                if (!TryReadBundle(
+                    rawBundle,
+                    expectedModel,
+                    reasons,
+                    out var bundleVersion,
+                    out var selectedDirectory,
+                    out var sharedMappings))
+                {
+                    return Invalid(sourcePath, expectedModel, reasons);
+                }
 
-            if (!string.Equals(validation.Version, bundleVersion, StringComparison.Ordinal))
-            {
-                reasons.Add($"合集版本 {bundleVersion} 与所选安装包版本 {validation.Version} 不一致，拒绝使用。");
-                DeleteStage(stage, root, reasons);
-                return Invalid(sourcePath, expectedModel, reasons);
-            }
+                if (updateDescriptor is not null)
+                {
+                    if (!string.Equals(updateDescriptor.Version, bundleVersion, StringComparison.Ordinal))
+                    {
+                        reasons.Add($"升级包描述文件版本 {updateDescriptor.Version} 与合集版本 {bundleVersion} 不一致，拒绝使用。");
+                        return Invalid(sourcePath, expectedModel, reasons);
+                    }
 
-            return new ImportedPackage(sourcePath, stageDirectory, expectedModel, validation, stageDirectory, root, updateDescriptor);
+                    var expectedManifestEntry = selectedDirectory + "/" + ManifestFileName;
+                    var declaredManifestEntry = updateDescriptor.Root
+                        .GetProperty("modelManifests")
+                        .GetProperty(expectedModel)
+                        .GetString();
+
+                    if (!string.Equals(declaredManifestEntry, expectedManifestEntry, StringComparison.Ordinal))
+                    {
+                        reasons.Add($"升级包型号清单路径 {declaredManifestEntry} 与合集所选路径 {expectedManifestEntry} 不一致，拒绝使用。");
+                        return Invalid(sourcePath, expectedModel, reasons);
+                    }
+                }
+
+                token.ThrowIfCancellationRequested();
+
+                var nodes = items
+                    .Select(item => new ArchiveNode(item.Name, item.IsDirectory))
+                    .ToList();
+
+                if (!TryBuildExtractionPlan(nodes, selectedDirectory, sharedMappings, reasons, out var plan))
+                {
+                    return Invalid(sourcePath, expectedModel, reasons);
+                }
+
+                var stagePath = Path.Combine(root, Guid.NewGuid().ToString("N"));
+                var stageDirectory = Directory.CreateDirectory(stagePath).FullName;
+                stage = stageDirectory;
+
+                var entriesByName = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
+                foreach (var item in items)
+                {
+                    entriesByName[item.Name] = item.Entry;
+                }
+
+                foreach (var planned in plan)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    var extractionPath = Path.GetFullPath(Path.Combine(stageDirectory, planned.Destination));
+                    if (!IsBeneath(extractionPath, stageDirectory))
+                    {
+                        throw new InvalidDataException($"条目路径越出解包目录，拒绝写入：{planned.SourceName}。");
+                    }
+
+                    if (planned.IsDirectory)
+                    {
+                        Directory.CreateDirectory(extractionPath);
+                        continue;
+                    }
+
+                    if (!entriesByName.TryGetValue(planned.SourceName, out var entry))
+                    {
+                        throw new InvalidDataException($"合集缺少条目：{planned.SourceName}。");
+                    }
+
+                    var parent = Path.GetDirectoryName(extractionPath);
+                    if (parent is not null)
+                    {
+                        Directory.CreateDirectory(parent);
+                    }
+
+                    using var input = entry.Open();
+                    using var output = new FileStream(
+                        extractionPath,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        CopyBufferSize,
+                        FileOptions.SequentialScan);
+                    CopyCancellable(input, output, token);
+                }
+
+                token.ThrowIfCancellationRequested();
+
+                var validation = PackageReader.Validate(stageDirectory, expectedModel, target);
+                token.ThrowIfCancellationRequested();
+
+                if (!validation.IsValid)
+                {
+                    reasons.AddRange(validation.Reasons);
+                    DeleteStage(stage, root, reasons);
+                    return Invalid(sourcePath, expectedModel, reasons);
+                }
+
+                if (!string.Equals(validation.Version, bundleVersion, StringComparison.Ordinal))
+                {
+                    reasons.Add($"合集版本 {bundleVersion} 与所选安装包版本 {validation.Version} 不一致，拒绝使用。");
+                    DeleteStage(stage, root, reasons);
+                    return Invalid(sourcePath, expectedModel, reasons);
+                }
+
+                return new ImportedPackage(sourcePath, stageDirectory, expectedModel, validation, stageDirectory, root, updateDescriptor);
+            });
         }
         catch (OperationCanceledException)
         {

@@ -135,13 +135,35 @@ public sealed partial class OfflineUpdatePackageTests
         Assert.Empty(Directory.EnumerateFileSystemEntries(work));
     }
 
-    [Fact]
-    public void CiWrapperRootBundleIsRejectedWithoutStaging()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CiWrapperRootBundleIsRejectedWithoutStaging(bool moveToDirectories)
     {
         var label = "ciwrap-root-bundle";
         var c = new Case(Path.Combine(root, label), splitCount: 3, operation: "install");
         var source = WriteCiWrapper(c, label, "", entries =>
-            entries["bundle.json"] = Encoding.UTF8.GetBytes("{}"));
+        {
+            if (moveToDirectories)
+            {
+                var moved = entries.ToArray();
+                entries.Clear();
+                foreach (var pair in moved)
+                {
+                    if (pair.Key == "bundle.json")
+                    {
+                        continue;
+                    }
+
+                    var target = pair.Key is "update.zip.update.json" or "update.zip.update.json.sig"
+                        ? "ci/meta/" + pair.Key
+                        : "ci/media/" + pair.Key;
+                    entries[target] = pair.Value;
+                }
+            }
+
+            entries["bundle.json"] = Encoding.UTF8.GetBytes("{}");
+        });
         var work = Directory.CreateDirectory(Path.Combine(root, label + "-work")).FullName;
         File.WriteAllText(Path.Combine(work, "sentinel"), "keep");
 
@@ -178,5 +200,52 @@ public sealed partial class OfflineUpdatePackageTests
 
         result.Dispose();
         Assert.False(Directory.Exists(stageRoot));
+    }
+
+    [Fact]
+    public async Task CiWrapperCancellationSurvivesFailedPhysicalCleanup()
+    {
+        var label = "ciwrap-cancel-cleanup";
+        var c = new Case(Path.Combine(root, label), splitCount: 3, operation: "offline-upgrade");
+        var source = WriteCiWrapper(c, label);
+        var work = Directory.CreateDirectory(Path.Combine(root, label + "-work")).FullName;
+        using var cts = new CancellationTokenSource();
+        var invocations = 0;
+        string? stageRoot = null;
+        string? spare = null;
+        string? blocker = null;
+        Func<byte[], byte[], UpdatePackageDescriptor> verify = (doc, sig) =>
+        {
+            invocations++;
+            if (invocations == 2)
+            {
+                var stages = Directory.EnumerateDirectories(work, "offline-update-*").ToArray();
+                Assert.Single(stages);
+                stageRoot = stages[0];
+                spare = stageRoot + "-spare";
+                blocker = stageRoot;
+                Directory.Move(stageRoot, spare);
+                File.WriteAllText(stageRoot, "blocker");
+                cts.Cancel();
+                cts.Token.ThrowIfCancellationRequested();
+            }
+            return c.Verify(doc, sig);
+        };
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                Import(source, Model, "1.0.0", work, verify, cts.Token));
+        }
+        finally
+        {
+            if (blocker is not null && File.Exists(blocker))
+            {
+                File.Delete(blocker);
+            }
+            if (spare is not null && stageRoot is not null && Directory.Exists(spare) && !Directory.Exists(stageRoot))
+            {
+                Directory.Move(spare, stageRoot);
+            }
+        }
     }
 }

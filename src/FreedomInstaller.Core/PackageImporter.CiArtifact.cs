@@ -34,7 +34,7 @@ internal sealed class PreparedCiArtifactSource : IDisposable
                 return;
             }
 
-            PackageImporter.CleanupOfflineUpdateStage(_workRoot, _stageRoot);
+            PackageImporter.CleanupCiArtifactStage(_workRoot, _stageRoot);
             _disposed = true;
         }
     }
@@ -312,7 +312,7 @@ public static partial class PackageImporter
         {
             try
             {
-                CleanupOfflineUpdateStage(canonicalWorkRoot, stageRoot);
+                CleanupCiArtifactStage(canonicalWorkRoot, stageRoot);
             }
             catch (Exception cleanupEx)
             {
@@ -322,6 +322,34 @@ public static partial class PackageImporter
         }
     }
 
+    internal static TResult WithPreparedCiArtifact<TResult>(
+        PreparedCiArtifactSource? ciArtifact,
+        Func<TResult> import)
+    {
+        ArgumentNullException.ThrowIfNull(import);
+
+        TResult result;
+        try
+        {
+            result = import();
+        }
+        catch (Exception primary)
+        {
+            try
+            {
+                ciArtifact?.Dispose();
+            }
+            catch (Exception cleanupEx)
+            {
+                primary.Data["CiArtifactStagingCleanupFailure"] = cleanupEx;
+            }
+            throw;
+        }
+
+        ciArtifact?.Dispose();
+        return result;
+    }
+
     private static bool HasCiWrapperLayout(List<ArchiveItem> items)
     {
         if (items is null)
@@ -329,30 +357,8 @@ public static partial class PackageImporter
             return false;
         }
 
-        const string updateJsonSuffix = ".update.json";
-        var archiveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var item in items)
-        {
-            if (item.IsDirectory)
-            {
-                continue;
-            }
-
-            if (item.Name.EndsWith(CiUpdateJsonSuffix, StringComparison.OrdinalIgnoreCase))
-            {
-                var name = item.Name[..^updateJsonSuffix.Length];
-                if (name.Length > 0)
-                {
-                    archiveNames.Add(name);
-                }
-            }
-        }
-
-        if (archiveNames.Count == 0)
-        {
-            return false;
-        }
-
+        var hasUpdateJson = false;
+        var hasVolume = false;
         foreach (var item in items)
         {
             if (item.IsDirectory)
@@ -361,32 +367,45 @@ public static partial class PackageImporter
             }
 
             var name = item.Name;
-            var dotZipIndex = name.LastIndexOf(".zip", StringComparison.OrdinalIgnoreCase);
-            if (dotZipIndex < 0)
+            if (!hasUpdateJson && name.EndsWith(CiUpdateJsonSuffix, StringComparison.OrdinalIgnoreCase))
             {
-                continue;
+                hasUpdateJson = true;
             }
 
-            var prefixEnd = dotZipIndex + ".zip".Length;
-            if (prefixEnd >= name.Length || name[prefixEnd] != '.')
+            if (!hasVolume)
             {
-                continue;
+                var finalComponent = name[(name.LastIndexOf('/') + 1)..];
+                var dotZipIndex = finalComponent.LastIndexOf(".zip.", StringComparison.OrdinalIgnoreCase);
+                if (dotZipIndex >= 0)
+                {
+                    var suffix = finalComponent[(dotZipIndex + ".zip.".Length)..];
+                    if (suffix.Length > 0 && suffix.All(char.IsAsciiDigit))
+                    {
+                        hasVolume = true;
+                    }
+                }
             }
 
-            var suffix = name[(prefixEnd + 1)..];
-            if (suffix.Length == 0 || !suffix.All(char.IsAsciiDigit))
-            {
-                continue;
-            }
-
-            var normalizedArchivePath = name[..prefixEnd];
-            if (archiveNames.Contains(normalizedArchivePath))
+            if (hasUpdateJson && hasVolume)
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    internal static void CleanupCiArtifactStage(string workRoot, string stageRoot)
+    {
+        try
+        {
+            CleanupOfflineUpdateStage(workRoot, stageRoot);
+        }
+        catch (IOException)
+        {
+            Thread.Sleep(50);
+            CleanupOfflineUpdateStage(workRoot, stageRoot);
+        }
     }
 
     private static string GetNormalizedPrefix(string entryName)
