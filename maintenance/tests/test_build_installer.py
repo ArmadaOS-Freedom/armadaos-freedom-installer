@@ -206,6 +206,15 @@ def _build_fixture_repo(root):
                 "version": "x",
             },
             {
+                "id": "pythonMacos",
+                "name": "python-macos.tar.gz",
+                "url": "https://example.invalid/python-macos.tar.gz",
+                "source": "https://example.invalid/python-build-standalone",
+                "bytes": 21,
+                "sha256": "8" * 64,
+                "version": "x",
+            },
+            {
                 "id": "python",
                 "name": "python-embed.zip",
                 "url": "https://example.invalid/python.zip",
