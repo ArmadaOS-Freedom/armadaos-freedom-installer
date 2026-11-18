@@ -447,9 +447,29 @@ public sealed class G5LoaderStructureTests
             Assert.Equal(newWord, ReadUInt32Le(older, off));
         }
 
+        const uint originalInitializerOffset = 0x448B8u;
+        const uint alternateInitializerOffset = 0x44860u;
+        Assert.Equal(0x00000001u, ReadUInt32Le(older, originalInitializerOffset));
+        Assert.Equal(0xFFFFFFFFu, ReadUInt32Le(older, originalInitializerOffset + 4u));
+        Array.Copy(older, (int)originalInitializerOffset, older, (int)alternateInitializerOffset, 8);
+
         Assert.True(
             MatchArm64Pe(older),
             "Synthetic older Gen5 layout with the six observed instruction words must match.");
+
+        // Independent negative: only the alternate initializer word differs.
+        byte[] alteredInitializer = (byte[])older.Clone();
+        WriteUInt32Le(alteredInitializer, alternateInitializerOffset, 2u);
+        Assert.False(
+            MatchArm64Pe(alteredInitializer),
+            "Alternate initializer value 2 must be rejected.");
+
+        // Independent negative: only the load opcode reverts; initializers stay identical.
+        byte[] restoredOpcode = (byte[])older.Clone();
+        WriteUInt32Le(restoredOpcode, KernelBaseLoadOffset + 0x520u, 0xFD445D20u);
+        Assert.False(
+            MatchArm64Pe(restoredOpcode),
+            "Restored load opcode 0xFD445D20 must be rejected.");
 
         // Mixed: only the post-limit k slot load restored to the original word.
         byte[] mixed = (byte[])older.Clone();

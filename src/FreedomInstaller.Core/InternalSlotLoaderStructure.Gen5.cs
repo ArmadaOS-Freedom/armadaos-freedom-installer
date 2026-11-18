@@ -8,6 +8,9 @@ namespace FreedomInstaller.Core
         // NE/LO/LS, so this family keeps its own value instead of widening them.
         private const int Arm64Gen5CondHs = 2;
 
+        // Initializer qword at the dynamic data page.
+        private static readonly byte[] Arm64Gen5StateInitBytes = { 0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF };
+
         // Gen5 prefix: dual GetVariable success relation plus gzip detector.
         // The x22 global-slot load word is layout-bound: two observed Gen5 ABLs
         // use either [x22+0x1C8] (0xF940E6C8) or [x22+0x1A0] (0xF940D2C8) at the
@@ -385,7 +388,7 @@ namespace FreedomInstaller.Core
             if (!Arm64Words(view, g + 0x108L,
                     0x52900009u, 0x29007D1Fu, 0xB9000D1Fu, 0xF900151Fu, 0xB9001509u) ||
                 !Arm64TryAdrp(view, g + 0x11CL, 9, out long statePage) ||
-                !view.Arm64TryMapRva(statePage + expectedDataOff, 8, false, out _) ||
+                !Arm64BytesAt(view, statePage + expectedDataOff, Arm64Gen5StateInitBytes) ||
                 !Arm64Words(view, g + 0x120L, 0xF900251Fu, 0xB900511Fu, expectedData) ||
                 !Arm64Words(view, g + 0x12CL,
                     0x91154109u, 0xF9004509u, 0xA9062509u, 0xFD0DF100u))
