@@ -274,8 +274,12 @@ public static partial class InternalInstallBackup
                 && deviceCheck.CurrentSlot is "a" or "b")
             {
                 string role = "abl_" + deviceCheck.CurrentSlot;
-                if (targets.TryGetValue(role, out PartitionTarget? ablTarget)
-                    && ablTarget.Partition.SectorCount <= (8L * 1024 * 1024) / ablTarget.Geometry.SectorSize)
+                PartitionTarget ablTarget = targets[role];
+                if (ablTarget.Partition.SectorCount > InternalInstallPreparationContext.GblRuntimeMaxDataBytes / ablTarget.Geometry.SectorSize)
+                {
+                    throw new InvalidOperationException(
+                        "requires-compatible-bootloader: model=" + profile.Model + ", firmware=" + profile.AndroidBuild + ", lock=" + deviceCheck.FastbootLockState + ", slot=" + deviceCheck.CurrentSlot + ": read limit");
+                }
                 {
                     earlyRole = role;
                     earlyAbl = await ReadSealedAsync(
@@ -635,12 +639,15 @@ public static partial class InternalInstallBackup
         token.ThrowIfCancellationRequested();
         string where =
             "model=" + model + ", firmware=" + firmware + ", lock=" + lockState + ", slot=" + slot;
-        if (!InternalSlotLoaderStructure.TryDecodeAblForGbl(raw, token, out byte[] pe))
+        bool decoded = InternalSlotLoaderStructure.TryDecodeAblForGbl(raw, token, out byte[] pe);
+        token.ThrowIfCancellationRequested();
+        if (!decoded)
         {
             throw new InvalidOperationException(
                 "requires-compatible-bootloader: " + where + ": decode failure");
         }
         var entry = Gbl.EfispLoadDetector.Detect(pe);
+        token.ThrowIfCancellationRequested();
         if (entry.Status != Gbl.EfispLoad.Yes)
         {
             throw new InvalidOperationException(

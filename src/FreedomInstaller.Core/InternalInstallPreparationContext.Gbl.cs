@@ -18,7 +18,7 @@ internal sealed partial class InternalInstallPreparationContext
     // accept the first exact uppercase PRC/ROW value. Deliberately not a full FDT
     // parser, and no default/conflict resolution happens inside a single buffer.
 
-    private const int GblRuntimeMaxDataBytes = 256 * 1024 * 1024;
+    internal const int GblRuntimeMaxDataBytes = 256 * 1024 * 1024;
 
     private const int GblRuntimePropertyHeaderBytes = 12;
 
