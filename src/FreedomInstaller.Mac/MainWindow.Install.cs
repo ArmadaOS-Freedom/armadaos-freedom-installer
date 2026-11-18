@@ -120,10 +120,13 @@ public partial class MainWindow
     /// </summary>
     private bool IsInternalInstallSessionEnded => _internalInstallExitVerified;
 
-    /// <summary>The tablet is (or may be) in 9008 for this window: a bound client not yet verified back, or an unconfirmed entry.</summary>
-    private bool HasLiveDeviceSession =>
+    /// <summary>The install wizard has the tablet (or may have it) in 9008: a bound client not yet verified back, or an unconfirmed entry.</summary>
+    private bool HasInternalInstallDeviceSession =>
         (_internalInstallClient is not null && !_internalInstallExitVerified)
         || (_internalInstallClient is null && _internalInstallEntryAttempted);
+
+    /// <summary>The tablet is (or may be) in 9008 for this window, from the install wizard or the global page.</summary>
+    private bool HasLiveDeviceSession => HasInternalInstallDeviceSession || HasGlobalRecoveryProtectedState;
 
     /// <summary>An entry to 9008 was attempted but produced no client, so neither a reset nor a verified return is possible here.</summary>
     private bool HasUnconfirmedEdlEntry => _internalInstallClient is null && _internalInstallEntryAttempted;
@@ -267,6 +270,7 @@ public partial class MainWindow
             && !_internalInstallExitVerified
             && CanReleaseInternalInstallBackend;
         InternalInstallExitMaintenanceButton.IsEnabled = idle;
+        RefreshGlobalRecoveryActions();
     }
 
     private async Task RunBusyAsync(Func<CancellationToken, Task> work)
