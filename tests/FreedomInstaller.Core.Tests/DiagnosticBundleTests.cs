@@ -215,6 +215,71 @@ public sealed class DiagnosticBundleTests : IDisposable
         Assert.Equal("missing", byRole["abl_b"]);
     }
 
+    [Fact]
+    public async Task Last_checked_device_serial_exposed_explicitly_while_incidental_and_invalid_omitted()
+    {
+        string intended = "R58M1234ABC";
+        string incidental = "ZX98INCIDENTAL77";
+        string invalidMultiline = "aB12\nmalicious=true";
+
+        string summary = "requested-device-seen\n";
+        string log = "check-target\nincidental=" + incidental + "\n";
+        string dest = Path.Combine(_root, "bundle.zip");
+
+        var req = new DiagnosticExportRequest(
+            summary,
+            log,
+            new[] { incidental },
+            Array.Empty<DiagnosticBootFile>(),
+            false,
+            false)
+        {
+            LastCheckedDeviceSerial = intended,
+        };
+        await DiagnosticBundle.ExportAsync(dest, req);
+
+        var zip = ReadZip(dest);
+        string logText = Encoding.UTF8.GetString(zip["installer.log"]);
+        string summaryText = Encoding.UTF8.GetString(zip["summary.txt"]);
+
+        Assert.Contains("LastCheckedDeviceSerial=" + intended, logText);
+        Assert.Contains("LastCheckedDeviceSerial=" + intended, summaryText);
+        Assert.DoesNotContain(incidental, logText, StringComparison.Ordinal);
+        Assert.DoesNotContain("malicious=true", logText, StringComparison.Ordinal);
+
+        // 仅一次：该显式字段行在每份文本中各出现一次。
+        Assert.Equal(1, CountOccurrences(logText, "LastCheckedDeviceSerial="));
+        Assert.Equal(1, CountOccurrences(summaryText, "LastCheckedDeviceSerial="));
+
+        // 非法（多行/控制字符）序列号被忽略：不写入 LastCheckedDeviceSerial 行。
+        File.Delete(dest);
+        var invalidReq = new DiagnosticExportRequest(
+            "s\n", "l\n",
+            Array.Empty<string>(),
+            Array.Empty<DiagnosticBootFile>(),
+            false, false)
+        {
+            LastCheckedDeviceSerial = invalidMultiline,
+        };
+        await DiagnosticBundle.ExportAsync(dest, invalidReq);
+        var zip2 = ReadZip(dest);
+        string logText2 = Encoding.UTF8.GetString(zip2["installer.log"]);
+        Assert.DoesNotContain("LastCheckedDeviceSerial=", logText2, StringComparison.Ordinal);
+        Assert.DoesNotContain("malicious=true", logText2, StringComparison.Ordinal);
+    }
+
+    private static int CountOccurrences(string text, string needle)
+    {
+        int count = 0;
+        int index = 0;
+        while ((index = text.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += needle.Length;
+        }
+        return count;
+    }
+
     [Theory]
     [InlineData("log C:\\Users\\alice\\AppData\\secret.txt during boot", "alice")]
     [InlineData("path=/home/bob/data/x failed", "bob")]
@@ -227,6 +292,42 @@ public sealed class DiagnosticBundleTests : IDisposable
         string result = DiagnosticBundle.Sanitize(text, Array.Empty<string>());
         Assert.DoesNotContain(mustNotContain, result, StringComparison.Ordinal);
         Assert.Contains("[redacted]", result);
+    }
+
+    [Fact]
+    public void Sanitize_redacts_quoted_and_bare_credential_values_preserving_syntax()
+    {
+        string json = "{\"token\":\"long value with space\",\"ok\":true}";
+        string jsonResult = DiagnosticBundle.Sanitize(json, Array.Empty<string>());
+        Assert.DoesNotContain("long value with space", jsonResult, StringComparison.Ordinal);
+        using (var doc = JsonDocument.Parse(jsonResult))
+        {
+            Assert.Equal("[redacted]", doc.RootElement.GetProperty("token").GetString());
+            Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+        }
+
+        string escapedQuote = "password=\"a\\\"b c\" tail";
+        string escapedResult = DiagnosticBundle.Sanitize(escapedQuote, Array.Empty<string>());
+        Assert.DoesNotContain("a\\\"b c", escapedResult, StringComparison.Ordinal);
+        Assert.Contains("password=\"[redacted]\"", escapedResult);
+        Assert.Contains("tail", escapedResult);
+
+        string singleQuoted = "secret='value with spaces'; next";
+        string singleResult = DiagnosticBundle.Sanitize(singleQuoted, Array.Empty<string>());
+        Assert.DoesNotContain("value with spaces", singleResult, StringComparison.Ordinal);
+        Assert.Contains("secret='[redacted]'", singleResult);
+        Assert.Contains("next", singleResult);
+
+        string bare = "api_key=abc123&x=1";
+        string bareResult = DiagnosticBundle.Sanitize(bare, Array.Empty<string>());
+        Assert.DoesNotContain("abc123", bareResult, StringComparison.Ordinal);
+        Assert.Contains("api_key=[redacted]", bareResult);
+        Assert.Contains("&x=1", bareResult);
+
+        string header = "Authorization: Bearer eyJ.abc.def";
+        string headerResult = DiagnosticBundle.Sanitize(header, Array.Empty<string>());
+        Assert.DoesNotContain("eyJ.abc.def", headerResult, StringComparison.Ordinal);
+        Assert.Contains("Authorization: [redacted]", headerResult);
     }
 
     [Fact]
@@ -347,5 +448,42 @@ public sealed class DiagnosticBundleTests : IDisposable
 
         Assert.Equal("OLD", File.ReadAllText(dest));
         Assert.Empty(Directory.GetFiles(_root, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task Destination_directory_symlink_aliasing_source_is_refused_and_existing_data_untouched()
+    {
+        if (OperatingSystem.IsWindows()) return; // uses Unix symlinks
+
+        // Real directory that holds the "source" file we must not overwrite.
+        string realDir = Path.Combine(_root, "realdata");
+        Directory.CreateDirectory(realDir);
+        var source = WriteFixture("realdata/abl_a.bin", "SOURCE-PAYLOAD");
+
+        // Destination is expressed through a symlinked directory that aliases realdata.
+        string linkDir = Path.Combine(_root, "destlink");
+        Directory.CreateSymbolicLink(linkDir, realDir);
+        string destViaLink = Path.Combine(linkDir, "abl_a.bin");
+
+        // The supplied source is an unrelated file whose canonical location collides with
+        // the destination once the destination's directory symlink is resolved.
+        var alias = new DiagnosticBootFile("captured", "abl_a", source.path, source.len, source.sha);
+        var unrelated = WriteFixture("cap/other_abl.bin", "OTHER");
+        var files = new List<DiagnosticBootFile> { alias };
+
+        // Not included (IncludeAbl false) but must still be refused for aliasing.
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            DiagnosticBundle.ExportAsync(destViaLink,
+                new DiagnosticExportRequest("s", "l", Array.Empty<string>(), files, IncludeAbl: false, IncludeLargeBoot: false)));
+
+        Assert.Equal("SOURCE-PAYLOAD", File.ReadAllText(source.path));
+
+        // Sanity: unrelated destination through the same alias dir must still succeed and
+        // create a fresh archive without disturbing the source.
+        string unrelatedDest = Path.Combine(linkDir, "unrelated.zip");
+        await DiagnosticBundle.ExportAsync(unrelatedDest,
+            new DiagnosticExportRequest("s", "l", Array.Empty<string>(), Array.Empty<DiagnosticBootFile>(), false, false));
+        Assert.True(File.Exists(unrelatedDest));
+        Assert.Equal("SOURCE-PAYLOAD", File.ReadAllText(source.path));
     }
 }

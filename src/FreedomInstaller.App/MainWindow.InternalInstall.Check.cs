@@ -211,6 +211,9 @@ public partial class MainWindow
                         return;
                     }
 
+                    RememberDiagnosticDeviceSerial(target.Serial);
+                    RememberLastDiagnosticDeviceSerial(target.Serial);
+
                     if (target.ConnectionState != ConnectionState.Authorized)
                     {
                         SetInternalInstallCheckStatus(
@@ -254,6 +257,10 @@ public partial class MainWindow
                     var result = await check.CheckAsync(target.Serial, progress, token);
 
                     acceptProgress = false;
+
+                    RememberDiagnosticDeviceSerial(result.FastbootSerial);
+                    RememberDiagnosticDeviceSerial(result.Android?.SocSerial);
+                    RememberDiagnosticDeviceSerial(result.Android?.Identity.Serial);
 
                     var detectedBoardBackup = false;
                     if (result.Succeeded && result.AndroidReturn == AndroidReturnState.Verified)

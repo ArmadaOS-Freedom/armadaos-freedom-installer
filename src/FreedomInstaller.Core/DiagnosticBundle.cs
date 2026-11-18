@@ -35,6 +35,14 @@ public sealed record DiagnosticExportRequest(
 {
     /// <summary>Optional host environment pairs; when supplied, written as environment.json.</summary>
     public IReadOnlyDictionary<string, string?>? HostEnvironment { get; init; }
+
+    /// <summary>
+    /// Opt-in 由用户明确要求暴露的「最近一次检查的目标」ADB 序列号。仅在导出时写入
+    /// installer.log 与 summary.txt 的一行 <c>LastCheckedDeviceSerial=...</c>。必须通过
+    /// 本地 ADB 序列号格式校验；非法/多行/端点形式将被忽略。通用脱敏对其它位置仍生效，
+    /// 且本字段不加入 redactions 列表，因此此单一来源会原样出现。
+    /// </summary>
+    public string? LastCheckedDeviceSerial { get; init; }
 }
 
 /// <summary>
@@ -73,6 +81,35 @@ public static class DiagnosticBundle
         new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    private const int MaxAdbSerialLength = 128;
+
+    // 本地 ADB 序列号语法：ASCII 字母/数字与 '-','_','.'，非空，长度上限 128。
+    // 明确拒绝 ':'（adb endpoint "host:port" 形式）、控制字符与多行。
+    private static bool IsPlausibleLocalAdbSerial(string? serial)
+    {
+        if (string.IsNullOrEmpty(serial)) return false;
+        if (serial.Length > MaxAdbSerialLength) return false;
+        foreach (char c in serial)
+        {
+            bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                      || c == '-' || c == '_' || c == '.';
+            if (!ok) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 通用脱敏后，若用户明确提供了合法的最近检查目标序列号，则追加/前置一行
+    /// <c>LastCheckedDeviceSerial=...</c>。该值经过独立语法校验，不进入 redactions，
+    /// 每次文本条目最多出现一次。
+    /// </summary>
+    private static string AppendLastCheckedDeviceSerialIfRequested(string sanitizedText, string? serial)
+    {
+        if (!IsPlausibleLocalAdbSerial(serial)) return sanitizedText;
+        string row = "LastCheckedDeviceSerial=" + serial + "\n";
+        return row + sanitizedText;
+    }
 
     /// <summary>
     /// Redacts supplied literal secrets and well-known sensitive shapes (Windows/UNC/Unix
@@ -123,18 +160,26 @@ public static class DiagnosticBundle
         if (!Directory.Exists(destinationDirectory))
             throw new DirectoryNotFoundException("Destination directory does not exist.");
 
+        string resolvedDirectory = ResolveDirectory(destinationDirectory, 32);
+        string effectiveDestination = Path.Combine(resolvedDirectory, Path.GetFileName(destinationFull));
+        if (string.IsNullOrEmpty(Path.GetFileName(effectiveDestination)))
+            throw new ArgumentException("Destination must have a file name.", nameof(destination));
+        var destinationInfo = new FileInfo(effectiveDestination);
+        if (destinationInfo.LinkTarget is not null)
+            throw new InvalidOperationException("Diagnostic export refused: destination is a symbolic link.");
+
         IReadOnlyList<string> redactions = request.Redactions ?? Array.Empty<string>();
         IReadOnlyList<DiagnosticBootFile> supplied = request.BootFiles ?? Array.Empty<DiagnosticBootFile>();
 
         // Fail closed: if ANY supplied source path (regardless of validity, role, or
         // selection) aliases the destination, refuse before any side effect.
-        EnsureNoAlias(supplied, destinationFull);
+        EnsureNoAlias(supplied, effectiveDestination);
 
-        List<PlannedFile> planned = PlanFiles(destinationFull, supplied, request.IncludeAbl, request.IncludeLargeBoot);
+        List<PlannedFile> planned = PlanFiles(effectiveDestination, supplied, request.IncludeAbl, request.IncludeLargeBoot);
 
         string tempPath = Path.Combine(
-            destinationDirectory,
-            "." + Path.GetFileName(destinationFull) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+            resolvedDirectory,
+            "." + Path.GetFileName(effectiveDestination) + "." + Guid.NewGuid().ToString("N") + ".tmp");
 
         bool published = false;
         try
@@ -143,10 +188,20 @@ public static class DiagnosticBundle
             using (var zip = new ZipArchive(fs, ZipArchiveMode.Create, leaveOpen: false))
             {
                 token.ThrowIfCancellationRequested();
-                WriteEntry(zip, "summary.txt", Utf8NoBom.GetBytes(Sanitize(request.Summary ?? string.Empty, redactions)));
+                WriteEntry(
+                    zip,
+                    "summary.txt",
+                    Utf8NoBom.GetBytes(AppendLastCheckedDeviceSerialIfRequested(
+                        Sanitize(request.Summary ?? string.Empty, redactions),
+                        request.LastCheckedDeviceSerial)));
 
                 token.ThrowIfCancellationRequested();
-                WriteEntry(zip, "installer.log", Utf8NoBom.GetBytes(Sanitize(request.Log ?? string.Empty, redactions)));
+                WriteEntry(
+                    zip,
+                    "installer.log",
+                    Utf8NoBom.GetBytes(AppendLastCheckedDeviceSerialIfRequested(
+                        Sanitize(request.Log ?? string.Empty, redactions),
+                        request.LastCheckedDeviceSerial)));
 
                 if (request.HostEnvironment is not null)
                 {
@@ -173,7 +228,7 @@ public static class DiagnosticBundle
             }
 
             token.ThrowIfCancellationRequested();
-            File.Move(tempPath, destinationFull, overwrite: true);
+            File.Move(tempPath, effectiveDestination, overwrite: true);
             published = true;
         }
         finally
@@ -186,15 +241,39 @@ public static class DiagnosticBundle
 
     private static void EnsureNoAlias(IReadOnlyList<DiagnosticBootFile> supplied, string destinationFull)
     {
+        string destinationDirectory = ResolveDirectory(
+            Path.GetDirectoryName(destinationFull) ?? destinationFull, 32);
+        string destinationLeaf = Path.GetFileName(destinationFull);
         foreach (DiagnosticBootFile? file in supplied)
         {
             if (file is null || string.IsNullOrEmpty(file.Path)) continue;
             string full;
             try { full = Path.GetFullPath(file.Path); }
             catch { continue; }
-            if (string.Equals(full, destinationFull, StringComparison.OrdinalIgnoreCase))
+            string sourceDirectory = ResolveDirectory(
+                Path.GetDirectoryName(full) ?? full, 32);
+            string sourceLeaf = Path.GetFileName(full) ?? string.Empty;
+            string resolvedSource = string.IsNullOrEmpty(sourceLeaf)
+                ? sourceDirectory
+                : Path.Combine(sourceDirectory, sourceLeaf);
+            if (string.Equals(resolvedSource, Path.Combine(destinationDirectory, destinationLeaf), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Diagnostic export refused: a source path aliases the destination.");
         }
+    }
+
+    private static string ResolveDirectory(string fullPath, int budget)
+    {
+        string? parent = Path.GetDirectoryName(fullPath);
+        if (string.IsNullOrEmpty(parent)) return fullPath;
+        string resolvedParent = ResolveDirectory(parent, budget);
+        string candidate = Path.Combine(resolvedParent, Path.GetFileName(fullPath));
+        var info = new DirectoryInfo(candidate);
+        if (!info.Exists || (info.Attributes & FileAttributes.ReparsePoint) == 0) return candidate;
+        if (budget == 0) throw new IOException("Diagnostic export refused: directory link depth exceeded.");
+        FileSystemInfo? target = info.ResolveLinkTarget(returnFinalTarget: false);
+        if (target is null || string.IsNullOrEmpty(target.FullName))
+            throw new IOException("Diagnostic export refused: unresolvable directory link.");
+        return ResolveDirectory(target.FullName, budget - 1);
     }
 
     private static List<PlannedFile> PlanFiles(
@@ -556,8 +635,8 @@ public static class DiagnosticBundle
         // Auth / password / token / query / header fields.
         result = RedactWithBoundaries(result, @"(?i)\b(Authorization)\s*:\s*[^\r\n]+", "$1: [redacted]");
         result = RedactWithBoundaries(result,
-            @"(?i)\b(password|passwd|pwd|token|access_token|api_key|apikey|secret|auth)\b\s*[:=]\s*([^\s&;""']+)",
-            "$1=[redacted]");
+            """(?i)(?<prefix>(?<keyQuote>["']?)\b(?:password|passwd|pwd|token|access_token|api_key|apikey|secret|auth|authorization)\b\k<keyQuote>\s*[:=]\s*)(?:(?<dq>")(?:\\[\s\S]|[^"\\])*"|(?<sq>')(?:\\[\s\S]|[^'\\])*'|[^\s&;"']+)""",
+            "${prefix}${dq}${sq}[redacted]${dq}${sq}");
 
         return result;
     }
@@ -568,8 +647,7 @@ public static class DiagnosticBundle
         var regex = new System.Text.RegularExpressions.Regex(pattern,
             System.Text.RegularExpressions.RegexOptions.None,
             TimeSpan.FromMilliseconds(150));
-        try { return regex.Replace(input, replacement); }
-        catch { return input; }
+        return regex.Replace(input, replacement);
     }
 
     private static void TryDelete(string path)

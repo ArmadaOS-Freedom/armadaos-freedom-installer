@@ -322,12 +322,19 @@ public partial class MainWindow
                         break;
 
                     case InternalInstallExitWaitOutcome.Cancelled:
-                        SetInternalInstallExitStatus(
+                        var cancelledMessage =
                             resetUnknown
                                 ? M(
                                     "Dynamic.InternalInstall.Exit.ResetUnknown",
                                     resetDiagnostic ?? UnknownValue)
-                                : M("Dynamic.InternalInstall.Exit.Cancelled"));
+                                : M("Dynamic.InternalInstall.Exit.Cancelled");
+                        SetInternalInstallExitStatus(cancelledMessage);
+                        if (resetUnknown)
+                        {
+                            RecordDiagnosticFailure(
+                                M("Dynamic.Diagnostics.Stage.Exit"),
+                                _uiText.Format(cancelledMessage));
+                        }
                         break;
 
                     default:

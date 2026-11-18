@@ -23,6 +23,13 @@ public partial class MainWindow
         "boot_a", "boot_b", "vendor_boot_a", "vendor_boot_b", "init_boot_a", "init_boot_b",
     };
 
+    private readonly HashSet<string> _diagnosticObservedSerial = new(StringComparer.OrdinalIgnoreCase);
+
+    // 最近一次被用户明确选中/检查的 ADB 目标序列号。仅在 target-selected 分支写入，
+    // 独立于 _internalInstallDeviceCheck，跨失败检查与断开保留；用于用户明确要求
+    // 在诊断日志中记录原始平板序列号（脱敏集合仍照常清洗偶发原始序列号）。
+    private string? _diagnosticLastDeviceSerial;
+
     private bool _diagnosticExporting;
     private bool _showingDiagnostics;
     private string? _diagnosticDestinationPath;
@@ -34,6 +41,22 @@ public partial class MainWindow
     // the first line as before; the summary redaction reads this nullable field so a
     // multi-line reason is not truncated to what the label displays.
     private string? _diagnosticLastFailureFullDetail;
+
+    /// <summary>记录本次工作流中观察到的设备序列号，用于导出脱敏；跨次检查保留。</summary>
+    private void RememberDiagnosticDeviceSerial(string? serial)
+    {
+        if (string.IsNullOrWhiteSpace(serial))
+            return;
+        _diagnosticObservedSerial.Add(serial.Trim());
+    }
+
+    /// <summary>记录最近一次被明确选中/检查的 ADB 目标序列号；跨越失败检查与断开保留。</summary>
+    private void RememberLastDiagnosticDeviceSerial(string? serial)
+    {
+        if (string.IsNullOrWhiteSpace(serial))
+            return;
+        _diagnosticLastDeviceSerial = serial.Trim();
+    }
 
     /// <summary>记录最近一次诊断失败；面板在首次失败后可见，导出失败不清空此内容。</summary>
     private void RecordDiagnosticFailure(UiMessage stage, string? detail)
@@ -71,7 +94,7 @@ public partial class MainWindow
         }
         if (DiagnosticIncludeLargeBootBox is not null)
         {
-            DiagnosticIncludeLargeBootBox.IsChecked = _diagnosticBootAvailable;
+            DiagnosticIncludeLargeBootBox.IsChecked = false;
             DiagnosticIncludeLargeBootBox.IsEnabled = _diagnosticBootAvailable;
             DiagnosticIncludeLargeBootBox.Visibility = _diagnosticBootAvailable ? Visibility.Visible : Visibility.Collapsed;
         }
@@ -168,7 +191,6 @@ public partial class MainWindow
         try
         {
             string? sessionDir = _workSession?.DirectoryPath;
-            string? workRoot = _workDirectory?.RootPath ?? _manualWorkRoot;
 
             var currentSnapshot = GetDiagnosticPageBootFiles();
             var bootFiles = _diagnosticBootSnapshot
@@ -187,11 +209,17 @@ public partial class MainWindow
                 if (!string.IsNullOrWhiteSpace(value)) redactions.Add(value.Trim());
             }
             AddRedaction(sessionDir);
-            AddRedaction(workRoot);
+            AddRedaction(_workDirectory?.RootPath);
+            AddRedaction(_manualWorkRoot);
             AddRedaction(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+            foreach (var observedSerial in _diagnosticObservedSerial)
+                AddRedaction(observedSerial);
             AddRedaction(_internalInstallDeviceCheck?.FastbootSerial);
             AddRedaction(_internalInstallDeviceCheck?.Android?.SocSerial);
             AddRedaction(_internalInstallDeviceCheck?.Android?.Identity?.Serial);
+
+            // 用户在 UI 线程快照此字段，随后传入后台任务；用户明确要求的最近检查目标序列号。
+            string? lastCheckedDeviceSerial = _diagnosticLastDeviceSerial;
 
             var summary = BuildDiagnosticSummary(includeAbl, includeLargeBoot);
             var hostEnvironment = BuildDiagnosticHostEnvironment();
@@ -230,6 +258,7 @@ public partial class MainWindow
                     includeLargeBoot)
                 {
                     HostEnvironment = hostEnvironment,
+                    LastCheckedDeviceSerial = lastCheckedDeviceSerial,
                 };
             }).ConfigureAwait(true);
 
