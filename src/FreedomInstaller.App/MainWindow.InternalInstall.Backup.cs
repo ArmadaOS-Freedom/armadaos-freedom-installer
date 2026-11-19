@@ -787,16 +787,19 @@ public partial class MainWindow
                     // 唯一一次真实调用：已有模式只校验原始目录，正常模式才在父目录下新建子目录。
                     // 修复模式（非内部使用板备份分支）走修复专用助手，其他模式保持原样。
                     InternalBackupSet set;
+                    BoardRecoveryExtraction? extraction = null;
+                    if (internalAutoBranch)
+                    {
+                        SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.ReadingBoard"));
+                        extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
+                            activeClient, parentPath, TemporaryWorkRoot, token);
+                    }
                     if (IsRepairInstallationMode && IsBootMaintenanceMode && !useBoardBackup && !useExisting)
                     {
                         set = await CaptureRepairCurrentAsync(activeClient, parentPath, progress, token);
                     }
-                    else if (useBoardBackup)
+                    else if (extraction is not null)
                     {
-                        SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.ReadingBoard"));
-                        var extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
-                            activeClient, parentPath, TemporaryWorkRoot, token)
-                            ?? throw new InvalidDataException(T("Dynamic.RecoverySource.BoardMissing"));
                         InternalBackupSet? recovery = null;
                         try
                         {
@@ -817,7 +820,12 @@ public partial class MainWindow
                         _boardRecoveryDiscoveredDirectory = extraction.DirectoryPath;
                         _boardRecoveryAttemptManifest = set.ManifestSha256;
                         extraction.Retain();
+                        useBoardBackup = true;
                         AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", extraction.DirectoryPath));
+                    }
+                    else if (useBoardBackup)
+                    {
+                        throw new InvalidDataException(T("Dynamic.RecoverySource.BoardMissing"));
                     }
                     else set = useExisting
                         ? await InternalInstallBackup.OpenExistingAsync(

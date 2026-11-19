@@ -1277,12 +1277,18 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
+        if (_context.BoardSummary is not { } boardSummary)
+        {
+            throw new InvalidOperationException(
+                "The legacy execution path requires a fresh board summary and does not accept an installed layout.");
+        }
+
         await WriteExecutionRegionAsync(
                 _initialEdl,
                 run,
                 InternalInstallStage.WritingBoardBackup,
                 null,
-                _context.BoardSummary,
+                boardSummary,
                 true,
                 progress,
                 cancellationToken)
@@ -1354,7 +1360,8 @@ public sealed partial class InternalInstallBackend
         EdlClient freshClient,
         ExecutionRun run,
         IProgress<InternalInstallProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool androidDataErase = true)
     {
         ArgumentNullException.ThrowIfNull(freshClient);
         ArgumentNullException.ThrowIfNull(run);
@@ -1374,7 +1381,12 @@ public sealed partial class InternalInstallBackend
         byte[] freshUnit = await ReadFirstExecutionBytesAsync(freshPath, writeUnitBytes, cancellationToken)
             .ConfigureAwait(false);
 
-        byte[] overlay = BuildInstallBcbWriteUnit(freshUnit, target.SectorSize);
+        byte[] overlay = BuildBcbWriteUnit(freshUnit, target.SectorSize, androidDataErase);
+
+        if (!androidDataErase && overlay.AsSpan().SequenceEqual(freshUnit))
+        {
+            return;
+        }
 
         string overlayPath = NewExecutionEvidencePath("misc-bcb", ".bin");
         string overlaySha256 = await WriteNewExecutionBytesAsync(overlayPath, overlay, cancellationToken)
@@ -1416,6 +1428,9 @@ public sealed partial class InternalInstallBackend
     /// </list>
     /// </summary>
     internal static byte[] BuildInstallBcbWriteUnit(byte[] freshWriteUnit, int sectorSize)
+        => BuildBcbWriteUnit(freshWriteUnit, sectorSize, androidDataErase: true);
+
+    private static byte[] BuildBcbWriteUnit(byte[] freshWriteUnit, int sectorSize, bool androidDataErase)
     {
         ArgumentNullException.ThrowIfNull(freshWriteUnit);
 
@@ -1439,10 +1454,14 @@ public sealed partial class InternalInstallBackend
         byte[] output = (byte[])freshWriteUnit.Clone();
 
         Array.Clear(output, 0, BcbCommandBytes);
-        InstallBcbCommand.CopyTo(output, 0);
 
-        Array.Clear(output, BcbRecoveryOffset, BcbRecoveryBytes);
-        InstallBcbRecovery.CopyTo(output, BcbRecoveryOffset);
+        if (androidDataErase)
+        {
+            InstallBcbCommand.CopyTo(output, 0);
+
+            Array.Clear(output, BcbRecoveryOffset, BcbRecoveryBytes);
+            InstallBcbRecovery.CopyTo(output, BcbRecoveryOffset);
+        }
 
         return output;
     }

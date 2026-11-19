@@ -143,6 +143,15 @@ public sealed partial class InternalInstallBackend : IDisposable
         RequireInitialProof(initialEdl);
         RequireBoundSession(deviceCheck, initialEdl, backup);
 
+        // A reinstall is direct-only: an installed Linux layout must never reach the legacy RAM/seed route
+        // that would have called the strict FindReusableBackup. The direct factory owns that decision.
+        if (InternalPartitionPlanner.FindInstalledLinuxLayout(backup.Tables[0]) is not null)
+        {
+            throw Refuse(
+                "retained-backup-requires-direct-install",
+                "Reinstalling over an installed Linux layout requires the direct 9008 image installation route.");
+        }
+
         if (InternalPartitionPlanner.FindReusableBackup(backup.Tables[0]) is not null)
         {
             throw Refuse(
