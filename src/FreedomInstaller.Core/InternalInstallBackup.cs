@@ -79,6 +79,14 @@ public static partial class InternalInstallBackup
         CancellationToken token = default)
         => CreateCoreAsync(client, chosenParent, progress, token, null);
 
+    public static Task<InternalBackupSet> CreateForFirstInstallAsync(
+        EdlClient client,
+        string chosenParent,
+        InternalDeviceCheckResult deviceCheck,
+        IProgress<InternalBackupProgress>? progress = null,
+        CancellationToken token = default)
+        => CreateCoreAsync(client, chosenParent, progress, token, null, deviceCheck);
+
     public static Task<InternalBackupSet> CreatePreparationSnapshotAsync(
         EdlClient client, InternalBackupSet recovery, string temporaryParent,
         IProgress<InternalBackupProgress>? progress = null, CancellationToken token = default)
@@ -92,7 +100,7 @@ public static partial class InternalInstallBackup
 
     private static async Task<InternalBackupSet> CreateCoreAsync(
         EdlClient client, string chosenParent, IProgress<InternalBackupProgress>? progress,
-        CancellationToken token, InternalBackupSet? recovery)
+        CancellationToken token, InternalBackupSet? recovery, InternalDeviceCheckResult? deviceCheck = null)
     {
         token.ThrowIfCancellationRequested();
 
@@ -123,6 +131,24 @@ public static partial class InternalInstallBackup
             client.Binding.AndroidIdentity?.Identity?.Firmware?.DisplayId ?? string.Empty,
             client.Toolchain.HardwareId);
         RequireProfile(profile);
+
+        // The strict Gen5 install gate must reject a mismatched Android identity before any directory or
+        // device command exists. It is scoped to TB323FU with a locked bootloader on slot a or b, and it
+        // performs no new probes; the caller-supplied device check supplies every observed value.
+        if (profile.Model == "TB323FU"
+            && deviceCheck is not null
+            && deviceCheck.FastbootLockState == BootloaderState.Locked
+            && (deviceCheck.CurrentSlot == "a" || deviceCheck.CurrentSlot == "b"))
+        {
+            if (deviceCheck.Android is not { } android
+                || client.Binding.AndroidIdentity is not { } boundAndroid
+                || !InternalInstallBackend.SameAndroidIdentity(boundAndroid, android)
+                || !string.Equals(deviceCheck.FastbootSerial, android.Identity.Serial, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "device-binding-mismatch: TB323FU install gate requires the fastboot-checked Android identity and serial to match the bound session identity.");
+            }
+        }
 
         // The install backup belongs to the install route: a model whose install route is not open is refused
         // before any directory or device command exists.
@@ -259,8 +285,55 @@ public static partial class InternalInstallBackup
             reporter.Plan(roles.TotalFileCount, totalBytes);
             reporter.Report(ReadingPartitionStage, role: null);
 
+            string? earlyRole = null;
+            if (profile.Model == "TB323FU"
+                && deviceCheck?.FastbootLockState == BootloaderState.Locked
+                && deviceCheck.CurrentSlot is "a" or "b")
+            {
+                string role = "abl_" + deviceCheck.CurrentSlot;
+                PartitionTarget ablTarget = targets[role];
+                if (ablTarget.Partition.SectorCount > InternalInstallPreparationContext.GblRuntimeMaxDataBytes / ablTarget.Geometry.SectorSize)
+                {
+                    throw new InvalidOperationException(
+                        "requires-compatible-bootloader: model=" + profile.Model + ", firmware=" + profile.AndroidBuild + ", lock=" + deviceCheck.FastbootLockState + ", slot=" + deviceCheck.CurrentSlot + ": read limit");
+                }
+                earlyRole = role;
+                SealedFile earlyAbl = await ReadSealedAsync(
+                    client,
+                    ablTarget.Geometry,
+                    ablTarget.Partition.StartSector,
+                    ablTarget.Partition.SectorCount,
+                    Path.Combine(directory, role + ".bin"),
+                    locks,
+                    token).ConfigureAwait(false);
+                state.Files.Add(ToFileEntry(
+                    role,
+                    ablTarget.Geometry,
+                    ablTarget.Partition.StartSector,
+                    ablTarget.Partition.SectorCount,
+                    ablTarget.Partition.PartUuid,
+                    role + ".bin",
+                    earlyAbl));
+                reporter.Completed(earlyAbl.Length);
+                reporter.Report(ReadingPartitionStage, role);
+                UpdatePartial(directory, state, profile, identity);
+                byte[] raw = await ReadHeldAsync(earlyAbl.Stream, earlyAbl.Length, token).ConfigureAwait(false);
+                RequireFirstInstallAblCompatibility(
+                    raw,
+                    profile.Model,
+                    profile.AndroidBuild,
+                    deviceCheck.FastbootLockState,
+                    deviceCheck.CurrentSlot,
+                    token);
+            }
+
             foreach (string name in roles.PartitionNames)
             {
+                if (earlyRole is not null && name == earlyRole)
+                {
+                    continue;
+                }
+
                 PartitionTarget target = targets[name];
                 string fileName = name + ".bin";
 
@@ -582,6 +655,33 @@ public static partial class InternalInstallBackup
             return new SealedFile(path, held.Length, sha256, held);
         }
         catch { held.Dispose(); throw; }
+    }
+
+    internal static void RequireFirstInstallAblCompatibility(
+        byte[] raw,
+        string model,
+        string firmware,
+        BootloaderState lockState,
+        string slot,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        string where =
+            "model=" + model + ", firmware=" + firmware + ", lock=" + lockState + ", slot=" + slot;
+        bool decoded = InternalSlotLoaderStructure.TryDecodeAblForGbl(raw, token, out byte[] pe);
+        token.ThrowIfCancellationRequested();
+        if (!decoded)
+        {
+            throw new InvalidOperationException(
+                "requires-compatible-bootloader: " + where + ": decode failure");
+        }
+        var entry = Gbl.EfispLoadDetector.Detect(pe);
+        token.ThrowIfCancellationRequested();
+        if (entry.Status != Gbl.EfispLoad.Yes)
+        {
+            throw new InvalidOperationException(
+                "requires-compatible-bootloader: " + where + ": " + entry.Status + ": " + entry.Reason);
+        }
     }
 
     private static async Task<SealedFile> ReadSealedAsync(

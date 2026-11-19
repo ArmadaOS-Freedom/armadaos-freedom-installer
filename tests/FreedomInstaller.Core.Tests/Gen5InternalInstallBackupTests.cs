@@ -330,6 +330,89 @@ public sealed class Gen5InternalInstallBackupTests : IClassFixture<Gen5EdlToolch
 
     // ---------------------------------------------------------------- helpers
 
+    [Theory]
+    [InlineData("a", false)]
+    [InlineData("b", false)]
+    [InlineData("a", true)]
+    public async Task G5_05_CreateForFirstInstall_refuses_before_any_partition_read_and_never_writes_or_resets(string slot, bool mismatchedSerial)
+    {
+        string parent = _fixture.NewCaseDirectory(
+            nameof(G5_05_CreateForFirstInstall_refuses_before_any_partition_read_and_never_writes_or_resets) + "-" + slot + (mismatchedSerial ? "-mismatch" : ""));
+        IB001SyntheticDevice device = IB001SyntheticDevice.Create(gen5: true);
+        IB001FakeEdlRunner runner = new(device, hardwareId: Gen5HardwareId);
+        EdlClient client = NewClient(runner);
+        string? boundSerial = client.Binding.AndroidIdentity?.Identity?.Serial;
+        Assert.False(string.IsNullOrEmpty(boundSerial));
+
+        InternalDeviceCheckResult check = new(
+            android: client.Binding.AndroidIdentity,
+            fastbootSerial: mismatchedSerial ? "MISMATCHED-SERIAL" : boundSerial,
+            fastbootProduct: null,
+            fastbootLockState: BootloaderState.Locked,
+            otaState: default,
+            androidReturn: default,
+            cancelled: false,
+            failedStage: null,
+            error: null,
+            currentSlot: slot);
+
+        if (mismatchedSerial)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => InternalInstallBackup.CreateForFirstInstallAsync(client, parent, check));
+
+            Assert.Empty(runner.Reads);
+            Assert.Empty(runner.ProbedLuns);
+            Assert.Equal(0, runner.WriteOrResetCount);
+            return;
+        }
+
+        Exception error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => InternalInstallBackup.CreateForFirstInstallAsync(client, parent, check));
+
+        string message = error.Message;
+        Assert.Contains("requires-compatible-bootloader", message, StringComparison.Ordinal);
+        Assert.Contains("firmware=" + Gen5AndroidBuild, message, StringComparison.Ordinal);
+        Assert.Contains("lock=Locked", message, StringComparison.Ordinal);
+        Assert.Contains("slot=" + slot, message, StringComparison.Ordinal);
+
+        // Early refusal: twelve GPT windows plus exactly one selected ABL, then nothing else.
+        Assert.Equal(13, runner.Reads.Count);
+        IB001Read last = runner.Reads[runner.Reads.Count - 1];
+        (int lun, long start, long count, string? partUuid) = device.Expectation("abl_" + slot);
+        Assert.Equal(lun, last.Lun);
+        Assert.Equal(start, last.StartSector);
+        Assert.Equal(count, last.SectorCount);
+
+        Assert.Equal(0, runner.WriteOrResetCount);
+
+        // The sealed ABL is registered in the partial manifest before the compat refusal fires.
+        string testDirectory = Directory.GetDirectories(parent).Single();
+        string manifestPath = Path.Combine(testDirectory, "backup-manifest.json");
+        Assert.True(File.Exists(manifestPath), "the partial manifest must exist: " + manifestPath);
+        using (System.Text.Json.JsonDocument document = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllBytes(manifestPath)))
+        {
+            System.Text.Json.JsonElement root = document.RootElement;
+            Assert.Equal("partial", root.GetProperty("status").GetString());
+            System.Text.Json.JsonElement files = root.GetProperty("files");
+            Assert.Equal(13, files.GetArrayLength());
+            System.Text.Json.JsonElement entry = Assert.Single(
+                files.EnumerateArray(),
+                item => item.GetProperty("role").GetString() == "abl_" + slot);
+            Assert.Equal(lun, entry.GetProperty("lun").GetInt32());
+            Assert.Equal(start, entry.GetProperty("startSector").GetInt64());
+            Assert.Equal(count, entry.GetProperty("sectorCount").GetInt64());
+            string ablPath = Path.Combine(testDirectory, entry.GetProperty("relativePath").GetString()!);
+            Assert.True(File.Exists(ablPath), "the sealed ABL file must exist: " + ablPath);
+            byte[] ablBytes = File.ReadAllBytes(ablPath);
+            Assert.Equal(ablBytes.LongLength, entry.GetProperty("length").GetInt64());
+            string expectedHash = Convert.ToHexString(SHA256.HashData(ablBytes));
+            Assert.Equal(expectedHash, entry.GetProperty("sha256").GetString(), StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+
     private EdlClient NewClient(IB001FakeEdlRunner runner) => new(
         _fixture.Toolchain,
         NewBinding(),
