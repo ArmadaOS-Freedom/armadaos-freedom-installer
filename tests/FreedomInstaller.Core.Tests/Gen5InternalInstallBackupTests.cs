@@ -385,6 +385,31 @@ public sealed class Gen5InternalInstallBackupTests : IClassFixture<Gen5EdlToolch
         Assert.Equal(count, last.SectorCount);
 
         Assert.Equal(0, runner.WriteOrResetCount);
+
+        // The sealed ABL is registered in the partial manifest before the compat refusal fires.
+        string testDirectory = Directory.GetDirectories(parent).Single();
+        string manifestPath = Path.Combine(testDirectory, "backup-manifest.json");
+        Assert.True(File.Exists(manifestPath), "the partial manifest must exist: " + manifestPath);
+        using (System.Text.Json.JsonDocument document = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllBytes(manifestPath)))
+        {
+            System.Text.Json.JsonElement root = document.RootElement;
+            Assert.Equal("partial", root.GetProperty("status").GetString());
+            System.Text.Json.JsonElement files = root.GetProperty("files");
+            Assert.Equal(13, files.GetArrayLength());
+            System.Text.Json.JsonElement entry = Assert.Single(
+                files.EnumerateArray(),
+                item => item.GetProperty("role").GetString() == "abl_" + slot);
+            Assert.Equal(lun, entry.GetProperty("lun").GetInt32());
+            Assert.Equal(start, entry.GetProperty("startSector").GetInt64());
+            Assert.Equal(count, entry.GetProperty("sectorCount").GetInt64());
+            string ablPath = Path.Combine(testDirectory, entry.GetProperty("relativePath").GetString()!);
+            Assert.True(File.Exists(ablPath), "the sealed ABL file must exist: " + ablPath);
+            byte[] ablBytes = File.ReadAllBytes(ablPath);
+            Assert.Equal(ablBytes.LongLength, entry.GetProperty("length").GetInt64());
+            string expectedHash = Convert.ToHexString(SHA256.HashData(ablBytes));
+            Assert.Equal(expectedHash, entry.GetProperty("sha256").GetString(), StringComparer.OrdinalIgnoreCase);
+        }
     }
 
 

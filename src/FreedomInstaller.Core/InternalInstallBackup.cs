@@ -286,7 +286,6 @@ public static partial class InternalInstallBackup
             reporter.Report(ReadingPartitionStage, role: null);
 
             string? earlyRole = null;
-            SealedFile? earlyAbl = null;
             if (profile.Model == "TB323FU"
                 && deviceCheck?.FastbootLockState == BootloaderState.Locked
                 && deviceCheck.CurrentSlot is "a" or "b")
@@ -298,29 +297,43 @@ public static partial class InternalInstallBackup
                     throw new InvalidOperationException(
                         "requires-compatible-bootloader: model=" + profile.Model + ", firmware=" + profile.AndroidBuild + ", lock=" + deviceCheck.FastbootLockState + ", slot=" + deviceCheck.CurrentSlot + ": read limit");
                 }
-                {
-                    earlyRole = role;
-                    earlyAbl = await ReadSealedAsync(
-                        client,
-                        ablTarget.Geometry,
-                        ablTarget.Partition.StartSector,
-                        ablTarget.Partition.SectorCount,
-                        Path.Combine(directory, role + ".bin"),
-                        locks,
-                        token).ConfigureAwait(false);
-                    byte[] raw = await ReadHeldAsync(earlyAbl.Stream, earlyAbl.Length, token).ConfigureAwait(false);
-                    RequireFirstInstallAblCompatibility(
-                        raw,
-                        profile.Model,
-                        profile.AndroidBuild,
-                        deviceCheck.FastbootLockState,
-                        deviceCheck.CurrentSlot,
-                        token);
-                }
+                earlyRole = role;
+                SealedFile earlyAbl = await ReadSealedAsync(
+                    client,
+                    ablTarget.Geometry,
+                    ablTarget.Partition.StartSector,
+                    ablTarget.Partition.SectorCount,
+                    Path.Combine(directory, role + ".bin"),
+                    locks,
+                    token).ConfigureAwait(false);
+                state.Files.Add(ToFileEntry(
+                    role,
+                    ablTarget.Geometry,
+                    ablTarget.Partition.StartSector,
+                    ablTarget.Partition.SectorCount,
+                    ablTarget.Partition.PartUuid,
+                    role + ".bin",
+                    earlyAbl));
+                reporter.Completed(earlyAbl.Length);
+                reporter.Report(ReadingPartitionStage, role);
+                UpdatePartial(directory, state, profile, identity);
+                byte[] raw = await ReadHeldAsync(earlyAbl.Stream, earlyAbl.Length, token).ConfigureAwait(false);
+                RequireFirstInstallAblCompatibility(
+                    raw,
+                    profile.Model,
+                    profile.AndroidBuild,
+                    deviceCheck.FastbootLockState,
+                    deviceCheck.CurrentSlot,
+                    token);
             }
 
             foreach (string name in roles.PartitionNames)
             {
+                if (earlyRole is not null && name == earlyRole)
+                {
+                    continue;
+                }
+
                 PartitionTarget target = targets[name];
                 string fileName = name + ".bin";
 
@@ -328,9 +341,7 @@ public static partial class InternalInstallBackup
                 // are read afresh because installation prepares candidates from the current device.
                 var reuse = recovery is not null && name is
                     "persist" or "modemst1" or "modemst2" or "fsg" or "fsc" or "ssd" or "keystore" or "frp" or "cdt";
-                SealedFile sealedFile = earlyAbl is not null && name == earlyRole
-                    ? earlyAbl
-                    : reuse
+                SealedFile sealedFile = reuse
                     ? await CopyRecoveryFileAsync(recovery!, name, target, Path.Combine(directory, fileName), locks, token).ConfigureAwait(false)
                     : await ReadSealedAsync(
                     client,

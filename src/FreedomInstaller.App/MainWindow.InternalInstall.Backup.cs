@@ -727,10 +727,18 @@ public partial class MainWindow
                                 transport.AdbPath,
                                 transport.FastbootPath,
                                 _runner);
-                            await slotCheck.RequireUnchangedAndroidSlotAsync(
-                                freshIdentity.Serial,
-                                checkedSlot.CurrentSlot!,
-                                token);
+                            try
+                            {
+                                await slotCheck.RequireUnchangedAndroidSlotAsync(
+                                    freshIdentity.Serial,
+                                    checkedSlot.CurrentSlot!,
+                                    token);
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                InvalidateInternalInstallCheckFromMismatch();
+                                throw;
+                            }
                         }
 
                         // 已有采样时才在进入 9008 之前刷新一次；没有采样就不凭空补一个。
