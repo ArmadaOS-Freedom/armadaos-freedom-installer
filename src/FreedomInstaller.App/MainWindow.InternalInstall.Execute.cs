@@ -430,6 +430,9 @@ public partial class MainWindow
 
                     AppendLocalizedLog(
                         M("Dynamic.InternalInstall.Execution.Log.Exception", exception.Message));
+                    RecordDiagnosticFailure(
+                        M("Dynamic.Diagnostics.Stage.Execute"),
+                        exception.Message);
                 }
                 finally
                 {
@@ -1134,6 +1137,14 @@ public partial class MainWindow
                     "Dynamic.InternalInstall.Execution.Log.Diagnostic",
                     string.IsNullOrWhiteSpace(result.ErrorCode) ? "—" : result.ErrorCode,
                     string.IsNullOrWhiteSpace(result.Diagnostic) ? "—" : result.Diagnostic));
+        }
+
+        if (result.Outcome == InternalInstallOutcome.Failed
+            || result.Outcome == InternalInstallOutcome.UnknownWriteOutcome)
+        {
+            RecordDiagnosticFailure(
+                M("Dynamic.Diagnostics.Stage.Execute"),
+                result.Diagnostic ?? result.ErrorCode);
         }
     }
 

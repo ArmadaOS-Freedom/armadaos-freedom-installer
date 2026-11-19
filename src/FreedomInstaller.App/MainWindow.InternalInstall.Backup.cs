@@ -921,6 +921,7 @@ public partial class MainWindow
                             : M("Dynamic.InternalInstall.Backup.FailedNote"));
                     RenderInternalInstallBackupDetail();
                     AppendLocalizedLog(failure);
+                    RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Backup"), diagnostic);
                 }
                 finally
                 {

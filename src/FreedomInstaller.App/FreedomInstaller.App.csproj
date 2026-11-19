@@ -147,6 +147,7 @@
     <Resource Include="Assets\about-mydanyi.jpg" />
     <Resource Include="Assets\about-lich-wang.jpg" />
     <Resource Include="Assets\about-h0cheung.png" />
+    <Resource Include="Assets\about-cody.png" />
     <Resource Include="Assets\about-sunflower2333.png" />
     <Resource Include="Assets\about-bilibili-509773383.jpg" />
   </ItemGroup>

@@ -1012,7 +1012,7 @@
 
                     <!-- 开发者 -->
                     <TextBlock Text="{DynamicResource Dynamic.AboutDevelopers}" Classes="H2Text" Margin="0,12,0,8" />
-                    <UniformGrid Columns="3" Rows="1" Margin="0,0,0,4">
+                    <UniformGrid Columns="4" Rows="1" Margin="0,0,0,4">
                         <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="0,0,8,0">
                             <Grid ColumnDefinitions="Auto,*">
                                 <Image Source="/Assets/about-mydanyi.jpg"
@@ -1079,7 +1079,7 @@
                                 </StackPanel>
                             </Grid>
                         </Border>
-                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="8,0,0,0">
+                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="8,0,8,0">
                             <Grid ColumnDefinitions="Auto,*">
                                 <Image Source="/Assets/about-h0cheung.png"
                                        Width="56"
@@ -1106,6 +1106,39 @@
                                         <Button Content="{DynamicResource Static.AuthorBilibili}"
                                                 Theme="{StaticResource GhostButton}"
                                                 Click="OnOpenH0CheungBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="8,0,0,0">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <Image Source="/Assets/about-cody.png"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutCodyName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutCodyName}"
+                                               Classes="H2Text"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleDeveloper}"
+                                               Classes="CaptionText"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenCodyGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenCodyBilibili"
                                                 Padding="0,4"
                                                 Margin="0,0,12,0" />
                                     </WrapPanel>
@@ -1177,12 +1210,11 @@
                                        Classes="BodyText"
                                        TextWrapping="Wrap"
                                        Margin="0,6,0,0" />
-                            <Button Content="{DynamicResource Dynamic.AboutCopyQq}"
+                            <Button Content="{DynamicResource Dynamic.AboutJoinQq}"
                                     Theme="{StaticResource SecondaryButton}"
-                                    Click="OnCopyQqGroup"
+                                    Click="OnOpenQqGroupInvite"
                                     HorizontalAlignment="Left"
                                     Margin="0,10,0,0" />
-                            <TextBlock x:Name="AboutCopyStatus" Classes="CaptionText" IsVisible="False" Margin="0,6,0,0" />
                         </StackPanel>
                     </Border>
 

@@ -90,7 +90,11 @@ public partial class MainWindow
             new EdlEntry(transport.AdbPath, _runner, discovery),
             _runner,
             discovery,
-            transport.AdbPath);
+            transport.AdbPath)
+        {
+            // 快照在后台线程发布，回调只用 Volatile.Write，不触碰 UI/Dispatcher。
+            DiagnosticBootSourcesVerified = () => PublishDiagnosticBootEvidence(backup, package, artifacts),
+        };
 
         if (_ready)
         {

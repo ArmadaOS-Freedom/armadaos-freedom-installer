@@ -250,10 +250,14 @@ namespace FreedomInstaller.App
 
         private void AppendOfflineLog(string key, params object?[] args)
         {
+            var message = M(key, args);
             if (_offlineLogEntries.Count >= 200)
                 _offlineLogEntries.RemoveAt(0);
-            _offlineLogEntries.Add(M(key, args));
+            _offlineLogEntries.Add(message);
             RerenderOfflineUpgradeLog();
+            AppendWorkLogLine($"{DateTime.Now:HH:mm:ss} {_uiText.Format(message)}");
+            if (key is "Dynamic.OfflineUpdate.LogError" or "Dynamic.OfflineUpdate.LogPreflightFailed")
+                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.OfflineUpgrade"), _uiText.Format(message));
         }
 
         private string GetPersistentRecordsRoot()

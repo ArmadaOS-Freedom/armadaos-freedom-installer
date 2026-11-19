@@ -760,95 +760,148 @@
         </Grid.RowDefinitions>
 
         <!-- ================= 顶部：品牌 + 主题切换 ================= -->
-        <Grid Grid.Row="0" Margin="20,12,20,8">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-
-            <!-- 星号列约束副标题宽度，说明文字需要换行时在列内自然折行。 -->
-            <Grid Grid.Column="0" VerticalAlignment="Center">
+        <StackPanel Grid.Row="0" Margin="20,12,20,8">
+            <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <Image Grid.Column="0"
-                       Source="{DynamicResource ArmadaBrandMark}"
-                       Width="48"
-                       Height="48"
-                       Stretch="Uniform"
-                       VerticalAlignment="Center"
-                       Margin="0,0,10,0"
-                       ToolTip="ArmadaOS"
-                       AutomationProperties.Name="ArmadaOS" />
+                <!-- 星号列约束副标题宽度，说明文字需要换行时在列内自然折行。 -->
+                <Grid Grid.Column="0" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="ArmadaOS Freedom"
-                               FontSize="17"
-                               FontWeight="SemiBold"
-                               Foreground="{DynamicResource InkBrush}" />
-                    <TextBlock Text="{DynamicResource Static.BrandSubtitle}"
-                               FontSize="11.5"
-                               Foreground="{DynamicResource MutedBrush}"
-                               TextWrapping="Wrap"
-                               Margin="0,2,0,0" />
+                    <Image Grid.Column="0"
+                           Source="{DynamicResource ArmadaBrandMark}"
+                           Width="48"
+                           Height="48"
+                           Stretch="Uniform"
+                           VerticalAlignment="Center"
+                           Margin="0,0,10,0"
+                           ToolTip="ArmadaOS"
+                           AutomationProperties.Name="ArmadaOS" />
+
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="ArmadaOS Freedom"
+                                   FontSize="17"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource InkBrush}" />
+                        <TextBlock Text="{DynamicResource Static.BrandSubtitle}"
+                                   FontSize="11.5"
+                                   Foreground="{DynamicResource MutedBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,2,0,0" />
+                    </StackPanel>
+                </Grid>
+
+                <!--
+                    支持入口：只切换视图去独立支持页，不进入安装向导，也不改动当前选中的功能、
+                    已读到的设备状态或任何输入。星号列仍留给品牌副标题，宽度不够时在列内折行。
+                    诊断导出按钮与支持入口同列并排，仅导出本地诊断信息，不进入安装流程。
+                -->
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="0,0,8,0">
+                    <Button x:Name="SupportProjectButton"
+                            Style="{StaticResource SecondaryButton}"
+                            Click="OnShowSupport"
+                            VerticalAlignment="Center"
+                            Padding="14,8"
+                            Margin="0,0,8,0">
+                        <TextBlock Text="{DynamicResource Static.SupportButton}"
+                                   FontSize="13"
+                                   VerticalAlignment="Center" />
+                    </Button>
+
+                    <Button x:Name="DiagnosticExportButton"
+                            Style="{StaticResource SecondaryButton}"
+                            Click="OnExportDiagnostics"
+                            VerticalAlignment="Center"
+                            Padding="14,8"
+                            AutomationProperties.Name="{DynamicResource Dynamic.Diagnostics.Export}">
+                        <TextBlock Text="{DynamicResource Dynamic.Diagnostics.Export}"
+                                   FontSize="13"
+                                   VerticalAlignment="Center" />
+                    </Button>
                 </StackPanel>
+
+                <Button x:Name="ThemeToggleButton"
+                        Grid.Column="2"
+                        Style="{StaticResource SecondaryButton}"
+                        Click="OnToggleTheme"
+                        VerticalAlignment="Center"
+                        Padding="14,8">
+                    <StackPanel Orientation="Horizontal">
+                        <Border Width="12"
+                                Height="12"
+                                CornerRadius="6"
+                                Background="{DynamicResource AccentBrush}"
+                                VerticalAlignment="Center" />
+                        <TextBlock x:Name="ThemeToggleText"
+                                   Text="{DynamicResource Static.ThemeLabelDark}"
+                                   FontSize="13"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <!-- 语言按钮只在两种界面语言之间切换；按钮显示的是「切换目标」，不是当前语言。 -->
+                <Button x:Name="LanguageToggleButton"
+                        Grid.Column="3"
+                        Style="{StaticResource SecondaryButton}"
+                        Click="OnToggleLanguage"
+                        VerticalAlignment="Center"
+                        Padding="14,8"
+                        Margin="8,0,0,0"
+                        ToolTip="{DynamicResource Static.LanguageTooltip}">
+                    <TextBlock x:Name="LanguageToggleText"
+                               Text="{DynamicResource Static.LanguageToggleLabel}"
+                               FontSize="13"
+                               VerticalAlignment="Center" />
+                </Button>
             </Grid>
 
-            <!--
-                支持入口：只切换视图去独立支持页，不进入安装向导，也不改动当前选中的功能、
-                已读到的设备状态或任何输入。星号列仍留给品牌副标题，宽度不够时在列内折行。
-            -->
-            <Button x:Name="SupportProjectButton"
-                    Grid.Column="1"
-                    Style="{StaticResource SecondaryButton}"
-                    Click="OnShowSupport"
-                    VerticalAlignment="Center"
-                    Padding="14,8"
-                    Margin="0,0,8,0">
-                <TextBlock Text="{DynamicResource Static.SupportButton}"
-                           FontSize="13"
-                           VerticalAlignment="Center" />
-            </Button>
+            <!-- 诊断失败提示：默认折叠，仅在导出诊断信息失败时显示。 -->
+            <Border x:Name="DiagnosticFailurePanel"
+                    Visibility="Collapsed"
+                    Margin="0,8,0,0"
+                    Padding="10,8"
+                    CornerRadius="4"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource AccentBrush}"
+                    BorderThickness="1">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="DiagnosticFailureText"
+                               Grid.Column="0"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource InkBrush}"
+                               FontSize="12.5" />
+                    <Button Grid.Column="1"
+                            Style="{StaticResource SecondaryButton}"
+                            Click="OnExportDiagnostics"
+                            VerticalAlignment="Center"
+                            Padding="12,6"
+                            Margin="10,0,0,0"
+                            AutomationProperties.Name="{DynamicResource Dynamic.Diagnostics.Export}">
+                        <TextBlock Text="{DynamicResource Dynamic.Diagnostics.Export}"
+                                   FontSize="12.5"
+                                   VerticalAlignment="Center" />
+                    </Button>
+                </Grid>
+            </Border>
 
-            <Button x:Name="ThemeToggleButton"
-                    Grid.Column="2"
-                    Style="{StaticResource SecondaryButton}"
-                    Click="OnToggleTheme"
-                    VerticalAlignment="Center"
-                    Padding="14,8">
-                <StackPanel Orientation="Horizontal">
-                    <Border Width="12"
-                            Height="12"
-                            CornerRadius="6"
-                            Background="{DynamicResource AccentBrush}"
-                            VerticalAlignment="Center" />
-                    <TextBlock x:Name="ThemeToggleText"
-                               Text="{DynamicResource Static.ThemeLabelDark}"
-                               FontSize="13"
-                               Margin="8,0,0,0"
-                               VerticalAlignment="Center" />
-                </StackPanel>
-            </Button>
-
-            <!-- 语言按钮只在两种界面语言之间切换；按钮显示的是「切换目标」，不是当前语言。 -->
-            <Button x:Name="LanguageToggleButton"
-                    Grid.Column="3"
-                    Style="{StaticResource SecondaryButton}"
-                    Click="OnToggleLanguage"
-                    VerticalAlignment="Center"
-                    Padding="14,8"
-                    Margin="8,0,0,0"
-                    ToolTip="{DynamicResource Static.LanguageTooltip}">
-                <TextBlock x:Name="LanguageToggleText"
-                           Text="{DynamicResource Static.LanguageToggleLabel}"
-                           FontSize="13"
-                           VerticalAlignment="Center" />
-            </Button>
-        </Grid>
+        </StackPanel>
 
         <!-- ================= 主体：左侧步骤 + 页内内容 ================= -->
         <Grid Grid.Row="1" Margin="20,0,20,0">
@@ -4023,6 +4076,127 @@
                 </StackPanel>
             </ScrollViewer>
 
+            <!-- 诊断导出页：占满主体三列，独立页面。 -->
+            <ScrollViewer x:Name="DiagnosticExportPage"
+                          Grid.Column="0"
+                          Grid.ColumnSpan="3"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Padding="0,0,6,0"
+                          Margin="0,0,0,12"
+                          Visibility="Collapsed">
+                <StackPanel MaxWidth="720" HorizontalAlignment="Stretch">
+                    <!-- 返回：只关闭诊断页，不发起查询、不清空输入、不写文件。 -->
+                    <Button Content="{DynamicResource Static.SupportBack}"
+                            Style="{StaticResource GhostButton}"
+                            Click="OnCloseDiagnosticPage"
+                            HorizontalAlignment="Left"
+                            Padding="0,4"
+                            Margin="0,0,0,8" />
+
+                    <TextBlock Text="{DynamicResource Dynamic.Diagnostics.Export}"
+                               Style="{StaticResource H1Text}"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,12"
+                               Foreground="{DynamicResource InkBrush}" />
+
+                    <Border Style="{StaticResource CardBorder}" Padding="16">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Dynamic.Diagnostics.Options}"
+                                       Style="{StaticResource H2Text}"
+                                       FontSize="17"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource InkBrush}" />
+                            <TextBlock Text="{DynamicResource Dynamic.Diagnostics.NoAttachments}"
+                                       x:Name="DiagnosticNoAttachmentsText"
+                                       Style="{StaticResource CaptionText}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource InkBrush}"
+                                       Margin="0,6,0,0"
+                                       Visibility="Collapsed" />
+
+                            <StackPanel Margin="0,10,0,0">
+                                <CheckBox x:Name="DiagnosticIncludeAblBox"
+                                          Content="{DynamicResource Dynamic.Diagnostics.IncludeAbl}"
+                                          Style="{StaticResource RiskCheckBox}"
+                                          IsChecked="False"
+                                          Foreground="{DynamicResource InkBrush}"
+                                          Margin="0,0,0,8"
+                                          HorizontalAlignment="Left" />
+                                <CheckBox x:Name="DiagnosticIncludeLargeBootBox"
+                                          Content="{DynamicResource Dynamic.Diagnostics.IncludeLargeBoot}"
+                                          Style="{StaticResource RiskCheckBox}"
+                                          IsChecked="False"
+                                          Foreground="{DynamicResource InkBrush}"
+                                          Margin="0,0,0,8"
+                                          HorizontalAlignment="Left" />
+                            </StackPanel>
+
+                            <WrapPanel Margin="0,4,0,0" VerticalAlignment="Center">
+                                <Button Content="{DynamicResource Dynamic.Diagnostics.ChooseLocation}"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Click="OnChooseDiagnosticDestination"
+                                        Padding="14,8"
+                                        Margin="0,0,10,0" />
+                                <Button x:Name="DiagnosticConfirmButton"
+                                        Content="{DynamicResource Dynamic.Diagnostics.ConfirmExport}"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Click="OnConfirmDiagnosticExport"
+                                        IsEnabled="False"
+                                        Padding="14,8" />
+                            </WrapPanel>
+
+                            <TextBlock x:Name="DiagnosticDestinationText"
+                                       TextWrapping="Wrap"
+                                       Margin="0,10,0,0"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource InkBrush}" />
+
+                            <TextBlock x:Name="DiagnosticExportResultText"
+                                       Visibility="Collapsed"
+                                       TextWrapping="Wrap"
+                                       Margin="0,10,0,0"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource InkBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardBorder}" Padding="16" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Dynamic.AboutCommunity}"
+                                       Style="{StaticResource H2Text}"
+                                       Margin="0,0,0,8" />
+
+                            <WrapPanel VerticalAlignment="Center">
+                                <TextBlock Text="{DynamicResource Dynamic.AboutQqGroup}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0"
+                                           Foreground="{DynamicResource InkBrush}" />
+                                <TextBlock Text="{DynamicResource Dynamic.AboutQqNumber}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,10,0"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource InkBrush}" />
+                                <Button x:Name="DiagnosticJoinQqButton"
+                                        Content="{DynamicResource Dynamic.AboutJoinQq}"
+                                        Style="{StaticResource GhostButton}"
+                                        Click="OnOpenQqGroupInvite"
+                                        Padding="10,6"
+                                        Margin="0,0,10,0" />
+                            </WrapPanel>
+
+                            <Button x:Name="DiagnosticIssuesButton"
+                                    Content="{DynamicResource Dynamic.Diagnostics.Issues}"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Click="OnOpenDiagnosticIssues"
+                                    HorizontalAlignment="Left"
+                                    Padding="14,8"
+                                    Margin="0,12,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
             <!-- 关于项目 -->
             <ScrollViewer x:Name="SupportPage"
                           Grid.Column="0"
@@ -4074,11 +4248,11 @@
                     <TextBlock Text="{DynamicResource Dynamic.AboutDevelopers}"
                                Style="{StaticResource H2Text}"
                                Margin="0,12,0,8" />
-                    <UniformGrid Columns="3" Rows="1" Margin="0,0,0,4">
+                    <UniformGrid Columns="4" Rows="1" Margin="0,0,0,4">
                         <Border Style="{StaticResource CardBorder}"
                                 Padding="14"
                                 MinHeight="108"
-                                Margin="0,0,8,0">
+                                Margin="4,0,4,0">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
@@ -4158,7 +4332,7 @@
                         <Border Style="{StaticResource CardBorder}"
                                 Padding="14"
                                 MinHeight="108"
-                                Margin="8,0,0,0">
+                                Margin="4,0,4,0">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
@@ -4189,6 +4363,46 @@
                                         <Button Content="{DynamicResource Static.AuthorBilibili}"
                                                 Style="{StaticResource GhostButton}"
                                                 Click="OnOpenH0CheungBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource CardBorder}"
+                                Padding="14"
+                                MinHeight="108"
+                                Margin="4,0,4,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Image Source="pack://application:,,,/Assets/about-cody.png"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,12,0"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutCodyName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutCodyName}"
+                                               Style="{StaticResource H2Text}"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleDeveloper}"
+                                               Style="{StaticResource CaptionText}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenCodyGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenCodyBilibili"
                                                 Padding="0,4"
                                                 Margin="0,0,12,0" />
                                     </WrapPanel>
@@ -4282,15 +4496,12 @@
                                        Style="{StaticResource BodyText}"
                                        TextWrapping="Wrap"
                                        Margin="0,6,0,0" />
-                            <Button Content="{DynamicResource Dynamic.AboutCopyQq}"
+                            <Button x:Name="AboutJoinQqButton"
+                                    Content="{DynamicResource Dynamic.AboutJoinQq}"
                                     Style="{StaticResource SecondaryButton}"
-                                    Click="OnCopyQqGroup"
+                                    Click="OnOpenQqGroupInvite"
                                     HorizontalAlignment="Left"
                                     Margin="0,10,0,0" />
-                            <TextBlock x:Name="AboutCopyStatus"
-                                       Style="{StaticResource CaptionText}"
-                                       Visibility="Collapsed"
-                                       Margin="0,6,0,0" />
                         </StackPanel>
                     </Border>
 

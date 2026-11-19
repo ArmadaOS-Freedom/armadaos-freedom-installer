@@ -487,4 +487,13 @@ public sealed class InternalInstallServices
 
     /// <summary>The adb executable path, non-blank.</summary>
     public string AdbPath { get; }
+
+    /// <summary>
+    /// Invoked after BindBackup and DetermineDirectSourceSlotsAsync have both returned
+    /// successfully and before the direct ABL/AVB chain gate. Any failure in that subsequent
+    /// gate is then diagnosable against a verified-source snapshot. Init-only; may run on a
+    /// worker thread, so subscribers must not touch the UI or dispatcher and should only
+    /// publish a snapshot reference.
+    /// </summary>
+    public Action? DiagnosticBootSourcesVerified { get; init; }
 }
