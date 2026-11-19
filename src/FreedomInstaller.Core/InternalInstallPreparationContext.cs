@@ -149,7 +149,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
     private readonly GptPartition _linuxRoot;
     private readonly GptPartition _backupPartition;
     private readonly IReadOnlyList<InternalArtifactRegion> _gptWriteRegions;
-    private readonly InternalArtifactRegion _boardSummary;
+    private readonly InternalArtifactRegion? _boardSummary;
     private readonly IReadOnlyDictionary<string, InternalSlotMaterial> _slotMaterials;
     private readonly IReadOnlyDictionary<string, long> _rawUpperBounds;
     private readonly string _evidenceDirectory;
@@ -352,7 +352,12 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     internal IReadOnlyList<InternalArtifactRegion> GptWriteRegions => _gptWriteRegions;
 
-    internal InternalArtifactRegion BoardSummary => _boardSummary;
+    internal InternalArtifactRegion? BoardSummary => _boardSummary;
+
+    internal bool AndroidDataErase =>
+        !(_isDirect &&
+          _boardSummary is null &&
+          string.Equals(_originalTables[0].SourceFingerprint, _postGpt.SourceFingerprint, StringComparison.Ordinal));
 
     internal IReadOnlyDictionary<string, InternalSlotMaterial> SlotMaterials => _slotMaterials;
 
@@ -768,7 +773,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             long requiredExecutionBytes = ComputeDirectPlannedExecutionSpace(
                 backupFacts.Geometries,
                 artifactFacts.GptWriteRegions,
-                artifactFacts.BoardSummary.Length,
+                artifactFacts.BoardSummary?.Length ?? 0,
                 packageSnapshot.LinuxBootRaw.Length,
                 packageSnapshot.LinuxRootRaw.Length,
                 backupFacts.Files,
@@ -1404,7 +1409,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         long requiredBytes = ComputeDirectPlannedExecutionSpace(
             _geometries,
             _gptWriteRegions,
-            _boardSummary.Length,
+            _boardSummary?.Length ?? 0,
             _package.LinuxBootRaw.Length,
             _package.LinuxRootRaw.Length,
             _backupFiles,
@@ -1885,6 +1890,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         state.AndroidBuild = _binding.AndroidIdentity.Identity.Firmware!.DisplayId!;
         state.CurrentSlot = _actualCurrentSlot;
         state.AndroidGiB = _allocation.AndroidBytes / Gib;
+        state.AndroidDataErase = AndroidDataErase;
         state.LinuxRootBytes = _allocation.LinuxRootBytes;
         state.BoardBackupBytes = _allocation.BackupBytes;
         state.BackupDirectory = _backupDirectory;
@@ -2685,9 +2691,26 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             throw new InvalidDataException("The prepared post-GPT copies do not hash to the rebuilt fragments.");
         }
 
+        // The original LUN0 GPT inside this preparation decides the mode: an installed Linux layout is a
+        // reinstall that retains the existing ARMADA_BACKUP and needs no new board archive or summary. Every
+        // other layout keeps the strict reusable-backup check of the legacy route.
+        bool installed = InternalPartitionPlanner.FindInstalledLinuxLayout(original) is not null;
+
+        if (installed != (artifacts.BoardSummary is null))
+        {
+            throw new InvalidDataException(
+                installed
+                    ? "A trusted installed layout must not carry a fresh board archive."
+                    : "A fresh preparation must carry the built board archive.");
+        }
+
         RequireWriteRegions(artifacts.GptWriteRegions, rewrite, held);
         RequirePostRegions(artifacts, rewrite, geometry, held);
-        RequireBoardSummary(artifacts.BoardSummary, rewrite, held);
+        if (!installed)
+        {
+            RequireBoardSummary(artifacts.BoardSummary!, rewrite, held);
+        }
+
         RequireInstallationRecord(
             artifacts,
             held["installation-record"],
@@ -2699,48 +2722,86 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             backup.ProfileId,
             backup.AndroidBuild,
             backup.HardwareId);
-        RequireSummaryManifest(
-            artifacts,
-            held["summary-manifest"],
-            held["board-summary"],
-            rewrite,
-            recomputed,
-            cancellationToken);
-
-        // The single board archive owner decompresses and validates the whole physical image once; the held
-        // count/length/SHA of that image were already checked above, so only the returned inner manifest is
-        // bound to the trusted captured files, the verified PC manifest, both rebuilt GPT copies and the record.
-        JsonElement recovery;
-
-        try
-        {
-            recovery = InternalInstallArtifacts.VerifyBoardArchive(
-                held["board-summary"].Stream, backup.Model, cancellationToken);
-        }
-        finally
-        {
-            held["board-summary"].Stream.Position = 0;
-        }
 
         var recoveryFacts = backup;
-        if (artifacts.RecoveryBackup is { } recoverySource)
+        InternalArtifactRegion? boardSummary = null;
+
+        if (installed)
         {
+            if (artifacts.RecoveryBackup is not { } recoverySource)
+            {
+                throw new InvalidDataException(
+                    "The installed Linux layout has no verified original recovery source to retain.");
+            }
+
             BoardRecoveryBackup.ValidateSource(currentBackup, recoverySource);
             recoveryFacts = BindBackup(recoverySource, claims, cancellationToken, requireCurrentFirmware: false);
+
+            RequireSummaryManifest(
+                artifacts,
+                held["summary-manifest"],
+                null,
+                recoveryFacts.ManifestSha256,
+                rewrite,
+                recomputed,
+                cancellationToken);
         }
-        else if (InternalPartitionPlanner.FindReusableBackup(original) is not null)
+        else
         {
-            throw new InvalidDataException("The retained recovery partition has no verified original recovery source.");
+            if (artifacts.RecoveryBackup is { } recoverySource)
+            {
+                BoardRecoveryBackup.ValidateSource(currentBackup, recoverySource);
+                recoveryFacts = BindBackup(recoverySource, claims, cancellationToken, requireCurrentFirmware: false);
+            }
+            else if (InternalPartitionPlanner.FindReusableBackup(original) is not null)
+            {
+                throw new InvalidDataException("The retained recovery partition has no verified original recovery source.");
+            }
+
+            RequireSummaryManifest(
+                artifacts,
+                held["summary-manifest"],
+                held["board-summary"],
+                null,
+                rewrite,
+                recomputed,
+                cancellationToken);
+
+            // The single board archive owner decompresses and validates the whole physical image once; the held
+            // count/length/SHA of that image were already checked above, so only the returned inner manifest is
+            // bound to the trusted captured files, the verified PC manifest, both rebuilt GPT copies and the record.
+            JsonElement recovery;
+
+            try
+            {
+                recovery = InternalInstallArtifacts.VerifyBoardArchive(
+                    held["board-summary"].Stream, backup.Model, cancellationToken);
+            }
+            finally
+            {
+                held["board-summary"].Stream.Position = 0;
+            }
+
+            RequireRecoveryBindings(
+                recovery,
+                artifacts.InstallationId,
+                artifacts.PlanSha256,
+                recoveryFacts.ManifestSha256,
+                recoveryFacts.Tables[0].SourceFingerprint,
+                rewrite.PostTable.SourceFingerprint,
+                PlannedOwnedUuids(rewrite),
+                TrustedRecoveryEntries(recoveryFacts, held));
+
+            boardSummary = new InternalArtifactRegion(
+                "board-summary",
+                0,
+                rewrite.BackupPartition.StartSector,
+                rewrite.BackupPartition.SectorCount,
+                geometry.SectorSize,
+                held["board-summary"].Path,
+                BoardArchiveBytes,
+                held["board-summary"].Sha256);
         }
-        RequireRecoveryBindings(
-            recovery,
-            artifacts.InstallationId,
-            artifacts.PlanSha256,
-            recoveryFacts.ManifestSha256,
-            recoveryFacts.Tables[0].SourceFingerprint,
-            rewrite.PostTable.SourceFingerprint,
-            PlannedOwnedUuids(rewrite),
-            TrustedRecoveryEntries(recoveryFacts, held));
 
         return new ArtifactFacts
         {
@@ -2751,15 +2812,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             BackupPartition = rewrite.BackupPartition,
             GptWriteRegions = new ReadOnlyCollection<InternalArtifactRegion>(
                 new List<InternalArtifactRegion>(artifacts.GptWriteRegions)),
-            BoardSummary = new InternalArtifactRegion(
-                "board-summary",
-                0,
-                rewrite.BackupPartition.StartSector,
-                rewrite.BackupPartition.SectorCount,
-                geometry.SectorSize,
-                held["board-summary"].Path,
-                BoardArchiveBytes,
-                held["board-summary"].Sha256),
+            BoardSummary = boardSummary,
             InstallationId = artifacts.InstallationId,
             PlanSha256 = held["installation-record"].Sha256,
             SummaryManifestSha256 = held["summary-manifest"].Sha256,
@@ -2782,13 +2835,19 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
         Add("post-gpt-primary", artifacts.PostGptPrimary.FilePath, artifacts.PostGptPrimary.Length, artifacts.PostGptPrimary.Sha256);
         Add("post-gpt-backup", artifacts.PostGptBackup.FilePath, artifacts.PostGptBackup.Length, artifacts.PostGptBackup.Sha256);
-        Add("board-summary", artifacts.BoardSummary.FilePath, artifacts.BoardSummary.Length, artifacts.BoardSummary.Sha256);
+        if (artifacts.BoardSummary is { } boardSummary)
+        {
+            Add("board-summary", boardSummary.FilePath, boardSummary.Length, boardSummary.Sha256);
+        }
+
         Add("installation-record", artifacts.InstallationRecordPath, -1, artifacts.PlanSha256);
         Add("summary-manifest", artifacts.SummaryManifestPath, -1, artifacts.SummaryManifestSha256);
 
-        if (held.Count != 9)
+        int expectedClaims = artifacts.BoardSummary is null ? 8 : 9;
+        if (held.Count != expectedClaims)
         {
-            throw new InvalidDataException("A prepared artifact set must expose exactly nine output claims.");
+            throw new InvalidDataException(
+                "A prepared artifact set must expose exactly " + expectedClaims + " output claims.");
         }
 
         return held;
@@ -3019,7 +3078,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
     private static void RequireSummaryManifest(
         InternalArtifactSet artifact,
         HeldClaim claim,
-        HeldClaim boardArchive,
+        HeldClaim? boardArchive,
+        string? retainedRecoveryManifestSha256,
         GptRewrite rewrite,
         InternalAllocationPlan allocation,
         CancellationToken cancellationToken)
@@ -3049,21 +3109,56 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             throw new InvalidDataException("The summary manifest is not the prepared artifact summary.");
         }
 
-        JsonElement archive = RequireObject(summary, "boardArchive");
-        if (RequireInt64(archive, "length") != BoardArchiveBytes
-            || !SameSha(RequireString(archive, "sha256"), artifact.BoardSummary.Sha256))
+        if (boardArchive is not null)
         {
-            throw new InvalidDataException(
-                "The summary manifest does not describe the fixed 2 GiB board archive.");
+            if (retainedRecoveryManifestSha256 is not null
+                || summary.TryGetProperty("retainedRecoveryManifestSha256", out _))
+            {
+                throw new InvalidDataException(
+                    "A fresh summary must describe only the newly built board archive.");
+            }
+
+            JsonElement archive = RequireObject(summary, "boardArchive");
+            if (artifact.BoardSummary is not { } builtBoardSummary
+                || RequireInt64(archive, "length") != BoardArchiveBytes
+                || !SameSha(RequireString(archive, "sha256"), builtBoardSummary.Sha256))
+            {
+                throw new InvalidDataException(
+                    "The summary manifest does not describe the fixed 2 GiB board archive.");
+            }
+
+            // Only the fixed 64 KiB outer header prefix of the same held image is read here. The owning physical
+            // parser subsequently validates the header and every byte after it before Ready; this comparison uses
+            // the tiny JSON alone.
+            byte[] header = ReadPrefix(boardArchive.Stream, BoardArchiveHeaderBytes, cancellationToken);
+            using JsonDocument headerDocument = JsonDocument.Parse(header);
+
+            RequireBoardArchiveSummary(summary, headerDocument.RootElement, artifact.SummaryUsedBytes);
         }
+        else
+        {
+            if (retainedRecoveryManifestSha256 is null
+                || !summary.TryGetProperty("retainedRecoveryManifestSha256", out JsonElement retained)
+                || retained.ValueKind != JsonValueKind.String
+                || !SameSha(retained.GetString(), retainedRecoveryManifestSha256))
+            {
+                throw new InvalidDataException(
+                    "The retained summary does not name the verified recovery manifest.");
+            }
 
-        // Only the fixed 64 KiB outer header prefix of the same held image is read here. The owning physical
-        // parser subsequently validates the header and every byte after it before Ready; this comparison uses
-        // the tiny JSON alone.
-        byte[] header = ReadPrefix(boardArchive.Stream, BoardArchiveHeaderBytes, cancellationToken);
-        using JsonDocument headerDocument = JsonDocument.Parse(header);
+            if (summary.TryGetProperty("boardArchive", out _)
+                || summary.TryGetProperty("recoveryManifest", out _))
+            {
+                throw new InvalidDataException(
+                    "A retained summary must not pretend to carry a new board archive.");
+            }
 
-        RequireBoardArchiveSummary(summary, headerDocument.RootElement, artifact.SummaryUsedBytes);
+            if (artifact.SummaryUsedBytes != 0)
+            {
+                throw new InvalidDataException(
+                    "A retained summary must report zero summary bytes.");
+            }
+        }
 
         JsonElement backupPartition = RequireObject(summary, "backupPartition");
         if (RequireInt64(backupPartition, "number") != rewrite.BackupPartition.Number
@@ -3934,7 +4029,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             json.WriteNumber("schemaVersion", 1);
             json.WriteString("kind", "armada-internal-install-confirmation");
             json.WriteString("installationId", _installationId.ToString("D"));
-            json.WriteBoolean("androidDataErase", true);
+            json.WriteBoolean("androidDataErase", AndroidDataErase);
 
             json.WriteStartArray("slotOrder");
             foreach (string slot in SlotOrder)
@@ -4079,8 +4174,11 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             json.WriteStartObject("artifacts");
             json.WriteString("planSha256", _artifactPlanSha256);
             json.WriteString("summaryManifestSha256", _summaryManifestSha256);
-            json.WriteString("boardSummarySha256", _boardSummary.Sha256);
-            json.WriteNumber("boardSummaryBytes", _boardSummary.Length);
+            if (_boardSummary is { } boardSummary)
+            {
+                json.WriteString("boardSummarySha256", boardSummary.Sha256);
+                json.WriteNumber("boardSummaryBytes", boardSummary.Length);
+            }
 
             json.WriteStartArray("claims");
             foreach (string role in SortedKeys(_artifactClaims))
@@ -4498,7 +4596,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         internal GptPartition LinuxRoot = null!;
         internal GptPartition BackupPartition = null!;
         internal IReadOnlyList<InternalArtifactRegion> GptWriteRegions = Array.Empty<InternalArtifactRegion>();
-        internal InternalArtifactRegion BoardSummary = null!;
+        internal InternalArtifactRegion? BoardSummary;
         internal IReadOnlyDictionary<string, HeldClaim> Claims =
             new ReadOnlyDictionary<string, HeldClaim>(new Dictionary<string, HeldClaim>(StringComparer.Ordinal));
         internal Guid InstallationId;

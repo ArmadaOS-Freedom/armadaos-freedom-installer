@@ -458,7 +458,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         GblDirectSourceFixture? gblSources = null,
         bool omitEfispBackup = false,
         string? smallSystemSlot = null,
-        string? ablFixturePath = null)
+        string? ablFixturePath = null,
+        long? reinstallAndroidGiB = null)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -786,8 +787,22 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
 
             string artifactsParent = Path.Combine(root, "artifacts");
             Directory.CreateDirectory(artifactsParent);
+            using var factoryRecovery = reinstallAndroidGiB.HasValue ? backup : null;
+            if (factoryRecovery is not null)
+            {
+                using var first = await InternalInstallArtifacts.PrepareAsync(
+                    factoryRecovery, 16, contract.Storage, artifactsParent);
+                foreach (var region in new[] { first.PostGptPrimary, first.PostGptBackup, first.BoardSummary! })
+                {
+                    device.AddWriteOverlay(
+                        region.Lun, region.StartSector, region.SectorCount, region.FilePath);
+                }
+                backup = await InternalInstallBackup.CreatePreparationSnapshotAsync(
+                    client, factoryRecovery, backupParent);
+            }
             artifacts = await InternalInstallArtifacts.PrepareAsync(
-                backup!, 16, contract.Storage, artifactsParent);
+                backup!, reinstallAndroidGiB ?? 16, contract.Storage, artifactsParent,
+                recoveryBackup: factoryRecovery);
 
             EdlEntry entry = new(TestAdbPath, router, discovery);
             var services = new InternalInstallServices(entry, router, discovery, TestAdbPath);

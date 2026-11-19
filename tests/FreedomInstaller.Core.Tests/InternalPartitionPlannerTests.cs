@@ -217,6 +217,55 @@ public sealed class InternalPartitionPlannerTests
         Assert.Equal(123871227, plan.OriginalUserdataEndSectorExclusive);
     }
 
+    // ---------------------------------------------------------------- canonical installed layout labels
+
+    private static GptTable G4InstalledTable(string bootName, string rootName, string backupName)
+    {
+        const long bootStart = 16777216;
+        const long bootSectors = 262144;
+        const long rootStart = 17039360;
+        const long rootSectors = 133660672 - 17039360;
+        const long backupStart = 133660672;
+        const long backupSectors = 524288;
+        const long userdataCount = bootStart - G4UserdataStart;
+
+        return G4Table(
+            Part(2, "userdata", G4UserdataStart, userdataCount),
+            Part(3, bootName, bootStart, bootSectors),
+            Part(4, rootName, rootStart, rootSectors),
+            Part(5, backupName, backupStart, backupSectors));
+    }
+
+    [Theory]
+    [InlineData("ARMADA_BOOT", "ARMADA_ROOT", "ARMADA_BACKUP", null)]
+    [InlineData("armada_boot", "ARMADA_ROOT", "ARMADA_BACKUP", "An unrecognised ARMADA_ partition is present.")]
+    [InlineData("Armada_Boot", "ARMADA_ROOT", "ARMADA_BACKUP", "An unrecognised ARMADA_ partition is present.")]
+    [InlineData(" ARMADA_BOOT ", "ARMADA_ROOT", "ARMADA_BACKUP", "An unrecognised ARMADA_ partition is present.")]
+    [InlineData("ARMADA_BOOT", "armada_root", "ARMADA_BACKUP", "An unrecognised ARMADA_ partition is present.")]
+    [InlineData("ARMADA_BOOT", "Armada_Root", "ARMADA_BACKUP", "An unrecognised ARMADA_ partition is present.")]
+    [InlineData("ARMADA_BOOT", " ARMADA_ROOT ", "ARMADA_BACKUP", "An unrecognised ARMADA_ partition is present.")]
+    [InlineData("ARMADA_BOOT", "ARMADA_ROOT", "armada_backup", "An unrecognised ARMADA_ partition is present.")]
+    [InlineData("ARMADA_BOOT", "ARMADA_ROOT", "Armada_Backup", "An unrecognised ARMADA_ partition is present.")]
+    [InlineData("ARMADA_BOOT", "ARMADA_ROOT", " ARMADA_BACKUP ", "An unrecognised ARMADA_ partition is present.")]
+    public void FindInstalledLinuxLayout_RequiresCanonicalNames(string bootName, string rootName, string backupName, string? expectedMessage)
+    {
+        GptTable table = G4InstalledTable(bootName, rootName, backupName);
+
+        if (expectedMessage is null)
+        {
+            var layout = InternalPartitionPlanner.FindInstalledLinuxLayout(table);
+            Assert.NotNull(layout);
+            Assert.Equal(bootName, layout!.Value.Boot.Name);
+            Assert.Equal(rootName, layout.Value.Root.Name);
+            Assert.Equal(backupName, layout.Value.Backup.Name);
+        }
+        else
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() => InternalPartitionPlanner.FindInstalledLinuxLayout(table));
+            Assert.Equal(expectedMessage, ex.Message);
+        }
+    }
+
     // ---------------------------------------------------------------- exact aligned minimum
 
     [Fact]

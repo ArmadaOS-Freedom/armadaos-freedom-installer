@@ -238,6 +238,67 @@ public sealed partial class InternalInstallExistingBackupTests : IClassFixture<E
     }
 
     [Fact]
+    public async Task InstalledLayout_DoesNotPrepareANewBoardArchive()
+    {
+        var parent = _fixture.NewCaseDirectory(nameof(InstalledLayout_DoesNotPrepareANewBoardArchive));
+        string sourceDirectory = _fixture.NewCaseDirectory(nameof(InstalledLayout_DoesNotPrepareANewBoardArchive) + "-sources");
+        IReadOnlyDictionary<string, VerifiedEdlFile> sources = CreateDirectSources(sourceDirectory);
+        string backing = _fixture.NewCaseDirectory(nameof(InstalledLayout_DoesNotPrepareANewBoardArchive) + "-backing");
+        var device = IB001SyntheticDevice.CreateDirect(backing, sources);
+        var factoryClient = NewClient(new IB001FakeEdlRunner(device), NewBinding());
+        using var factory = await InternalInstallBackup.CreateAsync(factoryClient, parent);
+        var storage = new PackageStorage(1L << 30, 8L << 30, 4L << 30, 1L << 30);
+        using var first = await InternalInstallArtifacts.PrepareAsync(factory, 48, storage, parent);
+        Assert.NotNull(first.BoardSummary);
+        var artifacts = new[] { first.PostGptPrimary, first.PostGptBackup, first.BoardSummary! };
+        foreach (var artifact in artifacts)
+        {
+            device.AddWriteOverlay(0, artifact.StartSector, artifact.SectorCount, artifact.FilePath);
+        }
+        var runner = new IB001FakeEdlRunner(device)
+        {
+            EmitGeometryOnSingleSectorRead = true
+        };
+        var client = NewClient(runner, NewBinding());
+        await client.ProbeAsync(0, true, CancellationToken.None);
+        using var lease = await BoardRecoveryBackup.ReadDirectoryAsync(client, parent, parent);
+        Assert.NotNull(lease);
+        using var recovery = await InternalInstallBackup.OpenRecoveryAsync(client, lease.DirectoryPath);
+        using var current = await InternalInstallBackup.CreatePreparationSnapshotAsync(client, recovery, parent);
+        Assert.Contains(current.Tables[0].Partitions, p => p.Name == "ARMADA_BOOT");
+        await Assert.ThrowsAsync<InvalidDataException>(() => InternalInstallArtifacts.PrepareAsync(current, 32, storage, parent));
+        using var installed = await InternalInstallArtifacts.PrepareAsync(current, 32, storage, parent, recoveryBackup: recovery);
+        Assert.Null(installed.BoardSummary);
+        Assert.Equal(first.BackupPartition.PartUuid, installed.BackupPartition.PartUuid);
+        Assert.Equal(first.BackupPartition.StartSector, installed.BackupPartition.StartSector);
+        Assert.Equal(first.BackupPartition.SectorCount, installed.BackupPartition.SectorCount);
+        Assert.Empty(runner.Writes);
+        Assert.Equal(recovery.ManifestSha256, JsonNode.Parse(File.ReadAllText(installed.SummaryManifestPath))!["retainedRecoveryManifestSha256"]!.GetValue<string>());
+        // Exercise the same artifact/backup binding gate used before confirmation.
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+        var context = typeof(InternalInstallArtifacts).Assembly.GetType("FreedomInstaller.Core.InternalInstallPreparationContext")!;
+        var claimType = context.GetNestedType("HeldClaim", System.Reflection.BindingFlags.NonPublic)!;
+        var claims = (System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(claimType))!;
+        try
+        {
+            var facts = context.GetMethod("BindBackup", flags)!.Invoke(null,
+                new object[] { current, claims, CancellationToken.None, true })!;
+            var identity = current.Binding.AndroidIdentity!.Identity;
+            var bound = context.GetMethod("BindArtifacts", flags)!.Invoke(null, new object[] {
+                installed, current, facts, identity, identity.Firmware!,
+                storage,
+                CancellationToken.None, claims });
+            Assert.NotNull(bound);
+        }
+        finally
+        {
+            foreach (var claim in claims)
+                ((FileStream)claimType.GetProperty("Stream", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .GetValue(claim)!).Dispose();
+        }
+    }
+
+    [Fact]
     public async Task PreparationSnapshotReusesRecoveryMaterialAndReadsCurrentBootAndGpt()
     {
         var parent = _fixture.NewCaseDirectory(nameof(PreparationSnapshotReusesRecoveryMaterialAndReadsCurrentBootAndGpt));

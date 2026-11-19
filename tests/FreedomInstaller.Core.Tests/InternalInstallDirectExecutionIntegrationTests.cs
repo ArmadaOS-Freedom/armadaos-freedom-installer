@@ -71,6 +71,78 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
         _rawShared = rawShared;
     }
 
+    [Theory]
+    [InlineData(16, false)]
+    [InlineData(32, true)]
+    public async Task Direct_flow_reuses_or_resizes_gpt_and_writes_misc_accordingly(
+        long androidGiB, bool layoutResized)
+    {
+        var android = new ReadOnlyAndroidResponder();
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _toolchain.Toolchain, _rawShared, "a", android, reinstallAndroidGiB: androidGiB);
+
+        string model = session.Package.DeviceModel;
+        android.ConfigureFacts(session.Backend.Prepared, session.Artifacts, model);
+
+        IB001FakeEdlRunner runner = session.EdlRunner;
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+
+        Assert.Equal(layoutResized, prepared.AndroidDataErase);
+
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            prepared.ConfirmationId, userdataEraseConfirmed: true, progress: null);
+
+        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
+        Assert.Equal(1, runner.ResetCount);
+
+        IReadOnlyList<IB001Write> writes = runner.Writes;
+        var backup = session.Artifacts.BackupPartition;
+        var misc = session.Backup.Files["misc"];
+
+        Assert.Contains(writes, w => w.Lun == 0
+            && w.StartSector == session.Artifacts.LinuxBoot.StartSector);
+        Assert.Contains(writes, w => w.Lun == 0
+            && w.StartSector == session.Artifacts.LinuxRoot.StartSector);
+        Assert.DoesNotContain(writes, w => w.Lun == 0
+            && w.StartSector < backup.StartSector + backup.SectorCount
+            && backup.StartSector < w.StartSector + w.SectorCount);
+
+        var gptRegions = session.Artifacts.GptWriteRegions;
+        List<IB001Write> gptWrites = writes
+            .Where(w => gptRegions.Any(r => r.Lun == w.Lun && r.StartSector == w.StartSector))
+            .ToList();
+        if (layoutResized)
+        {
+            Assert.Equal(4, gptWrites.Count);
+            foreach (var region in gptRegions)
+            {
+                Assert.Contains(gptWrites, w => w.Lun == region.Lun && w.StartSector == region.StartSector);
+            }
+        }
+        else
+        {
+            Assert.Empty(gptWrites);
+        }
+
+        List<IB001Write> miscWrites = writes
+            .Where(w => w.Lun == misc.Lun && w.StartSector == misc.StartSector)
+            .ToList();
+        byte[] MiscBytes(IB001Write w) => File.ReadAllBytes(w.FilePath);
+
+        if (androidGiB == 16)
+        {
+            Assert.Empty(miscWrites);
+        }
+        else
+        {
+            Assert.Single(miscWrites);
+            string text = Encoding.ASCII.GetString(MiscBytes(miscWrites[0]));
+            Assert.Contains("boot-recovery", text);
+            Assert.Contains("--wipe_data", text);
+        }
+    }
+
     // ------------------------------------------------------------------ case 1: full success stops after the accepted reset
 
     [Fact]
