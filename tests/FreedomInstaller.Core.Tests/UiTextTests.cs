@@ -81,6 +81,72 @@ public sealed class UiTextTests
         Assert.Contains("install log", english);
     }
 
+    [Theory]
+    [InlineData("blocked-locked-g4-first-install-firmware: TB322FC with locked bootloader and ZUXOS 1.5.10.358 cannot be safely installed.", BootloaderState.Locked)]
+    [InlineData("requires-compatible-bootloader: TB323FU requires a compatible bootloader.", BootloaderState.Locked)]
+    [InlineData("requires-compatible-bootloader: TB710FU requires a compatible bootloader.", BootloaderState.Locked)]
+    [InlineData("gbl-boot-chain-key-mismatch: TB322FC boot chain key does not match.", BootloaderState.Locked)]
+    [InlineData("gbl-runtime-region-unknown: TB323FU runtime region is unknown.", BootloaderState.Locked)]
+    public void InternalInstallPreparationFailure_LockedBootloaderCompatibilityIsLocalized(string detail, BootloaderState state)
+    {
+        var exception = new InvalidOperationException(detail);
+        var message = UiText.InternalInstallPreparationFailure(exception, state);
+
+        var chinese = new UiText(UiText.ChineseLanguage).Format(message);
+        Assert.Contains("免解锁方案检查不通过，请解锁 BL。", chinese);
+        Assert.Contains(detail, chinese);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.Contains("The check for installation with a locked bootloader failed. Please unlock the bootloader.", english);
+        Assert.Contains(detail, english);
+    }
+
+    [Theory]
+    [InlineData("gbl-boot-chain-key-mismatch: some detail", BootloaderState.Unknown, "Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch")]
+    [InlineData("gbl-boot-chain-key-mismatch: some detail", BootloaderState.Unlocked, "Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch")]
+    [InlineData("gbl-runtime-region-unknown: some detail", BootloaderState.Unknown, "Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown")]
+    [InlineData("gbl-runtime-region-unknown: some detail", BootloaderState.Unlocked, "Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown")]
+    public void InternalInstallPreparationFailure_GblCodesPreserveSpecificMessage(string detail, BootloaderState state, string expectedKey)
+    {
+        var exception = new InvalidOperationException(detail);
+        var message = UiText.InternalInstallPreparationFailure(exception, state);
+
+        Assert.Equal(expectedKey, message.Key);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.DoesNotContain("Please unlock the bootloader", english);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_PlainIoExceptionUsesGenericMessage()
+    {
+        var exception = new IOException("disk fell over");
+        var message = UiText.InternalInstallPreparationFailure(exception, BootloaderState.Unlocked);
+
+        Assert.Equal("Dynamic.InternalInstall.Prepared.Failed", message.Key);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.DoesNotContain("Please unlock the bootloader", english);
+        Assert.DoesNotContain("免解锁方案检查不通过", new UiText(UiText.ChineseLanguage).Format(message));
+        Assert.DoesNotContain("disk fell over", english);
+    }
+
+    [Theory]
+    [InlineData(BootloaderState.Unlocked)]
+    [InlineData(BootloaderState.Unknown)]
+    [InlineData(null)]
+    public void InternalInstallPreparationFailure_RequiresCompatibleBootloaderStaysGeneric(BootloaderState? state)
+    {
+        var exception = new InvalidOperationException("requires-compatible-bootloader: some future detail");
+        var message = UiText.InternalInstallPreparationFailure(exception, state);
+
+        Assert.Equal("Dynamic.InternalInstall.Prepared.Failed", message.Key);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.DoesNotContain("Please unlock the bootloader", english);
+        Assert.DoesNotContain("requires-compatible-bootloader", english);
+    }
+
     [Fact]
     public void InternalInstallPreparationFailure_UnknownFreeSpaceIsLocalized()
     {

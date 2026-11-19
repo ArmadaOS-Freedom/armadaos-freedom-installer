@@ -759,7 +759,7 @@ public partial class MainWindow
                     or NotImplementedException
                     or MaintenanceException)
                 {
-                    var failure = UiText.InternalInstallPreparationFailure(exception);
+                    var failure = UiText.InternalInstallPreparationFailure(exception, _internalInstallDeviceCheck?.FastbootLockState);
                     SetInternalInstallConfirmStatus(failure);
                     AppendLocalizedLog(failure);
                     AppendWorkLogLine(T("Dynamic.InternalInstall.Prepared.TechnicalDetails", InstallerLog.DescribeFailure(exception)));
