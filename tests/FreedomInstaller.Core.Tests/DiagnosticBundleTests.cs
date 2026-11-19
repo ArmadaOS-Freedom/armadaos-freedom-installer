@@ -86,16 +86,22 @@ public sealed class DiagnosticBundleTests : IDisposable
         string logLine = "driver-check path=C:\\tools\\edl.exe id=USB\\VID_05C6&PID_9008\\AB12CD&0&3 serial=" + secret;
         string expectedUsb = "USB\\VID_05C6&PID_9008\\[redacted]";
 
+        string sourceSha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+        string overflow = "packed raw image exceeds the slot loader budget (target slot 'a', source slot 'a', raw image actual bytes 134217729, MaxRawBytes limit 134217728)";
+        string summaryWithCommit = "InstallerBuildCommit: " + sourceSha + "\n";
+        string logWithOverflow = logLine + "\n" + overflow;
+
         var hostEnv = new Dictionary<string, string?>
         {
             ["OS"] = "Windows 11",
             ["NOTE"] = envValue,
             ["MISSING"] = null,
             ["USB_DEVICE"] = "USB\\VID_05C6&PID_9008\\6&AB12&0&3",
+            ["app.buildCommit"] = sourceSha,
         };
 
         string dest = Path.Combine(_root, "bundle.zip");
-        var req = new DiagnosticExportRequest("env", logLine, new[] { secret }, Array.Empty<DiagnosticBootFile>(), false, false)
+        var req = new DiagnosticExportRequest(summaryWithCommit, logWithOverflow, new[] { secret }, Array.Empty<DiagnosticBootFile>(), false, false)
         {
             HostEnvironment = hostEnv,
         };
@@ -112,12 +118,15 @@ public sealed class DiagnosticBundleTests : IDisposable
             Assert.Contains("value with \"quotes\" and\nnewline", note);
             Assert.DoesNotContain(secret, note);
             Assert.Equal(expectedUsb, root.GetProperty("USB_DEVICE").GetString());
+            Assert.Equal(sourceSha, root.GetProperty("app.buildCommit").GetString());
         }
 
         string logText = Encoding.UTF8.GetString(zip["installer.log"]);
         Assert.Contains("driver-check path=", logText);
         Assert.Contains(expectedUsb, logText);
         Assert.DoesNotContain(secret, logText);
+        Assert.Contains(overflow, logText);
+        Assert.Contains(sourceSha, Encoding.UTF8.GetString(zip["summary.txt"]));
         Assert.Equal(4, zip.Count);
     }
 

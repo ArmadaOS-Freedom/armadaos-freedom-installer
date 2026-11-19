@@ -30,6 +30,7 @@ public partial class MainWindow
 
         var appAssembly = typeof(MainWindow).Assembly;
         map["app.version"] = appAssembly.GetName().Version?.ToString();
+        map["app.buildCommit"] = InstallerDisplayVersion.TryGetCommitForAssembly(appAssembly);
         map["app.informationalVersion"] = appAssembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
 

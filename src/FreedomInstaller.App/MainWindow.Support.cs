@@ -1,4 +1,5 @@
 using System.Windows;
+using FreedomInstaller.Core;
 
 namespace FreedomInstaller.App;
 
@@ -18,7 +19,7 @@ public partial class MainWindow
 
         _showingSupport = true;
 
-        AboutVersionText.Text = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? string.Empty;
+        AboutVersionText.Text = InstallerDisplayVersion.ForAssembly(typeof(MainWindow).Assembly);
         AboutJoinQqButton.ToolTip = QqGroupInviteUrl;
 
         ApplyFunctionView();

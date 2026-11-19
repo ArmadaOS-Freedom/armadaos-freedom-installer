@@ -98,7 +98,7 @@ public partial class MainWindow : Window
             : HomePage.IsVisible ? HomePage
             : GlobalRecoveryPage.IsVisible ? GlobalRecoveryPage
             : WorkflowScrollViewer;
-        AboutVersionText.Text = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? string.Empty;
+        AboutVersionText.Text = InstallerDisplayVersion.ForAssembly(typeof(MainWindow).Assembly);
         ShowView(SupportPage);
     }
 

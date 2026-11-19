@@ -286,7 +286,8 @@ public static partial class EdlRawBootBuilder
                 throw new InvalidDataException(
                     "BSS-expanded Linux payload " + linuxTarget.ToString(CultureInfo.InvariantCulture)
                     + " exceeds the slot loader budget "
-                    + material.LoaderBudget.MaxRawBytes.ToString(CultureInfo.InvariantCulture));
+                    + material.LoaderBudget.MaxRawBytes.ToString(CultureInfo.InvariantCulture)
+                    + " (target slot '" + request.Slot + "', source slot '" + sourceSlot + "')");
             }
 
             if ((ReadLeU64(baseHeader, Arm64TextOffsetField) & 0x1FFFFFUL)
@@ -398,7 +399,7 @@ public static partial class EdlRawBootBuilder
             PackedRawFacts packed;
             using (FileStream raw = OpenRead(packedPath, "packed raw image"))
             {
-                packed = InspectPackedRaw(raw, baseHeader, material.LoaderBudget.MaxRawBytes, token);
+                packed = InspectPackedRaw(raw, baseHeader, material.LoaderBudget.MaxRawBytes, token, request.Slot, sourceSlot);
             }
 
             string unpackedDirectory = Path.Combine(child, UnpackedDirectoryName);
@@ -842,7 +843,9 @@ public static partial class EdlRawBootBuilder
         FileStream raw,
         byte[] baseHeader,
         long maxRawBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? targetSlot = null,
+        string? sourceSlot = null)
     {
         long bytes = raw.Length;
         if (bytes < Arm64HeaderProbeBytes)
@@ -852,7 +855,14 @@ public static partial class EdlRawBootBuilder
 
         if (bytes > maxRawBytes)
         {
-            throw new InvalidDataException("packed raw image exceeds the slot loader budget");
+            throw new InvalidDataException(
+                "packed raw image exceeds the slot loader budget"
+                + " (raw image actual bytes " + bytes.ToString(CultureInfo.InvariantCulture)
+                + ", MaxRawBytes limit " + maxRawBytes.ToString(CultureInfo.InvariantCulture)
+                + (targetSlot is null
+                    ? string.Empty
+                    : ", target slot '" + targetSlot + "', source slot '" + sourceSlot + "'")
+                + ")");
         }
 
         byte[] head = new byte[Arm64HeaderProbeBytes];

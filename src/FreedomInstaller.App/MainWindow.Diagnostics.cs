@@ -372,8 +372,10 @@ public partial class MainWindow
         sb.AppendLine("FreedomInstaller diagnostics");
         sb.AppendLine("Mode: " + (IsInternalInstallMode ? "internal-install" : "standard"));
 
-        var installerVersion = typeof(MainWindow).Assembly.GetName().Version?.ToString();
+        var appAssemblyForDiag = typeof(MainWindow).Assembly;
+        var installerVersion = appAssemblyForDiag.GetName().Version?.ToString();
         if (!string.IsNullOrWhiteSpace(installerVersion)) sb.AppendLine("InstallerVersion: " + installerVersion);
+        sb.AppendLine("InstallerBuildCommit: " + (InstallerDisplayVersion.TryGetCommitForAssembly(appAssemblyForDiag) ?? "unknown"));
         if (SelectedOperationText?.Text is { Length: > 0 } op) sb.AppendLine("SelectedOperation: " + op);
 
         var model = _internalInstallDeviceCheck?.Android?.Identity?.Model;
