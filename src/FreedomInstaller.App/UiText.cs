@@ -165,7 +165,7 @@ internal sealed class UiText
     /// backend prefix diagnostics, already-localized preparation failures) get dedicated text;
     /// other reasons keep the generic message without the raw exception text.
     /// </summary>
-    internal static UiMessage InternalInstallPreparationFailure(Exception exception)
+    internal static UiMessage InternalInstallPreparationFailure(Exception exception, BootloaderState? lockState = null)
     {
         if (exception is InternalInstallWorkDiskSpaceException space)
         {
@@ -184,6 +184,11 @@ internal sealed class UiText
             return localized.UserMessage;
         }
 
+        if (BootloaderCompatibilityFailure(exception, lockState) is { } compatibility)
+        {
+            return compatibility;
+        }
+
         if (exception is InvalidOperationException problem)
         {
             if (problem.Message.StartsWith("requires-complete-backup-with-efisp:", StringComparison.Ordinal))
@@ -200,14 +205,36 @@ internal sealed class UiText
             {
                 return new UiMessage("Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown");
             }
-
-            if (problem.Message.StartsWith("requires-compatible-bootloader:", StringComparison.Ordinal))
-            {
-                return new UiMessage("Dynamic.InternalInstall.Prepared.CompatibilityRequired");
-            }
         }
 
         return new UiMessage("Dynamic.InternalInstall.Prepared.Failed");
+    }
+
+    /// <summary>
+    /// Maps a bootloader-compatibility rejection to the dedicated message when the device is
+    /// confirmed locked, keeping the original diagnostic as detail. Returns null otherwise.
+    /// </summary>
+    internal static UiMessage? BootloaderCompatibilityFailure(Exception exception, BootloaderState? lockState = null)
+    {
+        if (exception is not InvalidOperationException problem)
+        {
+            return null;
+        }
+
+        if (problem.Message.StartsWith("blocked-locked-g4-first-install-firmware:", StringComparison.Ordinal))
+        {
+            return new UiMessage("Dynamic.InternalInstall.Prepared.CompatibilityRequired", problem.Message);
+        }
+
+        if (lockState == BootloaderState.Locked
+            && (problem.Message.StartsWith("requires-compatible-bootloader:", StringComparison.Ordinal)
+                || problem.Message.StartsWith("gbl-boot-chain-key-mismatch:", StringComparison.Ordinal)
+                || problem.Message.StartsWith("gbl-runtime-region-unknown:", StringComparison.Ordinal)))
+        {
+            return new UiMessage("Dynamic.InternalInstall.Prepared.CompatibilityRequired", problem.Message);
+        }
+
+        return null;
     }
 
     private const decimal BytesPerGiB = 1073741824m;

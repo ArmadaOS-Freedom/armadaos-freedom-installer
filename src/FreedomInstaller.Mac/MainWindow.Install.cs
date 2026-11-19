@@ -399,6 +399,10 @@ public partial class MainWindow
                 var check = new InternalInstallDeviceCheck(transport.AdbPath, transport.FastbootPath, _runner);
                 var result = await check.CheckAsync(target.Serial, progress, token);
                 acceptProgress = false;
+                if (result.Succeeded)
+                {
+                    InternalInstallBackend.RequireFirstInstallFirmwareCompatibility(result);
+                }
                 _internalInstallDeviceCheck = result;
                 RenderDeviceCheck(result);
                 if (!result.Succeeded && !result.Cancelled)
@@ -422,9 +426,11 @@ public partial class MainWindow
                 _internalInstallDeviceCheck = null;
                 _internalInstallPower = null;
                 var diagnostic = string.IsNullOrWhiteSpace(exception.Message) ? UnknownValue : exception.Message;
-                SetText(InternalInstallCheckProgressText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
-                SetText(InternalInstallCheckStatusText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
-                AppendLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
+                var failure = UiText.BootloaderCompatibilityFailure(exception)
+                    ?? M("Dynamic.InternalInstall.Check.Failed", diagnostic);
+                SetText(InternalInstallCheckProgressText, failure);
+                SetText(InternalInstallCheckStatusText, failure);
+                AppendLog(failure);
             }
         });
     }
@@ -1194,14 +1200,13 @@ public partial class MainWindow
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
                 ResetConfirmation();
-                var key = exception.Message switch
-                {
-                    var m when m.StartsWith("requires-complete-backup-with-efisp:", StringComparison.Ordinal) =>
-                        M("Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired"),
-                    var m when m.StartsWith("requires-compatible-bootloader:", StringComparison.Ordinal) =>
-                        M("Dynamic.InternalInstall.Prepared.CompatibilityRequired"),
-                    _ => M("Dynamic.InternalInstall.Prepared.Failed", exception.Message),
-                };
+                var key = UiText.BootloaderCompatibilityFailure(exception, check.FastbootLockState)
+                    ?? (exception.Message switch
+                    {
+                        var m when m.StartsWith("requires-complete-backup-with-efisp:", StringComparison.Ordinal) =>
+                            M("Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired"),
+                        _ => M("Dynamic.InternalInstall.Prepared.Failed", exception.Message),
+                    });
                 SetText(InternalInstallCapacityStatusText, key);
                 AppendLog(key);
             }
