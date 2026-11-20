@@ -129,7 +129,7 @@ public sealed partial class InternalInstallBackend
                     ct)
                 .ConfigureAwait(false);
 
-            await WriteFreshMiscAsync(fresh, run, progress, ct).ConfigureAwait(false);
+            await WriteFreshMiscAsync(fresh, run, progress, ct, androidDataErase: true).ConfigureAwait(false);
 
             await ResetExecutionAsync(fresh, run, InternalInstallStage.BootingAndroid, progress, ct)
                 .ConfigureAwait(false);
@@ -1371,7 +1371,7 @@ public sealed partial class InternalInstallBackend
         ExecutionRun run,
         IProgress<InternalInstallProgress>? progress,
         CancellationToken cancellationToken,
-        bool androidDataErase = true)
+        bool androidDataErase)
     {
         ArgumentNullException.ThrowIfNull(freshClient);
         ArgumentNullException.ThrowIfNull(run);

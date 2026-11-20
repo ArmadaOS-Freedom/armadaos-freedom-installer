@@ -318,11 +318,11 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
-        // A preserved Android layout leaves misc untouched unless Armada boot is in play: Armada boot
-        // must not write the install BCB, which would be an explicit Android wipe request.
+        // A preserved ARMADA_BOOT layout skips misc entirely; a preserved legacy layout may still clear
+        // an existing installer BCB. The explicit AndroidDataErase decision must accompany every call.
         if (_context.AndroidDataErase || !_context.Package.EdlRawContract.BootRecipe.UsesArmadaBoot)
         {
-            await WriteFreshMiscAsync(_initialEdl, run, progress, ct).ConfigureAwait(false);
+            await WriteFreshMiscAsync(_initialEdl, run, progress, ct, androidDataErase: _context.AndroidDataErase).ConfigureAwait(false);
         }
 
         if (_context.LauncherDefaults is { } plan)
