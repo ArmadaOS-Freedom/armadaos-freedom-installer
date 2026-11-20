@@ -458,7 +458,10 @@ public partial class MainWindow
         return ApplyInternalInstallCapacityPlan(chosen);
     }
 
-    /// <summary>默认提案是原始 userdata 整 GiB 的一半，再夹到真实范围内；不读取当前安卓已用空间。</summary>
+    /// <summary>
+    /// 默认提案：全新 / 旧路线取原始 userdata 整 GiB 的一半；重装（原始 GPT 已是已安装 Linux 布局）取整个
+    /// userdata 范围（whole GiB）。两者都夹到真实范围内，不读取当前安卓已用空间。
+    /// </summary>
     private static long InternalInstallDefaultAndroidGiB(GptTable table, AndroidAllocationRange range)
     {
         long userdataBytes = 0;
@@ -472,7 +475,8 @@ public partial class MainWindow
         }
 
         var wholeGiB = userdataBytes / Gibibyte;
-        var proposal = wholeGiB / 2;
+        bool reinstall = InternalPartitionPlanner.FindInstalledLinuxLayout(table) is not null;
+        var proposal = reinstall ? wholeGiB : wholeGiB / 2;
         if (proposal < range.MinimumGiB)
         {
             return range.MinimumGiB;
@@ -708,7 +712,8 @@ public partial class MainWindow
                         try
                         {
                             preparedArtifacts = await InternalInstallArtifacts.PrepareAsync(
-                                backup, androidGiB, storage, attemptRoot, token, recoverySource);
+                                backup, androidGiB, storage, attemptRoot, token, recoverySource,
+                                initializeDiskLauncherSettings: package.Validation.UsesArmadaBoot);
                         }
                         catch
                         {
@@ -902,8 +907,11 @@ public partial class MainWindow
         var recoveryImageUsedMiB = (set.SummaryUsedBytes / 1024d / 1024d)
             .ToString("0.0", System.Globalization.CultureInfo.CurrentCulture) + " MiB";
 
+        var preparedSummaryKey = set.BoardSummary is null
+            ? "Dynamic.InternalInstall.Prepared.ReinstallSummary"
+            : "Dynamic.InternalInstall.Prepared.Summary";
         var preparedSummaryMessage = M(
-            "Dynamic.InternalInstall.Prepared.Summary",
+            preparedSummaryKey,
             model,
             serial,
             build,
@@ -919,7 +927,7 @@ public partial class MainWindow
             FormatBytes(set.Allocation.LinuxBootBytes),
             FormatBytes(prepared.BoardBackupBytes),
             recoveryImageUsedMiB,
-            FormatBytes(set.BoardSummary.Length),
+            set.BoardSummary is { } boardSummary ? FormatBytes(boardSummary.Length) : string.Empty,
             prepared.ArtifactPlanSha256,
             set.DirectoryPath);
 
@@ -951,11 +959,14 @@ public partial class MainWindow
 
         // 指纹、证据目录与材料目录只写进本地化日志，不进入面向用户的工程卡片。
         // 直装路径只记录真实共有的字段：原始工具、候选等哈希留在 Core 证据里，不在这里另造字段。
+        var recoveryImageLogKey = set.BoardSummary is null
+            ? "Dynamic.InternalInstall.Prepared.ReinstallSummaryLog"
+            : "Dynamic.InternalInstall.Prepared.RecoveryImageLog";
         AppendLocalizedLog(
             M(
-                "Dynamic.InternalInstall.Prepared.RecoveryImageLog",
+                recoveryImageLogKey,
                 recoveryImageUsedMiB,
-                FormatBytes(set.BoardSummary.Length)));
+                set.BoardSummary is { } logBoardSummary ? FormatBytes(logBoardSummary.Length) : string.Empty));
 
         AppendLocalizedLog(
             M(

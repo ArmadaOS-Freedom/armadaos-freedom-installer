@@ -102,6 +102,7 @@ public enum InternalInstallStage
     /// verification outcome.
     /// </summary>
     WritingGblRuntime,
+    WritingLauncherSettings,
 }
 
 /// <summary>
@@ -380,6 +381,8 @@ public sealed class InternalInstallPrepared
 
         internal long AndroidGiB;
 
+        internal bool AndroidDataErase = true;
+
         internal long LinuxRootBytes;
 
         internal long BoardBackupBytes;
@@ -443,6 +446,7 @@ public sealed class InternalInstallPrepared
         AndroidBuild = state.AndroidBuild;
         CurrentSlot = state.CurrentSlot;
         AndroidGiB = state.AndroidGiB;
+        AndroidDataErase = state.AndroidDataErase;
         LinuxRootBytes = state.LinuxRootBytes;
         BoardBackupBytes = state.BoardBackupBytes;
         BackupDirectory = state.BackupDirectory;
@@ -488,6 +492,9 @@ public sealed class InternalInstallPrepared
 
     /// <summary>Android capacity in whole GiB that the plan leaves to Android.</summary>
     public long AndroidGiB { get; }
+
+    /// <summary>Whether Android userdata is planned to be erased by this install.</summary>
+    public bool AndroidDataErase { get; }
 
     /// <summary>Linux root partition size in bytes.</summary>
     public long LinuxRootBytes { get; }

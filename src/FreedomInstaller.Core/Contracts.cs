@@ -132,4 +132,11 @@ public sealed record PackageValidationResult
     /// device proof, and it never replaces the downstream expansion and device checks.
     /// </summary>
     public string? DeploymentKind { get; init; }
+
+    /// <summary>
+    /// True when the validated <c>edl-raw-v1</c> boot recipe declares ARMADA_BOOT. Only newly prepared
+    /// 2 GiB ARMADA_BACKUP archives from such a package initialize the v3 launcher descriptor and the
+    /// normal Linux default; older packages and reused archives keep their unchanged behavior.
+    /// </summary>
+    public bool UsesArmadaBoot { get; init; }
 }

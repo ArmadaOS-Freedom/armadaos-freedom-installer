@@ -52,6 +52,8 @@ public static partial class EdlRawBootBuilder
 
     private const uint ManifestEntryCount = 7u;
 
+    private const uint DiskManifestEntryCount = 4u;
+
     private const uint ManifestDefaultIndex = 1u;
 
     private const uint ManifestTimeoutMillis = 8000u;
@@ -269,62 +271,70 @@ public static partial class EdlRawBootBuilder
             ReadExactly(kernel.Stream, linuxHeader, 0, linuxHeader.Length);
             RequireArm64Header(linuxHeader, "package kernel payload");
 
-            ulong linuxImageSize = ReadLeU64(linuxHeader, Arm64ImageSizeField);
-            if (linuxImageSize > long.MaxValue)
-            {
-                throw new InvalidDataException("package kernel image_size does not fit a signed 64-bit length");
-            }
-
-            long linuxTarget = Math.Max(kernel.Claim.Length, (long)linuxImageSize);
-            if (linuxTarget < Arm64HeaderProbeBytes)
-            {
-                throw new InvalidDataException("package kernel target length is below the ARM64 header");
-            }
-
-            if (linuxTarget > material.LoaderBudget.MaxRawBytes)
-            {
-                throw new InvalidDataException(
-                    "BSS-expanded Linux payload " + linuxTarget.ToString(CultureInfo.InvariantCulture)
-                    + " exceeds the slot loader budget "
-                    + material.LoaderBudget.MaxRawBytes.ToString(CultureInfo.InvariantCulture));
-            }
-
-            if ((ReadLeU64(baseHeader, Arm64TextOffsetField) & 0x1FFFFFUL)
-                != (ReadLeU64(linuxHeader, Arm64TextOffsetField) & 0x1FFFFFUL))
-            {
-                throw new InvalidDataException(
-                    "base and package kernel text_offset disagree in the low 21 bits");
-            }
+            // Whether this recipe is the disk-backed ARMADA_BOOT variant. Under that recipe the signed
+            // Linux file is loaded independently per its own ARM64 header at runtime, so the BSS-expanded
+            // staging and the low-21-bit text_offset agreement between base and kernel do not apply here.
+            bool usesArmadaBoot = request.Package.BootRecipe.UsesArmadaBoot;
 
             string linuxPaddedPath = Path.Combine(child, LinuxPaddedFileName);
-            long linuxPaddedBytes;
-            string linuxPaddedSha256;
-            using (FileStream output = CreateNew(linuxPaddedPath, "BSS-expanded Linux payload"))
+            long linuxPaddedBytes = 0;
+            string linuxPaddedSha256 = string.Empty;
+            if (!usesArmadaBoot)
             {
-                kernel.Stream.Position = 0;
-                using (IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+                ulong linuxImageSize = ReadLeU64(linuxHeader, Arm64ImageSizeField);
+                if (linuxImageSize > long.MaxValue)
                 {
-                    CopyTo(kernel.Stream, output, hash, token);
-                    WriteZeros(output, linuxTarget - kernel.Claim.Length, hash, token);
-                    linuxPaddedSha256 = ToHex(hash.GetHashAndReset());
+                    throw new InvalidDataException("package kernel image_size does not fit a signed 64-bit length");
                 }
 
-                output.Flush(true);
-                linuxPaddedBytes = output.Length;
-            }
-
-            if (linuxPaddedBytes != linuxTarget)
-            {
-                throw new InvalidDataException("BSS-expanded Linux payload length changed on disk");
-            }
-
-            using (FileStream padded = OpenRead(linuxPaddedPath, "BSS-expanded Linux payload"))
-            {
-                byte[] writtenLinuxHeader = new byte[Arm64HeaderProbeBytes];
-                ReadExactly(padded, writtenLinuxHeader, 0, writtenLinuxHeader.Length);
-                if (!writtenLinuxHeader.AsSpan().SequenceEqual(linuxHeader))
+                long linuxTarget = Math.Max(kernel.Claim.Length, (long)linuxImageSize);
+                if (linuxTarget < Arm64HeaderProbeBytes)
                 {
-                    throw new InvalidDataException("staged Linux payload header differs from the package kernel");
+                    throw new InvalidDataException("package kernel target length is below the ARM64 header");
+                }
+
+                if (linuxTarget > material.LoaderBudget.MaxRawBytes)
+                {
+                    throw new InvalidDataException(
+                        "BSS-expanded Linux payload " + linuxTarget.ToString(CultureInfo.InvariantCulture)
+                        + " exceeds the slot loader budget "
+                        + material.LoaderBudget.MaxRawBytes.ToString(CultureInfo.InvariantCulture));
+                }
+
+                if ((ReadLeU64(baseHeader, Arm64TextOffsetField) & 0x1FFFFFUL)
+                    != (ReadLeU64(linuxHeader, Arm64TextOffsetField) & 0x1FFFFFUL))
+                {
+                    throw new InvalidDataException(
+                        "base and package kernel text_offset disagree in the low 21 bits");
+                }
+
+                using (FileStream output = CreateNew(linuxPaddedPath, "BSS-expanded Linux payload"))
+                {
+                    kernel.Stream.Position = 0;
+                    using (IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+                    {
+                        CopyTo(kernel.Stream, output, hash, token);
+                        WriteZeros(output, linuxTarget - kernel.Claim.Length, hash, token);
+                        linuxPaddedSha256 = ToHex(hash.GetHashAndReset());
+                    }
+
+                    output.Flush(true);
+                    linuxPaddedBytes = output.Length;
+                }
+
+                if (linuxPaddedBytes != linuxTarget)
+                {
+                    throw new InvalidDataException("BSS-expanded Linux payload length changed on disk");
+                }
+
+                using (FileStream padded = OpenRead(linuxPaddedPath, "BSS-expanded Linux payload"))
+                {
+                    byte[] writtenLinuxHeader = new byte[Arm64HeaderProbeBytes];
+                    ReadExactly(padded, writtenLinuxHeader, 0, writtenLinuxHeader.Length);
+                    if (!writtenLinuxHeader.AsSpan().SequenceEqual(linuxHeader))
+                    {
+                        throw new InvalidDataException("staged Linux payload header differs from the package kernel");
+                    }
                 }
             }
 
@@ -371,10 +381,26 @@ public static partial class EdlRawBootBuilder
                 throw new InvalidDataException("package kernel payload is empty");
             }
 
+            string diskNormalPath = Path.Combine(child, "normal.disk");
+            string diskDiagnosticPath = Path.Combine(child, "diagnostic.disk");
+            if (usesArmadaBoot)
+            {
+                byte[] normalDisk = DiskLinuxEntry.Encode(
+                    request.Package.BootRecipe.BootUuid,
+                    request.Package.BootRecipe.RootUuid,
+                    diagnostic: false);
+                WriteNewFile(diskNormalPath, normalDisk, "normal disk descriptor", token);
+                byte[] diagnosticDisk = DiskLinuxEntry.Encode(
+                    request.Package.BootRecipe.BootUuid,
+                    request.Package.BootRecipe.RootUuid,
+                    diagnostic: true);
+                WriteNewFile(diskDiagnosticPath, diagnosticDisk, "diagnostic disk descriptor", token);
+            }
+
             string configPath = Path.Combine(child, BuildConfigFileName);
             WriteNewFile(
                 configPath,
-                ConfigUtf8.GetBytes(BuildConfigText(request.Package.DeviceModel)),
+                ConfigUtf8.GetBytes(usesArmadaBoot ? BuildDiskConfigText() : BuildConfigText(request.Package.DeviceModel)),
                 "build configuration",
                 token);
 
@@ -398,7 +424,7 @@ public static partial class EdlRawBootBuilder
             PackedRawFacts packed;
             using (FileStream raw = OpenRead(packedPath, "packed raw image"))
             {
-                packed = InspectPackedRaw(raw, baseHeader, material.LoaderBudget.MaxRawBytes, token);
+                packed = InspectPackedRaw(raw, baseHeader, material.LoaderBudget.MaxRawBytes, token, usesArmadaBoot);
             }
 
             string unpackedDirectory = Path.Combine(child, UnpackedDirectoryName);
@@ -418,26 +444,41 @@ public static partial class EdlRawBootBuilder
                 throw new InvalidDataException("native unpacker did not create the unpacked directory");
             }
 
-            var payloads = new Dictionary<string, string>(StringComparer.Ordinal)
+            var payloads = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (usesArmadaBoot)
             {
-                [PayloadBase] = material.BaseImageSha256,
-                [PayloadLinuxPadded] = linuxPaddedSha256,
-                [PayloadRuntime] = runtimeSha256,
-                [PayloadNormalDtb] = normalDtb.Sha256,
-                [PayloadDiagnosticDtb] = diagnosticDtb.Sha256,
-                [PayloadInitramfs] = initramfsSha256,
-            };
-
-            VerifyUnpackedOutput(
-                unpackedDirectory,
-                baseImagePath,
-                linuxPaddedPath,
-                runtimePath,
-                Path.Combine(child, NormalDtbFileName),
-                Path.Combine(child, DiagnosticDtbFileName),
-                initramfsPath,
-                request.Package.DeviceModel,
-                token);
+                VerifyDiskUnpackedOutput(
+                    unpackedDirectory,
+                    baseImagePath,
+                    runtimePath,
+                    diskNormalPath,
+                    diskDiagnosticPath,
+                    request.Package.DeviceModel,
+                    token);
+                payloads[PayloadBase] = material.BaseImageSha256;
+                payloads[PayloadRuntime] = runtimeSha256;
+                payloads["normal.disk"] = Sha256Text.Hex(File.ReadAllBytes(diskNormalPath));
+                payloads["diagnostic.disk"] = Sha256Text.Hex(File.ReadAllBytes(diskDiagnosticPath));
+            }
+            else
+            {
+                payloads[PayloadBase] = material.BaseImageSha256;
+                payloads[PayloadLinuxPadded] = linuxPaddedSha256;
+                payloads[PayloadRuntime] = runtimeSha256;
+                payloads[PayloadNormalDtb] = normalDtb.Sha256;
+                payloads[PayloadDiagnosticDtb] = diagnosticDtb.Sha256;
+                payloads[PayloadInitramfs] = initramfsSha256;
+                VerifyUnpackedOutput(
+                    unpackedDirectory,
+                    baseImagePath,
+                    linuxPaddedPath,
+                    runtimePath,
+                    Path.Combine(child, NormalDtbFileName),
+                    Path.Combine(child, DiagnosticDtbFileName),
+                    initramfsPath,
+                    request.Package.DeviceModel,
+                    token);
+            }
 
             RequireInactiveBackupUsable(inactiveBackup);
 
@@ -663,6 +704,7 @@ public static partial class EdlRawBootBuilder
                 "package device model does not match the inactive backup profile model");
         }
 
+        inactiveBackup.RequireProjectBootDonor(request);
         return inactiveBackup.SourceSlot;
     }
 
@@ -711,9 +753,19 @@ public static partial class EdlRawBootBuilder
             throw new InvalidDataException("current_boot header_size is not 1584");
         }
 
-        if (ReadLeU32(header, 12) != 0)
+        uint ramdiskSize = ReadLeU32(header, 12);
+        uint kernelSize = ReadLeU32(header, 8);
+        if (kernelSize == 0)
         {
-            throw new InvalidDataException("current_boot ramdisk_size is nonzero");
+            throw new InvalidDataException("current_boot kernel_size is zero");
+        }
+
+        ulong kernelAligned = Align4096((ulong)kernelSize);
+        ulong ramdiskAligned = Align4096((ulong)ramdiskSize);
+        ulong bodyEnd = (ulong)BootHeaderBytes + kernelAligned + ramdiskAligned;
+        if (bodyEnd > (ulong)current.Stream.Length - (ulong)AvbFooterBytes)
+        {
+            throw new InvalidDataException("current_boot kernel and ramdisk exceed the partition bounds");
         }
 
         if (ReadLeU32(header, 1580) != 0)
@@ -837,12 +889,46 @@ public static partial class EdlRawBootBuilder
         return text.ToString();
     }
 
+    private static string BuildDiskConfigText()
+    {
+        var text = new StringBuilder();
+        text.Append("[Pack]\n");
+        text.Append("Shim=").Append(RuntimeFileName).Append('\n');
+        text.Append("Output=").Append(PackedRawFileName).Append('\n');
+        text.Append("Default=Image-01\n");
+        text.Append("Timeout=").Append(ManifestTimeoutMillis.ToString(CultureInfo.InvariantCulture)).Append('\n');
+
+        text.Append('\n').Append("[Image-00]\n");
+        text.Append("Name=原厂 Android\n");
+        text.Append("Path=").Append(BaseImageFileName).Append('\n');
+        text.Append("Type=Linux\n");
+        text.Append("BaseImage=true\n");
+        text.Append("Align=21\n");
+
+        text.Append('\n').Append("[Image-01]\n");
+        text.Append("Name=机身 Linux\n");
+        text.Append("Type=DiskLinux\n");
+        text.Append("Path=normal.disk\n");
+        text.Append("Align=3\n");
+
+        text.Append('\n').Append("[Image-02]\n");
+        text.Append("Name=Linux 诊断模式\n");
+        text.Append("Type=DiskLinux\n");
+        text.Append("Path=diagnostic.disk\n");
+        text.Append("Align=3\n");
+
+        text.Append('\n').Append("[Manifest]\n");
+        text.Append("Type=Manifest\n");
+        return text.ToString();
+    }
+
     /// <summary>Fixed header facts only; the whole-manifest parser stays with the package reader.</summary>
     private static PackedRawFacts InspectPackedRaw(
         FileStream raw,
         byte[] baseHeader,
         long maxRawBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool usesArmadaBoot = false)
     {
         long bytes = raw.Length;
         if (bytes < Arm64HeaderProbeBytes)
@@ -929,9 +1015,14 @@ public static partial class EdlRawBootBuilder
             throw new InvalidDataException("packed raw manifest version is not 0.1");
         }
 
-        if (ReadLeU32(manifestHeader, 8) != ManifestEntryCount)
+        uint manifestEntryCount = ReadLeU32(manifestHeader, 8);
+        uint expectedEntryCount = usesArmadaBoot ? DiskManifestEntryCount : ManifestEntryCount;
+        if (manifestEntryCount != expectedEntryCount)
         {
-            throw new InvalidDataException("packed raw manifest does not declare seven entries");
+            throw new InvalidDataException(
+                usesArmadaBoot
+                    ? "packed raw manifest does not declare four entries"
+                    : "packed raw manifest does not declare seven entries");
         }
 
         if (ReadLeU32(manifestHeader, 12) != ManifestDefaultIndex)
@@ -965,7 +1056,8 @@ public static partial class EdlRawBootBuilder
             ReadLeU64(head, Arm64FlagsField),
             shimOffset,
             manifestOffset,
-            manifestSize);
+            manifestSize,
+            manifestEntryCount);
     }
 
     private static long ResolveBranchTarget(uint word)
@@ -993,6 +1085,93 @@ public static partial class EdlRawBootBuilder
     }
 
     // ------------------------------------------------------------------ unpack verification
+
+    private static void VerifyDiskUnpackedOutput(
+        string unpackedDirectory,
+        string baseImagePath,
+        string runtimePath,
+        string normalPath,
+        string diagnosticPath,
+        string model,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string[] expectedNames =
+        {
+            UnpackedConfigFileName,
+            BaseImageFileName,
+            ShimPayloadFileName,
+            "Image-01-DiskLinux",
+            "Image-02-DiskLinux",
+        };
+
+        var actual = new List<FileSystemInfo>();
+        foreach (string entry in Directory.EnumerateFileSystemEntries(unpackedDirectory))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            FileSystemInfo info = Directory.Exists(entry)
+                ? new DirectoryInfo(entry)
+                : new FileInfo(entry);
+            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidDataException("unpacked output contains a reparse point: " + info.Name);
+            }
+
+            if (info is not FileInfo)
+            {
+                throw new InvalidDataException("unpacked output contains a non-file entry: " + info.Name);
+            }
+
+            actual.Add(info);
+        }
+
+        if (actual.Count != expectedNames.Length)
+        {
+            throw new InvalidDataException("unpacked output must contain exactly five files");
+        }
+
+        foreach (string name in expectedNames)
+        {
+            bool seen = false;
+            foreach (FileSystemInfo info in actual)
+            {
+                if (string.Equals(info.Name, name, StringComparison.Ordinal))
+                {
+                    seen = true;
+                    break;
+                }
+            }
+
+            if (!seen)
+            {
+                throw new InvalidDataException("unpacked output is missing " + name);
+            }
+        }
+
+        RequireIdenticalFile(
+            Path.Combine(unpackedDirectory, BaseImageFileName),
+            baseImagePath,
+            "unpacked Android kernel", cancellationToken);
+        RequireIdenticalFile(
+            Path.Combine(unpackedDirectory, ShimPayloadFileName),
+            runtimePath,
+            "unpacked runtime", cancellationToken);
+        RequireIdenticalFile(
+            Path.Combine(unpackedDirectory, "Image-01-DiskLinux"),
+            normalPath,
+            "unpacked normal descriptor", cancellationToken);
+        RequireIdenticalFile(
+            Path.Combine(unpackedDirectory, "Image-02-DiskLinux"),
+            diagnosticPath,
+            "unpacked diagnostic descriptor", cancellationToken);
+
+        VerifyUnpackedConfig(
+            Path.Combine(unpackedDirectory, UnpackedConfigFileName),
+            model,
+            cancellationToken,
+            usesArmadaBoot: true);
+    }
 
     private static void VerifyUnpackedOutput(
         string unpackedDirectory,
@@ -1071,7 +1250,7 @@ public static partial class EdlRawBootBuilder
     /// One deliberately small strict INI reader for the emitted configuration. It is not a general INI
     /// library: duplicate sections or keys, comments, a key outside a section and any unsafe path are refused.
     /// </summary>
-    private static void VerifyUnpackedConfig(string path, string model, CancellationToken cancellationToken)
+    private static void VerifyUnpackedConfig(string path, string model, CancellationToken cancellationToken, bool usesArmadaBoot = false)
     {
         var file = new FileInfo(path);
         if (!file.Exists || file.Length <= 0 || file.Length > ConfigBytesLimit)
@@ -1150,6 +1329,13 @@ public static partial class EdlRawBootBuilder
             current.Add(key, value);
         }
 
+        if (usesArmadaBoot)
+        {
+            RequireSections(sections, "Pack", "Image-00", "Image-01", "Image-02", "Manifest");
+        RequireCompactConfigValues(sections);
+            return;
+        }
+
         RequireSections(sections, "Pack", "Image-00", "Image-01", "Image-02", "Image-03", "Image-04", "Image-05", "Manifest");
 
         Dictionary<string, string> pack = sections["Pack"];
@@ -1178,6 +1364,72 @@ public static partial class EdlRawBootBuilder
         RequireImage(
             sections["Image-05"], "Installed initramfs", "Blob", "16", null, null, null,
             new[] { InitramfsFileName, Image05PayloadFileName }, "Image-05");
+    }
+
+    private static void RequireCompactConfigValues(
+        Dictionary<string, Dictionary<string, string>> sections)
+    {
+        Dictionary<string, string> pack = sections["Pack"];
+        RequireKeyCount(pack, "Pack", 4);
+        RequireValue(pack, "Shim", ShimPayloadFileName);
+        RequireValue(pack, "Output", RepackedRawFileName);
+        RequireValue(pack, "Default", "Image-01");
+        RequireValue(pack, "Timeout", "8000");
+
+        Dictionary<string, string> manifest = sections["Manifest"];
+        RequireKeyCount(manifest, "Manifest", 1);
+        RequireValue(manifest, "Type", "Manifest");
+
+        Dictionary<string, string> image00 = sections["Image-00"];
+        RequireKeyCount(image00, "Image-00", 5);
+        RequireImage(
+            image00,
+            "原厂 Android",
+            "Linux",
+            "21",
+            null,
+            null,
+            null,
+            new[] { BaseImageFileName },
+            "Image-00");
+
+        Dictionary<string, string> image01 = sections["Image-01"];
+        RequireKeyCount(image01, "Image-01", 6);
+        RequireImage(
+            image01,
+            "机身 Linux",
+            "DiskLinux",
+            "3",
+            "0x0",
+            null,
+            null,
+            new[] { "Image-01-DiskLinux" },
+            "Image-01");
+
+        Dictionary<string, string> image02 = sections["Image-02"];
+        RequireKeyCount(image02, "Image-02", 6);
+        RequireImage(
+            image02,
+            "Linux 诊断模式",
+            "DiskLinux",
+            "3",
+            "0x0",
+            null,
+            null,
+            new[] { "Image-02-DiskLinux" },
+            "Image-02");
+    }
+
+    private static void RequireKeyCount(
+        Dictionary<string, string> section,
+        string sectionName,
+        int expected)
+    {
+        if (section.Count != expected)
+        {
+            throw new InvalidDataException(
+                "unpacked config.cfg section " + sectionName + " has an unexpected number of keys");
+        }
     }
 
     private static void RequireSections(
@@ -1392,32 +1644,28 @@ public static partial class EdlRawBootBuilder
         writer.WriteNumber("shimOffset", packed.ShimOffset);
         writer.WriteNumber("manifestOffset", packed.ManifestOffset);
         writer.WriteNumber("manifestSize", packed.ManifestSize);
-        writer.WriteNumber("entryCount", ManifestEntryCount);
+        writer.WriteNumber("entryCount", packed.ManifestEntries);
         writer.WriteNumber("defaultIndex", ManifestDefaultIndex);
         writer.WriteNumber("timeoutMillis", ManifestTimeoutMillis);
         writer.WriteEndObject();
 
-        writer.WriteStartObject("linuxPadded");
-        writer.WriteNumber("bytes", linuxPaddedBytes);
-        writer.WriteString("sha256", linuxPaddedSha256);
-        writer.WriteEndObject();
+        // The disk-backed recipe never stages a BSS-expanded Linux file, so no linuxPadded object is
+        // emitted; the values below are placeholder zeros that must never be reported as evidence.
+        if (!request.Package.BootRecipe.UsesArmadaBoot)
+        {
+            writer.WriteStartObject("linuxPadded");
+            writer.WriteNumber("bytes", linuxPaddedBytes);
+            writer.WriteString("sha256", linuxPaddedSha256);
+            writer.WriteEndObject();
+        }
 
         writer.WriteString("roundTripRawSha256", packed.Sha256);
 
         writer.WriteStartObject("unpackedPayloadSha256");
-        foreach (string key in new[]
-                 {
-                     PayloadBase,
-                     PayloadLinuxPadded,
-                     PayloadRuntime,
-                     PayloadNormalDtb,
-                     PayloadDiagnosticDtb,
-                     PayloadInitramfs,
-                 })
+        foreach ((string key, string value) in payloads)
         {
-            writer.WriteString(key, payloads[key]);
+            writer.WriteString(key, value);
         }
-
         writer.WriteEndObject();
 
         writer.WriteStartObject("envelope");
@@ -1851,5 +2099,6 @@ public static partial class EdlRawBootBuilder
         ulong Flags,
         ulong ShimOffset,
         ulong ManifestOffset,
-        ulong ManifestSize);
+        ulong ManifestSize,
+        uint ManifestEntries);
 }

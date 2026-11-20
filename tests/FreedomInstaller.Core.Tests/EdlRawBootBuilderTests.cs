@@ -214,6 +214,116 @@ public sealed class EdlRawBootBuilderTests
         Assert.Equal(1, defaults);
     }
 
+    [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    public async Task BuildAsync_ArmadaBoot_PreservesBothAndroidBases(string model)
+    {
+        string linuxPacker = RequireEnvironment(LinuxPackerVariable);
+        string linuxUnpacker = RequireEnvironment(LinuxUnpackerVariable);
+        using EdlRawBootTools tools = await LoadToolsAsync();
+        using var package = new SyntheticPackage(deviceModel: model, usesArmadaBoot: true);
+        using var workspace = new Workspace();
+
+        var runner = new LinuxOracleRunner(tools, linuxPacker, linuxUnpacker);
+        SlotFixture slotA = CreateSlot(workspace, "a", 0x31);
+        SlotFixture slotB = CreateSlot(workspace, "b", 0x71);
+
+        Assert.True(package.Contract.BootRecipe.UsesArmadaBoot);
+
+        foreach (SlotFixture slot in new[] { slotA, slotB })
+        {
+            string currentBefore = Sha256OfFile(slot.CurrentBoot.Path);
+            string vendorBefore = Sha256OfFile(slot.VendorBoot.Path);
+            int callsBefore = runner.Calls;
+
+            EdlRawBuiltBoot result = await EdlRawBootBuilder.BuildAsync(
+                new EdlRawBootBuildRequest(
+                    slot.Slot,
+                    slot.CurrentBoot,
+                    slot.VendorBoot,
+                    slot.InitBoot,
+                    slot.Abl,
+                    slot.XblConfig,
+                    package.Contract,
+                    tools,
+                    workspace.Root),
+                runner);
+
+            try
+            {
+                // Base image is byte-identical to the slot's own base (per-slot, distinct bases).
+                Assert.True(File.Exists(result.BaseImage.Path));
+                Assert.Equal(
+                    slot.BaseSha256,
+                    Sha256OfFile(result.BaseImage.Path));
+
+                // Old Android bases untouched.
+                Assert.Equal(currentBefore, Sha256OfFile(slot.CurrentBoot.Path));
+                Assert.Equal(vendorBefore, Sha256OfFile(slot.VendorBoot.Path));
+
+                // Exact unpacked Image-01/02-DiskLinux byte representation.
+                string unpacked = Path.Combine(result.DirectoryPath, "unpacked");
+                Assert.True(Directory.Exists(unpacked));
+                byte[] image01 = DiskLinuxEntry.Encode(package.Contract.BootRecipe.BootUuid, package.Contract.BootRecipe.RootUuid, false);
+                byte[] image02 = DiskLinuxEntry.Encode(package.Contract.BootRecipe.BootUuid, package.Contract.BootRecipe.RootUuid, true);
+                Assert.Equal(image01, File.ReadAllBytes(Path.Combine(unpacked, "Image-01-DiskLinux")));
+                Assert.Equal(image02, File.ReadAllBytes(Path.Combine(unpacked, "Image-02-DiskLinux")));
+
+                // Packed raw manifest declares exactly four entries.
+                Assert.True(File.Exists(result.VerificationReport.Path));
+                using (JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(result.VerificationReport.Path)))
+                {
+                    Assert.Equal(4, manifest.RootElement.GetProperty("packedRaw").GetProperty("entryCount").GetInt32());
+                }
+
+                byte[] packedRaw = File.ReadAllBytes(result.PackedRaw.Path);
+                MethodInfo currentBootParseMenu = typeof(EdlRawBootBuilder).GetMethod(
+                    "CurrentBootParseMenu",
+                    BindingFlags.NonPublic | BindingFlags.Static,
+                    null,
+                    new[] { typeof(byte[]), typeof(CancellationToken) },
+                    null)!;
+                object? menu = currentBootParseMenu.Invoke(null, new object[] { packedRaw, CancellationToken.None });
+                Assert.NotNull(menu);
+                Type menuType = menu!.GetType();
+                FieldInfo entryCountField = menuType.GetField("EntryCount", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!;
+                FieldInfo defaultBeforeField = menuType.GetField("DefaultBefore", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!;
+                Assert.Equal(4u, (uint)entryCountField.GetValue(menu)!);
+                Assert.Equal(1u, (uint)defaultBeforeField.GetValue(menu)!);
+
+                const int imageSizeOffset = 16;
+                const int manifestOffsetFieldOffset = 32;
+                const int manifestSizeFieldOffset = 40;
+                const int shimOffsetFieldOffset = 48;
+                ulong imageSize = LeU64(packedRaw, imageSizeOffset);
+                ulong manifestOffset = LeU64(packedRaw, manifestOffsetFieldOffset);
+                ulong manifestSize = LeU64(packedRaw, manifestSizeFieldOffset);
+                ulong shimOffset = LeU64(packedRaw, shimOffsetFieldOffset);
+                MethodInfo isProjectCompositeKernel = typeof(EdlRawBootBuilder).GetMethod(
+                    "IsProjectCompositeKernel",
+                    BindingFlags.NonPublic | BindingFlags.Static,
+                    null,
+                    new[] { typeof(byte[]), typeof(ulong), typeof(ulong), typeof(ulong), typeof(ulong) },
+                    null)!;
+                object? composite = isProjectCompositeKernel.Invoke(
+                    null,
+                    new object[] { packedRaw, imageSize, manifestOffset, manifestSize, shimOffset });
+                Assert.NotNull(composite);
+                Assert.True((bool)composite!);
+
+                // Three oracle commands per slot, and no legacy Android paths were produced.
+                Assert.Equal(callsBefore + 3, runner.Calls);
+
+                await RevalidateAsync(result);
+            }
+            finally
+            {
+                result.Dispose();
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- negatives before any native call
 
     [Fact]
@@ -1086,7 +1196,7 @@ public sealed class EdlRawBootBuilderTests
 
         private readonly string _model;
 
-        internal SyntheticPackage(ulong? kernelTextOffset = null, string? deviceModel = null)
+        internal SyntheticPackage(ulong? kernelTextOffset = null, string? deviceModel = null, bool usesArmadaBoot = false)
         {
             _fixture = EdlRawFixture.Create();
             _model = deviceModel ?? EdlRawFixture.Model;
@@ -1100,6 +1210,14 @@ public sealed class EdlRawBootBuilderTests
             if (deviceModel is not null)
             {
                 ApplyDeviceModel(_fixture, deviceModel);
+            }
+
+            if (usesArmadaBoot)
+            {
+                // Uses the already-available fixture metadata read/write round-trip helpers.
+                JsonObject bootMetadata = _fixture.ReadMetadata();
+                bootMetadata["bootRecipe"]!["linuxBootSource"] = "armada-boot-v1";
+                _fixture.WriteMetadata(bootMetadata);
             }
 
             string[] compatible = string.Equals(_model, G5Model, StringComparison.Ordinal)

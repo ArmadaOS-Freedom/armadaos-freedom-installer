@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -27,6 +28,9 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
     : IClassFixture<EdlClientToolchainFixture>, IClassFixture<EdlRawSharedInput>
 {
     private const string Adb = "test-adb";
+
+    // Opt-in: when the lab ARMADA_BOOT signed ZIP is configured, run the direct-overwrite fact against it.
+    private const string ArmadaBootOverwriteMediaEnv = "FREEDOM_ARMADA_BOOT_OVERWRITE_MEDIA";
 
     private const int RawSectorSize = 4096;
 
@@ -69,6 +73,203 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
     {
         _toolchain = toolchain;
         _rawShared = rawShared;
+    }
+
+    [Theory]
+    [InlineData(16, false)]
+    [InlineData(32, true)]
+    public async Task Direct_flow_reuses_or_resizes_gpt_and_writes_misc_accordingly(
+        long androidGiB, bool layoutResized)
+    {
+        var android = new ReadOnlyAndroidResponder();
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _toolchain.Toolchain, _rawShared, "a", android, reinstallAndroidGiB: androidGiB);
+
+        string model = session.Package.DeviceModel;
+        android.ConfigureFacts(session.Backend.Prepared, session.Artifacts, model);
+
+        IB001FakeEdlRunner runner = session.EdlRunner;
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+
+        Assert.Equal(layoutResized, prepared.AndroidDataErase);
+
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            prepared.ConfirmationId, userdataEraseConfirmed: true, progress: null);
+
+        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
+        Assert.Equal(1, runner.ResetCount);
+
+        IReadOnlyList<IB001Write> writes = runner.Writes;
+        var backup = session.Artifacts.BackupPartition;
+        var misc = session.Backup.Files["misc"];
+
+        Assert.Contains(writes, w => w.Lun == 0
+            && w.StartSector == session.Artifacts.LinuxBoot.StartSector);
+        Assert.Contains(writes, w => w.Lun == 0
+            && w.StartSector == session.Artifacts.LinuxRoot.StartSector);
+        Assert.DoesNotContain(writes, w => w.Lun == 0
+            && w.StartSector < backup.StartSector + backup.SectorCount
+            && backup.StartSector < w.StartSector + w.SectorCount);
+
+        var gptRegions = session.Artifacts.GptWriteRegions;
+        List<IB001Write> gptWrites = writes
+            .Where(w => gptRegions.Any(r => r.Lun == w.Lun && r.StartSector == w.StartSector))
+            .ToList();
+        if (layoutResized)
+        {
+            Assert.Equal(4, gptWrites.Count);
+            foreach (var region in gptRegions)
+            {
+                Assert.Contains(gptWrites, w => w.Lun == region.Lun && w.StartSector == region.StartSector);
+            }
+        }
+        else
+        {
+            Assert.Empty(gptWrites);
+        }
+
+        List<IB001Write> miscWrites = writes
+            .Where(w => w.Lun == misc.Lun && w.StartSector == misc.StartSector)
+            .ToList();
+        byte[] MiscBytes(IB001Write w) => File.ReadAllBytes(w.FilePath);
+
+        if (androidGiB == 16)
+        {
+            Assert.Empty(miscWrites);
+        }
+        else
+        {
+            Assert.Single(miscWrites);
+            string text = Encoding.ASCII.GetString(MiscBytes(miscWrites[0]));
+            Assert.Contains("boot-recovery", text);
+            Assert.Contains("--wipe_data", text);
+        }
+    }
+
+    [Fact]
+    public async Task Direct_overwrite_admits_signed_ArmadaBoot_media_and_preserves_Android()
+    {
+        string? mediaPath = Environment.GetEnvironmentVariable(ArmadaBootOverwriteMediaEnv);
+        if (string.IsNullOrWhiteSpace(mediaPath))
+        {
+            return;
+        }
+
+        var android = new ReadOnlyAndroidResponder();
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _toolchain.Toolchain, _rawShared, "a", android,
+            reinstallAndroidGiB: 16, mediaPath: mediaPath);
+
+        string model = session.Package.DeviceModel;
+        Assert.Equal("TB322FC", model);
+
+        // The real signed ARMADA_BOOT lab package is admitted and its recipe resolves.
+        EdlRawPackageContract contract = PackageReader.ReadEdlRawContract(
+            session.Package.PackageDirectory, model);
+        Assert.True(contract.BootRecipe.UsesArmadaBoot);
+
+        android.ConfigureFacts(session.Backend.Prepared, session.Artifacts, model);
+
+        IB001FakeEdlRunner runner = session.EdlRunner;
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+
+        // Preserve Android: no wipe, no erase.
+        Assert.False(prepared.AndroidDataErase);
+
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            prepared.ConfirmationId, userdataEraseConfirmed: true, progress: null);
+
+        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
+        Assert.Equal(1, runner.ResetCount);
+
+        IReadOnlyList<IB001Write> writes = runner.Writes;
+
+        var linuxBoot = session.Artifacts.LinuxBoot;
+        var linuxRoot = session.Artifacts.LinuxRoot;
+        Assert.Contains(writes, w => w.Lun == 0 && w.StartSector == linuxBoot.StartSector);
+        Assert.Contains(writes, w => w.Lun == 0 && w.StartSector == linuxRoot.StartSector);
+
+        // Both device-slot boot writes exist and follow all new disk data writes.
+        EdlCapturedRegion bootA = session.Backup.Files["boot_a"];
+        EdlCapturedRegion bootB = session.Backup.Files["boot_b"];
+        int bootAIndex = writes
+            .Select((w, i) => (w, i))
+            .Single(t => t.w.Lun == bootA.Lun && t.w.StartSector == bootA.StartSector).i;
+        int bootBIndex = writes
+            .Select((w, i) => (w, i))
+            .Single(t => t.w.Lun == bootB.Lun && t.w.StartSector == bootB.StartSector).i;
+        int lastDataIndex = -1;
+        for (int i = 0; i < writes.Count; i++)
+        {
+            IB001Write w = writes[i];
+            if (w.Lun == 0 && (w.StartSector == linuxBoot.StartSector || w.StartSector == linuxRoot.StartSector))
+            {
+                lastDataIndex = Math.Max(lastDataIndex, i);
+            }
+        }
+
+        Assert.True(bootBIndex > lastDataIndex, "boot_b write must follow new disk data");
+        Assert.True(bootAIndex > lastDataIndex, "boot_a write must follow new disk data");
+
+        // No GPT rewrite on the preserved-Android overwrite path.
+        var gptRegions = session.Artifacts.GptWriteRegions;
+        Assert.DoesNotContain(writes, w =>
+            gptRegions.Any(r => r.Lun == w.Lun && r.StartSector == w.StartSector));
+
+        // The signed ARMADA_BOOT overwrite admits exactly two LUN0 writes inside the
+        // preserved 2 GiB backup partition: the v3 descriptor at the final 64 KiB tail
+        // sector and the first settings record one sector later.
+        var backup = session.Artifacts.BackupPartition;
+        IReadOnlyList<IB001Write> backupWrites = writes
+            .Where(w => w.Lun == 0
+                && w.StartSector < backup.StartSector + backup.SectorCount
+                && backup.StartSector < w.StartSector + w.SectorCount)
+            .ToList();
+
+        long tailStart = backup.StartSector + backup.SectorCount - (64L * 1024 / RawSectorSize);
+
+        Assert.Collection(
+            backupWrites,
+            first =>
+            {
+                Assert.Equal(0, first.Lun);
+                Assert.Equal(1L, first.SectorCount);
+                Assert.Equal(tailStart, first.StartSector);
+            },
+            second =>
+            {
+                Assert.Equal(0, second.Lun);
+                Assert.Equal(1L, second.SectorCount);
+                Assert.Equal(tailStart + 1, second.StartSector);
+            });
+
+        var firstBackupIndex = writes
+            .Select((write, index) => (write, index))
+            .Single(pair => pair.write.Equals(backupWrites[0]))
+            .index;
+
+        Assert.True(firstBackupIndex > bootAIndex);
+        Assert.True(firstBackupIndex > bootBIndex);
+
+        var firstBackupDescriptor = File.ReadAllBytes(backupWrites[0].FilePath);
+        var secondBackupDescriptor = File.ReadAllBytes(backupWrites[1].FilePath);
+
+        Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(firstBackupDescriptor.AsSpan(8)));
+        Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(secondBackupDescriptor.AsSpan(16)));
+        Assert.Equal(2u, BinaryPrimitives.ReadUInt32LittleEndian(secondBackupDescriptor.AsSpan(60)));
+
+        EdlCapturedRegion misc = session.Backup.Files["misc"];
+        Assert.DoesNotContain(writes, w => w.Lun == misc.Lun && w.StartSector == misc.StartSector);
+
+        // No writes inside the old userdata range (personal data is not a captured backup role).
+        var userdata = session.Backup.Tables[0].Partitions
+            .Single(p => p.Name == "userdata");
+        Assert.DoesNotContain(writes, w =>
+            w.Lun == 0
+            && w.StartSector < userdata.StartSector + userdata.SectorCount
+            && userdata.StartSector < w.StartSector + w.SectorCount);
     }
 
     // ------------------------------------------------------------------ case 1: full success stops after the accepted reset

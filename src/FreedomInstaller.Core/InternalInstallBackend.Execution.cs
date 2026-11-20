@@ -1277,12 +1277,18 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
+        if (_context.BoardSummary is not { } boardSummary)
+        {
+            throw new InvalidOperationException(
+                "The legacy execution path requires a fresh board summary and does not accept an installed layout.");
+        }
+
         await WriteExecutionRegionAsync(
                 _initialEdl,
                 run,
                 InternalInstallStage.WritingBoardBackup,
                 null,
-                _context.BoardSummary,
+                boardSummary,
                 true,
                 progress,
                 cancellationToken)

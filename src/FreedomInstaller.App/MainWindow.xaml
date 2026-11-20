@@ -2473,7 +2473,8 @@
                                        Text="{DynamicResource Static.InternalInstall.Confirm.Lead}"
                                        Style="{StaticResource BodyText}"
                                        Margin="0,6,0,0" />
-                            <TextBlock Text="{DynamicResource Static.InternalInstall.Confirm.Warning}"
+                            <TextBlock x:Name="InternalInstallConfirmWarningText"
+                                       Text="{DynamicResource Static.InternalInstall.Confirm.Warning}"
                                        Style="{StaticResource BodyText}"
                                        Foreground="{DynamicResource WarnBrush}"
                                        FontWeight="SemiBold"
@@ -2656,7 +2657,8 @@
                                           IsEnabled="False"
                                           Checked="OnInternalInstallEraseRiskChanged"
                                           Unchecked="OnInternalInstallEraseRiskChanged">
-                                    <TextBlock Text="{DynamicResource Static.InternalInstall.Confirm.EraseRisk}"
+                                    <TextBlock x:Name="InternalInstallEraseRiskText"
+                                               Text="{DynamicResource Static.InternalInstall.Confirm.EraseRisk}"
                                                TextWrapping="Wrap"
                                                FontSize="13" />
                                 </CheckBox>

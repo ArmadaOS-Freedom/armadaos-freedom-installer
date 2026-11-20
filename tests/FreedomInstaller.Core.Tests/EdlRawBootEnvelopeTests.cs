@@ -271,11 +271,70 @@ public sealed class EdlRawBootEnvelopeTests
     }
 
     [Fact]
-    public async Task Rejects_NonZeroRamdisk()
+    public async Task Rejects_RamdiskWithNoRoomInSourceGeometry()
     {
         SourceFixture fixture = CreateFixture("be001-ramdisk", spec => spec.RamdiskSize = 1);
         await Assert.ThrowsAsync<InvalidDataException>(
             () => RepackAsync(fixture.Source, fixture.Raw, fixture.Raw.Length, fixture.OutputPath));
+    }
+
+    [Fact]
+    public async Task RamdiskPayload_Repack_ProducesExactSlicesAndHeaderLength()
+    {
+        string directory = NewDirectory("be001-ramdisk-payload");
+        string sourcePath = Path.Combine(directory, "source-boot.img");
+        string rawPath = Path.Combine(directory, "packed-raw.img");
+        string outputPath = Path.Combine(directory, "candidate-boot.img");
+
+        byte[] ramdiskPayload = new byte[1234];
+        for (int i = 0; i < ramdiskPayload.Length; i++)
+        {
+            ramdiskPayload[i] = (byte)(i * 7 + 3);
+        }
+
+        var spec = new SourceSpec
+        {
+            PartitionSize = 262144,
+            KernelSize = 12289,
+            RamdiskPayload = ramdiskPayload,
+            Algorithm = "sha256",
+            Salt = new byte[] { 0x10, 0x20, 0x30, 0x40 },
+        };
+        WriteSource(sourcePath, spec);
+
+        byte[] raw = BuildRawImage(5000);
+        File.WriteAllBytes(rawPath, raw);
+
+        EdlRawBootEnvelope envelope = await RepackAsync(Verify(sourcePath), Verify(rawPath), raw.Length, outputPath);
+
+        int gzipLength = GzipLength(raw);
+        int expectedCandidateOffset = 4096 + RoundUp(gzipLength, 4096);
+        int expectedOriginal = expectedCandidateOffset + RoundUp(ramdiskPayload.Length, 4096);
+
+        byte[] output = File.ReadAllBytes(outputPath);
+        Assert.Equal((uint)ramdiskPayload.Length, ReadLeU32(output, 12));
+        Assert.Equal((uint)ramdiskPayload.Length, ReadLeU32(File.ReadAllBytes(sourcePath), 12));
+        Assert.Equal((long)expectedOriginal, envelope.OriginalImageSize);
+        Assert.Equal((long)expectedOriginal, envelope.VbmetaOffset);
+
+        Assert.Equal(ramdiskPayload, output.AsSpan(expectedCandidateOffset, ramdiskPayload.Length).ToArray());
+        for (int i = ramdiskPayload.Length; i < RoundUp(ramdiskPayload.Length, 4096); i++)
+        {
+            Assert.Equal(0, output[expectedCandidateOffset + i]);
+        }
+
+        Assert.Equal("AVBf", Encoding.ASCII.GetString(output, output.Length - 64, 4));
+        Assert.Equal((ulong)expectedOriginal, ReadBeU64(output, output.Length - 52));
+        Assert.Equal((ulong)expectedOriginal, ReadBeU64(output, output.Length - 44));
+        Assert.Equal((ulong)envelope.VbmetaBytes, ReadBeU64(output, output.Length - 36));
+
+        AssertRsa4096Vbmeta(output, (int)envelope.VbmetaOffset);
+        Assert.Equal(
+            SaltedDigest("sha256", spec.Salt, output, expectedOriginal),
+            ReadOutputHashDigest(output, (int)envelope.VbmetaOffset));
+        Assert.Equal(
+            ToHex(SaltedDigest("sha256", spec.Salt, output, expectedOriginal)),
+            envelope.DigestHex);
     }
 
     [Fact]
@@ -672,19 +731,25 @@ public sealed class EdlRawBootEnvelopeTests
 
     private static SourceLayout WriteSource(string path, SourceSpec spec)
     {
-        int original = RoundUp(4096 + spec.KernelSize, 4096);
+        int kernelPages = RoundUp(spec.KernelSize, 4096);
+        int original = 4096 + kernelPages + RoundUp(spec.RamdiskPayload?.Length ?? 0, 4096);
         byte[] vbmeta = BuildVbmeta(spec, original);
         byte[] image = new byte[spec.PartitionSize];
 
         WriteAscii(image, 0, "ANDROID!");
         WriteLeU32(image, 8, (uint)spec.KernelSize);
-        WriteLeU32(image, 12, spec.RamdiskSize);
+        WriteLeU32(image, 12, spec.RamdiskPayload is null ? spec.RamdiskSize : (uint)spec.RamdiskPayload.Length);
         WriteLeU32(image, 20, 1584);
         WriteLeU32(image, 40, spec.HeaderVersion);
         WriteLeU32(image, 1580, spec.SignatureSize);
         for (int i = 4096; i < 4096 + spec.KernelSize; i++)
         {
             image[i] = 0x5A;
+        }
+
+        if (spec.RamdiskPayload is not null)
+        {
+            Buffer.BlockCopy(spec.RamdiskPayload, 0, image, 4096 + kernelPages, spec.RamdiskPayload.Length);
         }
 
         Buffer.BlockCopy(vbmeta, 0, image, original, vbmeta.Length);
@@ -1036,6 +1101,8 @@ public sealed class EdlRawBootEnvelopeTests
         public uint HeaderVersion { get; set; } = 4;
 
         public uint RamdiskSize { get; set; }
+
+        public byte[]? RamdiskPayload { get; set; }
 
         public uint SignatureSize { get; set; }
 
