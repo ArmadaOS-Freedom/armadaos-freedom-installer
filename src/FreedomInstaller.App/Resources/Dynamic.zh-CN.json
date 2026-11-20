@@ -411,7 +411,7 @@
   "Dynamic.InternalInstall.Execution.Warning.PreserveAndroid": "将清空现有 Linux 数据。Android 数据、原分区比例和已校验的 ARMADA_BACKUP 会保留。",
   "Dynamic.InternalInstall.Execution.EraseRisk.PreserveAndroid": "我确认清空现有 Linux 数据。",
   "Dynamic.InternalInstall.Execution.Lead.Ready.PreserveAndroid": "请核对目标设备、分区容量和电脑备份位置，再确认重装。",
-  "Dynamic.InternalInstall.Execution.Dialog.Body.PreserveAndroid": "即将对这台平板执行 9008 直装并写入已准备好的分区镜像，请再核对一次：\n\n型号：{0}\n序列号：{1}\n内部存储：Android {2}，Linux 总计 {3}（含启动区），板端恢复备份 {4}\n电源记录：{5}\n电脑备份：{6}\n\n只清空 Linux 数据。安卓数据、原分区比例及已验证的 ARMADA_BACKUP 均会保留。\n\n请保持 USB 连接与充电，不要拔线或断电。\n\n重启将沿用平板当前的启动设置。\n\n点击「是」开始安装；点击「否」返回，什么都不会写入。",
+  "Dynamic.InternalInstall.Execution.Dialog.Body.PreserveAndroid": "即将对这台平板执行 9008 直装并写入已准备好的分区镜像，请再核对一次：\n\n型号：{0}\n序列号：{1}\n内部存储：Android {2}，Linux 总计 {3}（含启动区），板端恢复备份 {4}\n电源记录：{5}\n电脑备份：{6}\n\n只清空 Linux 数据。安卓数据、原分区比例及已验证的 ARMADA_BACKUP 均会保留。\n\n请保持 USB 连接与充电，不要拔线或断电。\n\n当准备好的方案包含 Linux 时，重启后会将 Linux 设为默认启动。\n\n点击「是」开始安装；点击「否」返回，什么都不会写入。",
   "Dynamic.InternalInstall.Execution.Lead.Running": "安装正在进行。请保持 USB 连接与充电，不要拔线或断电。",
   "Dynamic.InternalInstall.Execution.Lead.Pending": "写入及回读校验已完成，启动验收尚待完成。",
   "Dynamic.InternalInstall.Execution.Lead.PendingUnverified": "安装尚未完成，也还没有全部写入的回读证据。",

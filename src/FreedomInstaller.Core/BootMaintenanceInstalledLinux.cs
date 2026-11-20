@@ -566,7 +566,7 @@ internal static class BootMaintenanceInstalledLinux
     {
         uint ino = volume.ResolvePath(path, "the Armada " + what + " image", ct).Ino;
         (ulong size, string sha) = volume.HashRegularFile(
-            ino, "the Armada " + what + " image '" + path + "'", ct, allowSparse: true);
+            ino, "the Armada " + what + " image '" + path + "'", ct, allowSparse: true, maxBytes: cap);
         if (size == 0 || size > cap)
         {
             throw Mismatch("the Armada " + what + " image is empty or beyond its cap");
@@ -1603,7 +1603,7 @@ internal static class BootMaintenanceInstalledLinux
         }
 
         internal (ulong Length, string Sha256) HashRegularFile(
-            uint ino, string what, CancellationToken ct, bool allowSparse = false)
+            uint ino, string what, CancellationToken ct, bool allowSparse = false, ulong? maxBytes = null)
         {
             byte[] inode = ReadInode(ino, what);
             if ((ModeOf(inode) & InodeModeTypeMask) != InodeModeRegular)
@@ -1616,6 +1616,11 @@ internal static class BootMaintenanceInstalledLinux
             if (size > (ulong)MaxVerifiedFileBytes)
             {
                 throw Mismatch("'" + what + "' is " + size + " bytes, beyond the verified file bound");
+            }
+
+            if (maxBytes is ulong cap && size > cap)
+            {
+                throw Mismatch("'" + what + "' is " + size + " bytes, beyond its cap");
             }
 
             using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -1744,8 +1749,9 @@ internal static class BootMaintenanceInstalledLinux
                 List<string> targetComps = SplitPath(target, "the symlink target of '" + comps[index] + "'", allowRelative: true);
                 uint baseDir = target.StartsWith("/", StringComparison.Ordinal) ? RootInodeNumber : dirIno;
 
-                (uint linkedIno, ushort linkedMode) =
-                    ResolveComponent(baseDir, targetComps, 0, followsLeft - 1, ct);
+                (uint linkedIno, ushort linkedMode) = targetComps.Count == 0
+                    ? (baseDir, ModeOfInode(baseDir, "the symlink base of '" + comps[index] + "'"))
+                    : ResolveComponent(baseDir, targetComps, 0, followsLeft - 1, ct);
 
                 if (index + 1 == comps.Count)
                 {

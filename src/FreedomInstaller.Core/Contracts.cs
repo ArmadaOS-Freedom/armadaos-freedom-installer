@@ -137,6 +137,8 @@ public sealed record PackageValidationResult
     /// True when the validated <c>edl-raw-v1</c> boot recipe declares ARMADA_BOOT. Only newly prepared
     /// 2 GiB ARMADA_BACKUP archives from such a package initialize the v3 launcher descriptor and the
     /// normal Linux default; older packages and reused archives keep their unchanged behavior.
+    /// Retaining the archive bytes does not preclude preparing the v3 descriptor and default settings
+    /// in the reserved tail of a reused ARMADA_BACKUP.
     /// </summary>
     public bool UsesArmadaBoot { get; init; }
 }
