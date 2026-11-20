@@ -279,9 +279,9 @@ public static class InternalPartitionPlanner
             var label = partition.Name.Trim();
             if (!label.StartsWith("ARMADA_", StringComparison.OrdinalIgnoreCase)) continue;
             owned++;
-            if (label.Equals("ARMADA_BOOT", StringComparison.OrdinalIgnoreCase)) { if (boot is not null) return null; boot = partition; }
-            else if (label.Equals("ARMADA_ROOT", StringComparison.OrdinalIgnoreCase)) { if (root is not null) return null; root = partition; }
-            else if (label.Equals("ARMADA_BACKUP", StringComparison.OrdinalIgnoreCase)) { if (backup is not null) return null; backup = partition; }
+            if (partition.Name.Equals("ARMADA_BOOT", StringComparison.Ordinal)) { if (boot is not null) return null; boot = partition; }
+            else if (partition.Name.Equals("ARMADA_ROOT", StringComparison.Ordinal)) { if (root is not null) return null; root = partition; }
+            else if (partition.Name.Equals("ARMADA_BACKUP", StringComparison.Ordinal)) { if (backup is not null) return null; backup = partition; }
             else throw new InvalidOperationException("An unrecognised ARMADA_ partition is present.");
         }
 

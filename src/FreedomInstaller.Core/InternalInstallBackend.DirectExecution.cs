@@ -332,7 +332,15 @@ public sealed partial class InternalInstallBackend
             }
         }
 
-        await _context.VerifyLauncherDefaultsAsync(_initialEdl, after: true, ct).ConfigureAwait(false);
+        try
+        {
+            await _context.VerifyLauncherDefaultsAsync(_initialEdl, after: true, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            run.MarkVerificationUnproven();
+            throw;
+        }
 
         // The one reset of this run, and only after every write and readback above.
         await ResetExecutionAsync(

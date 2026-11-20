@@ -862,6 +862,16 @@ public sealed partial class InternalInstallBackend
         }
 
         /// <summary>
+        /// Marks the irreversible post-write evidence unproven after a failed verification. Keeps the sticky
+        /// poison and no terminal success can be produced from this run.
+        /// </summary>
+        internal void MarkVerificationUnproven()
+        {
+            _interrupted = true;
+            _writeState = InternalInstallWriteState.Unknown;
+        }
+
+        /// <summary>
         /// Caches a verified Android acceptance once. Later absent, unauthorized, initialization and rejected
         /// results never downgrade the Android fact, and a non-verified result is never cached as verified.
         /// </summary>

@@ -110,8 +110,6 @@ internal static class InternalInstallLauncherDefaults
                 Sha256: sha));
         }
 
-        if (writes.Count == 0) return null;
-
         string afterSha = Convert.ToHexString(SHA256.HashData(after));
         return new LauncherDefaultsPlan(writes.AsReadOnly(), headerRead, tailRead, afterSha);
     }
