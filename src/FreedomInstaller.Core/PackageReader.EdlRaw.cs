@@ -952,6 +952,12 @@ public static partial class PackageReader
                     $"bootRecipe.linuxBootSource 仅允许用于 TB322FC 或 TB323FU，实际为 {deviceModel}。");
             }
 
+            if (!string.Equals(deployment.Kind, EdlRawDeploymentKindName, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"bootRecipe.linuxBootSource 要求 deployment.kind 为 {EdlRawDeploymentKindName}，实际为 {deployment.Kind}。");
+            }
+
             usesArmadaBoot = true;
         }
 

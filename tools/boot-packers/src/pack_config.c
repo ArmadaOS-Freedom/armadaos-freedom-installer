@@ -444,6 +444,10 @@ static bool validate_config(
             log_err("DiskLinux image '%s' must not set EntryOffset", image->name);
             return false;
         }
+        if (image->fieldsPresent & PACK_IMAGE_FIELD_DEVICE_TREE_BLOB) {
+            log_err("DiskLinux image '%s' must not set DeviceTreeBlob", image->name);
+            return false;
+        }
     }
     bool executable = manifest_entry_type_is_executable(image->type);
     if (image->type == MF_ENTRY_TYPE_MANIFEST) {
