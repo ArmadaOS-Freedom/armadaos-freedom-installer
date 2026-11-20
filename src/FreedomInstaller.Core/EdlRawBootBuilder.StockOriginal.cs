@@ -362,12 +362,14 @@ public static partial class EdlRawBootBuilder
             return false;
         }
 
-        if (ReadLeU32(raw, start + 8) != ManifestEntryCount)
+        uint entryCount = ReadLeU32(raw, start + 8);
+
+        if (entryCount != ManifestEntryCount && entryCount != DiskManifestEntryCount)
         {
             return false;
         }
 
-        if (ReadLeU32(raw, start + 12) >= ManifestEntryCount)
+        if (ReadLeU32(raw, start + 12) >= entryCount)
         {
             return false;
         }
@@ -379,7 +381,7 @@ public static partial class EdlRawBootBuilder
 
         int cursor = start + ManifestHeaderBytes;
 
-        for (uint index = 0; index < ManifestEntryCount; index++)
+        for (uint index = 0; index < entryCount; index++)
         {
             if (cursor < start || cursor > end - StockManifestEntryBytes)
             {

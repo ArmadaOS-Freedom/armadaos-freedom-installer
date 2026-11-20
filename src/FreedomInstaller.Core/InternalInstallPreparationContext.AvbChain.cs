@@ -100,6 +100,34 @@ internal sealed partial class InternalInstallPreparationContext
 
             string sourceSlot = target;
 
+            if (inactiveTargets.TryGetValue(target, out EdlRawInactiveSlotBackup? prepared))
+            {
+                prepared.RequireUsable();
+                if (!string.Equals(prepared.Profile.ProfileId, profileId, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("inactive target profile does not match");
+                }
+                if (!string.Equals(prepared.SourceSlot, currentSlot, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("inactive target source slot does not match the current slot");
+                }
+                if (!string.Equals(prepared.Slot, target, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("inactive target slot does not match");
+                }
+                if (string.Equals(target, currentSlot, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("inactive target must differ from the current slot");
+                }
+                if (!prepared.CurrentBoot.Equals(Claim(files, "boot_" + target)))
+                {
+                    throw new InvalidDataException("inactive target current_boot does not match the original boot partition");
+                }
+
+                sourceSlots.Add(target, prepared.SourceSlot);
+                continue;
+            }
+
             if (!string.Equals(target, currentSlot, StringComparison.Ordinal)
                 && IsBootHeaderZero(Claim(files, "boot_" + target), cancellationToken))
             {
@@ -124,6 +152,64 @@ internal sealed partial class InternalInstallPreparationContext
         }
 
         return sourceSlots;
+    }
+
+    private static async Task<EdlRawInactiveSlotBackup> VerifyProjectOnlyInactiveBAsync(
+        string profileId,
+        IReadOnlyDictionary<string, EdlCapturedRegion> files,
+        EdlRawBootTools tools,
+        ICommandRunner runner,
+        string evidenceDirectory,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(profileId);
+        ArgumentNullException.ThrowIfNull(files);
+        ArgumentNullException.ThrowIfNull(tools);
+        ArgumentNullException.ThrowIfNull(runner);
+        ArgumentNullException.ThrowIfNull(evidenceDirectory);
+        ct.ThrowIfCancellationRequested();
+
+        foreach (string ancillary in new[] { "recovery_b", "vbmeta_system_b" })
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(Claim(files, ancillary), ct).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(
+                    $"Refusing project-only B: ancillary AVB metadata '{ancillary}' is nonempty.");
+            }
+        }
+
+        CurrentBootInitializedInactiveProof proof = await EdlRawBootBuilder
+            .VerifyInitializedInactiveSlotAsync(
+                profileId,
+                "a",
+                "b",
+                Claim(files, "boot_a"),
+                Claim(files, "vendor_boot_a"),
+                Claim(files, "init_boot_a"),
+                Claim(files, "abl_a"),
+                Claim(files, "xbl_config_a"),
+                Claim(files, "boot_b"),
+                Claim(files, "vendor_boot_b"),
+                Claim(files, "init_boot_b"),
+                Claim(files, "abl_b"),
+                Claim(files, "xbl_config_b"),
+                Claim(files, "vbmeta_a"),
+                tools,
+                runner,
+                evidenceDirectory,
+                ct)
+            .ConfigureAwait(false);
+
+        try
+        {
+            return EdlRawInactiveSlotBackup.FromVerifiedProjectBoot(proof);
+        }
+        catch
+        {
+            (proof as IDisposable)?.Dispose();
+            throw;
+        }
     }
 
     /// <summary>

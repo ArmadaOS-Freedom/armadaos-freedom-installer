@@ -107,6 +107,7 @@ static bool parse_image_type(const char *value, uint32_t *result)
       {"Linux", MF_ENTRY_TYPE_LINUX}, {"FreeExec", MF_ENTRY_TYPE_FREE_EXEC},
       {"Shim", MF_ENTRY_TYPE_SHIM},   {"Blob", MF_ENTRY_TYPE_BLOB},
       {"DTB", MF_ENTRY_TYPE_DTB},     {"Manifest", MF_ENTRY_TYPE_MANIFEST},
+      {"DiskLinux", MF_ENTRY_TYPE_DISK_LINUX},
   };
 
   for (size_t index = 0; index < sizeof(types) / sizeof(types[0]); index++) {
@@ -433,6 +434,20 @@ static bool validate_config(
     else if (image->fieldsPresent & PACK_IMAGE_FIELD_COPY_SIZE_MAX) {
       log_err("[%s] CopySizeMax requires CopyTo.", image->section);
       return false;
+    }
+    if (image->type == MF_ENTRY_TYPE_DISK_LINUX) {
+        if (image->fieldsPresent & (PACK_IMAGE_FIELD_COPY_ADDRESS | PACK_IMAGE_FIELD_COPY_SIZE_MAX)) {
+            log_err("DiskLinux image '%s' must not set CopyTo/CopySizeMax", image->name);
+            return false;
+        }
+        if (image->entryOffset != 0) {
+            log_err("DiskLinux image '%s' must not set EntryOffset", image->name);
+            return false;
+        }
+        if (image->fieldsPresent & PACK_IMAGE_FIELD_DEVICE_TREE_BLOB) {
+            log_err("DiskLinux image '%s' must not set DeviceTreeBlob", image->name);
+            return false;
+        }
     }
     bool executable = manifest_entry_type_is_executable(image->type);
     if (image->type == MF_ENTRY_TYPE_MANIFEST) {

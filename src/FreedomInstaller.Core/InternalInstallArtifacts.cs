@@ -274,6 +274,11 @@ public static class InternalInstallArtifacts
     /// default location and no temporary fallback.
     /// </param>
     /// <param name="token">Cancellation; a cancelled preparation creates nothing.</param>
+    /// <param name="initializeDiskLauncherSettings">
+    /// When true, the freshly written 2 GiB ARMADA_BACKUP archive initializes the v3 launcher descriptor
+    /// (reserved boot logs) and the normal Linux default. Only new archives from a validated ARMADA_BOOT
+    /// recipe set this; reused archives and older packages keep their unchanged behavior.
+    /// </param>
     /// <returns>The verified artifact set, holding read locks on its own files.</returns>
     /// <exception cref="ArgumentException">The parent is missing, relative or not an existing directory, or the GiB count is not positive.</exception>
     /// <exception cref="InvalidDataException">The backup, the original GPT bytes or the planned layout is not trustworthy.</exception>
@@ -284,11 +289,12 @@ public static class InternalInstallArtifacts
         PackageStorage storage,
         string chosenParent,
         CancellationToken token = default,
-        InternalBackupSet? recoveryBackup = null)
+        InternalBackupSet? recoveryBackup = null,
+        bool initializeDiskLauncherSettings = false)
     {
         ValidateArguments(backup, androidGiB, storage, chosenParent, token);
 
-        return await Task.Run(() => Prepare(backup, androidGiB, storage, chosenParent, token, recoveryBackup), CancellationToken.None)
+        return await Task.Run(() => Prepare(backup, androidGiB, storage, chosenParent, token, recoveryBackup, initializeDiskLauncherSettings), CancellationToken.None)
             .ConfigureAwait(false);
     }
 
@@ -300,7 +306,8 @@ public static class InternalInstallArtifacts
         PackageStorage storage,
         string chosenParent,
         CancellationToken token,
-        InternalBackupSet? recoveryBackup)
+        InternalBackupSet? recoveryBackup,
+        bool initializeDiskLauncherSettings)
     {
         token.ThrowIfCancellationRequested();
 
@@ -507,6 +514,7 @@ public static class InternalInstallArtifacts
                     payloads!,
                     layout!,
                     token,
+                    initializeDiskLauncherSettings,
                     out compressedBytes,
                     out uncompressedTarBytes,
                     out compressedSha256);
@@ -2070,6 +2078,7 @@ public static class InternalInstallArtifacts
         IReadOnlyList<ArchivePayload> payloads,
         PayloadLayout layout,
         CancellationToken token,
+        bool initializeDiskLauncherSettings,
         out long compressedBytes,
         out long uncompressedTarBytes,
         out string compressedSha256)
@@ -2171,9 +2180,17 @@ public static class InternalInstallArtifacts
             remaining -= chunk;
         }
 
-        // Only newly prepared images are provisioned. Existing v2 backups are never upgraded in place.
+        // Provision launcher settings in the new archive.
         var descriptor = BootSettingsRegion.CreateDescriptor(
             backupPartitionUuid, installationId, model, BoardHeaderBytes + compressedBytes);
+        if (initializeDiskLauncherSettings)
+        {
+            var region = new byte[BootSettingsRegion.Bytes];
+            Buffer.BlockCopy(descriptor, 0, region, 0, descriptor.Length);
+            region = BootSettingsRegion.PrepareLinuxDefault(
+                region, backupPartitionUuid, installationId, model, BoardHeaderBytes + compressedBytes);
+            descriptor = region;
+        }
         stream.Position = BootSettingsRegion.Offset;
         stream.Write(descriptor);
         stream.Flush(flushToDisk: true);

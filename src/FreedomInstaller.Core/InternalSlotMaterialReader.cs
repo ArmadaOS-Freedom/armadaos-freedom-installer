@@ -146,6 +146,7 @@ public static class InternalSlotMaterialReader
     private const uint TypeShim = 3;
     private const uint TypeBlob = 4;
     private const uint TypeDtb = 5;
+    private const uint TypeDiskLinux = 7;
 
     private const uint BlOpcode = 0x94000000;
     private const uint BOpcode = 0x14000000;
@@ -1014,7 +1015,8 @@ public static class InternalSlotMaterialReader
                 throw Reject(label, $"entry {index} name is not valid UTF-8");
             }
             if (eType != TypeLinux && eType != TypeShim &&
-                eType != TypeBlob && eType != TypeDtb)
+                eType != TypeBlob && eType != TypeDtb &&
+                eType != TypeDiskLinux)
             {
                 throw Reject(label, $"entry {index} has unknown type {eType}");
             }
@@ -1032,6 +1034,30 @@ public static class InternalSlotMaterialReader
             {
                 throw Reject(label,
                     $"entry {index} payload {eOffset}+{eSize} overlaps manifest at {manifestOffset}");
+            }
+
+            if (eType == TypeDiskLinux)
+            {
+                if (index <= 0)
+                {
+                    throw Reject(label, $"disk-linux entry {index} must not be the first entry");
+                }
+                if (eFlags != FlagExec)
+                {
+                    throw Reject(label, $"disk-linux entry {index} flags {eFlags} must be exactly FlagExec");
+                }
+                if (eSize != 64)
+                {
+                    throw Reject(label, $"disk-linux entry {index} size {eSize} must be 64");
+                }
+                if (eLoad != 0 || eEntry != 0 || eDtb != 0 || eCopy != 0)
+                {
+                    throw Reject(label, $"disk-linux entry {index} must have zero load/entry/dtb/copy");
+                }
+                if (!DiskLinuxEntry.IsValid(raw.AsSpan((int)eOffset, 64)))
+                {
+                    throw Reject(label, $"disk-linux entry {index} payload is invalid");
+                }
             }
 
             entries[index] = new ManifestEntry

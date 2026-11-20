@@ -712,7 +712,8 @@ public partial class MainWindow
                         try
                         {
                             preparedArtifacts = await InternalInstallArtifacts.PrepareAsync(
-                                backup, androidGiB, storage, attemptRoot, token, recoverySource);
+                                backup, androidGiB, storage, attemptRoot, token, recoverySource,
+                                initializeDiskLauncherSettings: package.Validation.UsesArmadaBoot);
                         }
                         catch
                         {

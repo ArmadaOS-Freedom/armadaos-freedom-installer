@@ -1174,7 +1174,7 @@ public partial class MainWindow
                 }
 
                 SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Prepared.PreparingArtifacts");
-                _internalInstallArtifacts = await InternalInstallArtifacts.PrepareAsync(backup, _internalInstallAndroidGiB, storage, parent, token);
+                _internalInstallArtifacts = await InternalInstallArtifacts.PrepareAsync(backup, _internalInstallAndroidGiB, storage, parent, token, initializeDiskLauncherSettings: package.Validation.UsesArmadaBoot);
 
                 SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Prepared.LoadingComponents");
                 var materials = Path.Combine(parent, ".armada-installer-assets", Guid.NewGuid().ToString("N"));

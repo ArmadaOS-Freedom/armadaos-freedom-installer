@@ -235,4 +235,128 @@ public sealed class BootSettingsRegionTests
         Assert.Throws<InvalidDataException>(() => Verify(region));
         Assert.Throws<InvalidDataException>(() => Verify(region[..36864]));
     }
+
+    private const int Slot0Off = 4096;
+    private const int Slot1Off = 8192;
+
+    private static void PutSettings(byte[] region, int slotOff, uint version, ulong seq,
+        uint dev, uint def, uint lang, uint last, uint next)
+    {
+        var s = region.AsSpan(slotOff, 4096);
+        s.Clear();
+        ReadOnlySpan<byte> magic = stackalloc byte[] { (byte)'K',(byte)'S',(byte)'C',(byte)'F',(byte)'G',(byte)'R',(byte)'1', 0 };
+        magic.CopyTo(s);
+        BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(8), version);
+        BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(12), 4096);
+        BinaryPrimitives.WriteUInt64LittleEndian(s.Slice(16), seq);
+        Partition.ToByteArray(bigEndian: true).CopyTo(s.Slice(24, 16));
+        Installation.ToByteArray(bigEndian: true).CopyTo(s.Slice(40, 16));
+        BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(56), dev);
+        BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(60), def);
+        BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(64), lang);
+        BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(68), last);
+        BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(72), next);
+        uint crc = uint.MaxValue;
+        foreach (byte b in s[..4092]) { crc ^= b; for (int i=0;i<8;i++) crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xedb88320u : 0); }
+        BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(4092), ~crc);
+    }
+
+    [Fact]
+    public void Prepare_android_default_linux_preserves_winner_and_writes_inactive_slot()
+    {
+        var src = new byte[65536];
+        Descriptor().CopyTo(src, 0);
+        // Winner slot 0: seq=5, device_choice=1, default=Android(1), lang=1, last=2, next=0.
+        PutSettings(src, Slot0Off, 3, 5, 1, 1, 1, 2, 0);
+        // Older slot 1: seq=4, default=Android(1).
+        PutSettings(src, Slot1Off, 3, 4, 0, 1, 0, 0, 0);
+        var original = (byte[])src.Clone();
+
+        var outp = (byte[])Call("PrepareLinuxDefault", src, Partition, Installation, "TB322FC", 1048576L)!;
+
+        // Input untouched.
+        Assert.Equal(original, src);
+        // Descriptor upgraded to v3, VerifyRegion (via helper) accepts the projection.
+        Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(outp.AsSpan(8)));
+        Verify(outp);
+        // Winner slot 0 preserved byte-for-byte.
+        Assert.True(src.AsSpan(Slot0Off, 4096).SequenceEqual(outp.AsSpan(Slot0Off, 4096)));
+        // Inactive slot 1 rewritten as v3 record seq=6, default_target=Linux, preserves others.
+        var s1 = outp.AsSpan(Slot1Off, 4096);
+        Assert.Equal("KSCFGR1\0"u8.ToArray(), s1[..8].ToArray());
+        Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(s1.Slice(8)));
+        Assert.Equal(6ul, BinaryPrimitives.ReadUInt64LittleEndian(s1.Slice(16)));
+        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(s1.Slice(56))); // winning device choice retained
+        Assert.Equal(2u, BinaryPrimitives.ReadUInt32LittleEndian(s1.Slice(60))); // default_target = Linux
+        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(s1.Slice(64))); // winning language retained
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(s1.Slice(72))); // next_action cleared
+    }
+
+    [Fact]
+    public void Prepare_is_noop_for_settings_when_already_target_linux()
+    {
+        var src = new byte[65536];
+        Descriptor().CopyTo(src, 0);
+        PutSettings(src, Slot0Off, 3, ulong.MaxValue, 2, 2, 1, 3, 0); // winning slot already Linux default
+        PutSettings(src, Slot1Off, 3, 6, 0, 1, 0, 0, 0);
+
+        var outp = (byte[])Call("PrepareLinuxDefault", src, Partition, Installation, "TB322FC", 1048576L)!;
+        // Settings bytes unchanged (only descriptor may be up-converted; here already v3).
+        Assert.True(src.AsSpan(Slot0Off, 8192).SequenceEqual(outp.AsSpan(Slot0Off, 8192)));
+        Verify(outp);
+    }
+
+    [Fact]
+    public void Prepare_initializes_first_settings_from_blank_tail()
+    {
+        var src = new byte[65536];
+        Descriptor().CopyTo(src, 0);
+
+        var outp = (byte[])Call("PrepareLinuxDefault", src, Partition, Installation, "TB322FC", 1048576L)!;
+        Verify(outp);
+        Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(outp.AsSpan(8)));
+        // First record lands at index 0 with seq=1, Auto device, lang=0, last=0, next=0, default=Linux.
+        var s0 = outp.AsSpan(Slot0Off, 4096);
+        Assert.Equal("KSCFGR1\0"u8.ToArray(), s0[..8].ToArray());
+        Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(s0.Slice(8)));
+        Assert.Equal(1ul, BinaryPrimitives.ReadUInt64LittleEndian(s0.Slice(16)));
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(s0.Slice(56)));
+        Assert.Equal(2u, BinaryPrimitives.ReadUInt32LittleEndian(s0.Slice(60)));
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(s0.Slice(64)));
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(s0.Slice(72)));
+        // Slot 1 remains erased.
+        Assert.True(outp.AsSpan(Slot1Off, 4096).IndexOfAnyExcept((byte)0) < 0);
+    }
+
+    [Fact]
+    public void Prepare_refuses_pending_next_action()
+    {
+        var src = new byte[65536];
+        Descriptor().CopyTo(src, 0);
+        PutSettings(src, Slot0Off, 3, 9, 1, 1, 0, 0, 1); // next_action pending on the winner
+        PutSettings(src, Slot1Off, 3, 8, 0, 1, 0, 0, 0);
+
+        Assert.Throws<InvalidDataException>(() =>
+            Call("PrepareLinuxDefault", src, Partition, Installation, "TB322FC", 1048576L));
+    }
+
+    [Fact]
+    public void Prepare_refuses_when_both_slots_malformed_and_equal_sequence_conflict()
+    {
+        // Two valid records with equal sequence but different bytes -> conflict.
+        var src = new byte[65536];
+        Descriptor().CopyTo(src, 0);
+        PutSettings(src, Slot0Off, 3, 3, 0, 1, 0, 0, 0);
+        PutSettings(src, Slot1Off, 3, 3, 0, 2, 0, 0, 0);
+        Assert.Throws<InvalidDataException>(() =>
+            Call("PrepareLinuxDefault", src, Partition, Installation, "TB322FC", 1048576L));
+
+        // Malformed winner (bad CRC) alone with erased peer: refuse.
+        var src2 = new byte[65536];
+        Descriptor().CopyTo(src2, 0);
+        PutSettings(src2, Slot0Off, 3, 3, 0, 1, 0, 0, 0);
+        src2[Slot0Off + 4092] ^= 1; // destroy CRC
+        Assert.Throws<InvalidDataException>(() =>
+            Call("PrepareLinuxDefault", src2, Partition, Installation, "TB322FC", 1048576L));
+    }
 }

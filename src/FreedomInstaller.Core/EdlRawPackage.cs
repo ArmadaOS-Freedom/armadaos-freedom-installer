@@ -257,13 +257,15 @@ public sealed class EdlRawBootRecipe
         Guid rootUuid,
         string normalBootArgs,
         string diagnosticBootArgs,
-        string defaultEntry)
+        string defaultEntry,
+        bool usesArmadaBoot = false)
     {
         BootUuid = bootUuid;
         RootUuid = rootUuid;
         NormalBootArgs = normalBootArgs;
         DiagnosticBootArgs = diagnosticBootArgs;
         DefaultEntry = defaultEntry;
+        UsesArmadaBoot = usesArmadaBoot;
     }
 
     /// <summary>Filesystem UUID of the boot image; must match <see cref="EdlRawImage.FsUuid"/>.</summary>
@@ -282,4 +284,8 @@ public sealed class EdlRawBootRecipe
 
     /// <summary>Declared default boot entry; schema 2 accepts only <c>android</c>.</summary>
     public string DefaultEntry { get; }
+
+    /// <summary>When true, the package declares <c>bootRecipe.linuxBootSource == "armada-boot-v1"</c>
+    /// (wire-optional; absence means legacy embedded boot). Only valid for <c>TB322FC</c>/<c>TB323FU</c>.</summary>
+    public bool UsesArmadaBoot { get; }
 }
