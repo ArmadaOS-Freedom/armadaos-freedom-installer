@@ -555,6 +555,28 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     // ------------------------------------------------------------------ direct factory
 
+    internal static void RejectLockedG4FirstInstallFirmware(
+        string model,
+        BootloaderState lockState,
+        FirmwareSnapshot firmware,
+        string? currentSlot = null)
+    {
+        if (string.Equals(model, "TB322FC", StringComparison.Ordinal)
+            && lockState == BootloaderState.Locked
+            && (ContainsToken(firmware.DisplayId, "ZUXOS_1.5.10.358_")
+                || ContainsToken(firmware.BuildFingerprint, "ZUXOS_1.5.10.358_")))
+        {
+            var matched = ContainsToken(firmware.DisplayId, "ZUXOS_1.5.10.358_")
+                ? $"displayId={firmware.DisplayId}"
+                : $"buildFingerprint={firmware.BuildFingerprint}";
+            throw new InvalidOperationException(
+                $"blocked-locked-g4-first-install-firmware: Y700 Gen 4 with locked bootloader and ZUXOS 1.5.10.358 cannot be safely installed. No partitions were written. (model={model}, firmware={matched}, lockState={lockState}, slot={currentSlot ?? "unknown"})");
+        }
+
+        static bool ContainsToken(string? value, string token) =>
+            value is not null && value.Contains(token, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The parameterised direct EDL raw preparation. It binds and re-verifies the 52-file backup, decides the
     /// source slot of both fixed targets once, authenticates the original signed vbmeta root of every
@@ -607,6 +629,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
         EdlDeviceProfile profile = InternalInstallBackend
             .RequireDirectBoundSession(deviceCheck, initialEdl, backup);
+
+        RejectLockedG4FirstInstallFirmware(profile.Model, deviceCheck.FastbootLockState, firmware, deviceCheck.CurrentSlot);
 
         InternalInstallPackageSnapshot? packageSnapshot = null;
         InternalInstallDirectAssets? ownAssets = null;

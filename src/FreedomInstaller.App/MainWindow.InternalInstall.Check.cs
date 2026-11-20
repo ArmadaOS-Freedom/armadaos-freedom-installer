@@ -271,6 +271,15 @@ public partial class MainWindow
 
                     if (result.Succeeded)
                     {
+                        // First-install readiness gate: only after a fully verified Step 1 result and only
+                        // in the OEM→AOSP internal install mode. A throw here disables the eligible Step 1
+                        // state through the existing generic check-failure reporting; no new localization
+                        // keys and no change to the diagnostics on other failures.
+                        if (IsInternalInstallMode)
+                        {
+                            InternalInstallBackend.RequireFirstInstallFirmwareCompatibility(result);
+                        }
+
                         RememberLastSuccessfulDiagnosticCheck(result);
                     }
 
@@ -327,9 +336,11 @@ public partial class MainWindow
                     var diagnostic = string.IsNullOrWhiteSpace(exception.Message)
                         ? UnknownValue
                         : exception.Message;
-                    SetInternalInstallCheckProgress(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
-                    SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
-                    AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
+                    var failure = UiText.BootloaderCompatibilityFailure(exception)
+                        ?? M("Dynamic.InternalInstall.Check.Failed", diagnostic);
+                    SetInternalInstallCheckProgress(failure);
+                    SetInternalInstallCheckStatus(failure);
+                    AppendLocalizedLog(failure);
                     RecordDiagnosticFailure(
                         M("Dynamic.Diagnostics.Stage.Check"),
                         InstallerLog.DescribeFailure(exception),

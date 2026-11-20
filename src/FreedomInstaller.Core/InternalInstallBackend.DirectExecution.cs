@@ -72,6 +72,16 @@ public sealed partial class InternalInstallBackend
         await _context.VerifyLauncherDefaultsAsync(_initialEdl, after: false, ct).ConfigureAwait(false);
         _context.EnsureDirectExecutionSpace(includeOriginalCapture: false);
 
+        if (!_context.AndroidDataErase)
+        {
+            EdlCapturedRegion pendingMisc = RequireCapturedRegion("misc");
+            int pendingUnitBytes = CheckedWriteUnitBytes(pendingMisc.SectorSize);
+            byte[] pendingUnit = await ReadFirstExecutionBytesAsync(
+                    pendingMisc.FilePath, pendingUnitBytes, ct)
+                .ConfigureAwait(false);
+            _ = BuildBcbWriteUnit(pendingUnit, pendingMisc.SectorSize, androidDataErase: false);
+        }
+
         // Consumer-side reinstall: the mode is derived from the original verified LUN0 GPT inside this
         // preparation context, never from caller input. A retained backup means the original archive bytes
         // are the recovery source that BindArtifacts already validated, so the plan is a reinstall.
@@ -308,9 +318,9 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
-        // A preserved Android layout leaves misc untouched. Any fresh or resized layout writes the install BCB,
-        // which is the explicit Android wipe request for that changed layout.
-        if (_context.AndroidDataErase)
+        // A preserved Android layout leaves misc untouched unless Armada boot is in play: Armada boot
+        // must not write the install BCB, which would be an explicit Android wipe request.
+        if (_context.AndroidDataErase || !_context.Package.EdlRawContract.BootRecipe.UsesArmadaBoot)
         {
             await WriteFreshMiscAsync(_initialEdl, run, progress, ct).ConfigureAwait(false);
         }

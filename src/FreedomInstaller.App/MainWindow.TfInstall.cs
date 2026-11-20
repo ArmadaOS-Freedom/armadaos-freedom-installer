@@ -525,8 +525,18 @@ namespace FreedomInstaller.App
 
                     if (HasCheckedInternalInstallDevice)
                     {
-                        preparedWorkflow = await TfInstallWorkflow.PrepareReaderAsync(
-                            request, _internalInstallDeviceCheck!, client, backup, package, tools, _runner, token);
+                        var check = _internalInstallDeviceCheck!;
+                        try
+                        {
+                            preparedWorkflow = await TfInstallWorkflow.PrepareReaderAsync(
+                                request, check, client, backup, package, tools, _runner, token);
+                        }
+                        catch (InvalidOperationException exception) when (UiText.BootloaderCompatibilityFailure(exception, check.FastbootLockState) is { } compatibility)
+                        {
+                            _tfInstallError = compatibility;
+                            SetTfStatus(compatibility);
+                            throw;
+                        }
                     }
                     else
                     {

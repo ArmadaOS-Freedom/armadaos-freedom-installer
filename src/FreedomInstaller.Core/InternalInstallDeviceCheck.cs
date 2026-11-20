@@ -1155,6 +1155,17 @@ public sealed class InternalInstallDeviceCheck
             currentSlot);
     }
 
+    public async Task RequireUnchangedAndroidSlotAsync(string serial, string expectedSlot, CancellationToken token)
+    {
+        var observedSuffix = await ReadShellPropertyAsync(serial, "ro.boot.slot_suffix", token).ConfigureAwait(false);
+        if ((expectedSlot != "a" && expectedSlot != "b")
+            || !string.Equals(observedSuffix, "_" + expectedSlot, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"启动槽已变化或无法确认，请返回重新检查设备。期望槽 {expectedSlot}，观察到 {observedSuffix}。");
+        }
+    }
+
     private async Task<string> ReadShellPropertyAsync(string serial, string property, CancellationToken token)
     {
         var result = await _runner.RunAsync(

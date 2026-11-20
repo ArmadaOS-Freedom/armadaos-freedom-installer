@@ -394,6 +394,49 @@ public sealed class EdlRawBootBuilderTests
         Assert.Empty(Directory.GetDirectories(workspace.Root, "edl-boot-a-*"));
     }
 
+    // ---------------------------------------------------------------- budget gate
+
+    /// <summary>
+    /// The budget gate reads FileStream.Length before the ARM64 header, so a sparse 128 MiB+1 file in the
+    /// stub runner's working directory is enough: no 128 MiB payload is materialised. The build makes one
+    /// stub runner call, then refuses with a message naming the target slot, actual bytes and the limit.
+    /// </summary>
+    [Theory]
+    [InlineData("a")]
+    [InlineData("b")]
+    public async Task BuildAsync_PackedImageExceedingSlotLoaderBudget_ReportsTargetSlotSizes(string slot)
+    {
+        using EdlRawBootTools tools = await LoadToolsAsync();
+        using var package = new SyntheticPackage();
+        using var workspace = new Workspace();
+        SlotFixture source = CreateSlot(workspace, slot, 0x31);
+
+        var runner = new DelegateRunner((command, _) =>
+        {
+            string directory = command.WorkingDirectory
+                ?? throw new InvalidOperationException("expected a working directory");
+            string packedKernel = Path.Combine(directory, "PackedKernel");
+            using (var stream = new FileStream(
+                       packedKernel, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                stream.SetLength(134217729L);
+            }
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
+        });
+
+        InvalidDataException failure = await Assert.ThrowsAsync<InvalidDataException>(
+            () => EdlRawBootBuilder.BuildAsync(
+                CreateRequest(source, package, tools, workspace), runner));
+
+        Assert.Equal(1, runner.Calls);
+        string message = failure.Message;
+        Assert.Contains("packed raw image exceeds the slot loader budget", message, StringComparison.Ordinal);
+        Assert.Contains("target slot '" + slot + "'", message, StringComparison.Ordinal);
+        Assert.Contains("134217729", message, StringComparison.Ordinal);
+        Assert.Contains("134217728", message, StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------- negatives after native commands
 
     [Fact]

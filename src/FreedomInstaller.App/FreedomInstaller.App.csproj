@@ -14,6 +14,8 @@
     <AssemblyTitle>ArmadaOS Freedom 安装助手</AssemblyTitle>
     <Description>免费软件，谨防被骗。ArmadaOS Freedom 双系统安装助手。</Description>
     <Copyright>Installer by danyi (mydanyi). Third-party components retain their original licenses.</Copyright>
+    <!-- Installer-only opt-in: the .NET SDK appends the real SourceRevisionId to AssemblyInformationalVersion when a commit is available. Shared Directory.Build.props keeps this off for all other projects. CI git checkouts detect the commit automatically; source archives can pass /p:SourceRevisionId with a full 40 or 64 hex SHA. This project never fabricates an ID. -->
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <!-- Single-file, self-contained publish configuration (win-x64, no trimming, no ReadyToRun). -->

@@ -347,7 +347,7 @@
   "Dynamic.InternalInstall.Prepared.ReleaseFailed": "释放安装准备对象失败：{0}",
   "Dynamic.InternalInstall.Prepared.EvidenceLog": "安装前校验证据：确认 ID {0}；方案 SHA-256 {1}；备份清单 SHA-256 {2}；新维护引导 SHA-256 {3}；安装支持包 SHA-256 {4}；工具箱 SHA-256 {5}；系统包绑定 SHA-256 {6}；证据目录 {7}；内置组件目录 {8}。",
   "Dynamic.InternalInstall.Prepared.DirectEvidenceLog": "直装安装前校验证据：确认 ID {0}；方案 SHA-256 {1}；备份清单 SHA-256 {2}；系统包指纹 {3}；系统包绑定 SHA-256 {4}；证据目录 {5}；内置工具目录 {6}。",
-  "Dynamic.InternalInstall.Prepared.CompatibilityRequired": "这台设备的 Bootloader 已锁定，原厂启动验证使用了不同的签名公钥；当前尚缺可验证的兼容引导证据。本次安装尚未开始，尚未向平板写入分区。",
+  "Dynamic.InternalInstall.Prepared.CompatibilityRequired": "免解锁方案检查不通过，请解锁 BL。\n\n{0}",
   "Dynamic.InternalInstall.Prepared.InactiveSystemUnavailable": "{0} 槽原本未初始化，本次仅使用 {1} 槽的原厂材料准备 {0} 槽项目引导，不会补齐 {0} 槽的安卓系统。写入 A/B 项目引导，不代表两槽都具备可启动的安卓系统。",
   "Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired": "当前备份缺少可用的完整启动恢复资料（含 efisp），无法继续免解锁安装。请返回“备份数据”，为这台平板重新创建完整备份。已有备份会保留，不会补写或修改。本次安装尚未开始。",
   "Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch": "备份中的启动验证资料不属于同一套匹配的签名链。请使用来自同一台平板、同一系统状态的完整备份，不要混用不同平板或不同系统状态的备份。本次安装尚未开始。",

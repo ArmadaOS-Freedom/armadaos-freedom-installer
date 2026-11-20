@@ -424,7 +424,7 @@ public static partial class EdlRawBootBuilder
             PackedRawFacts packed;
             using (FileStream raw = OpenRead(packedPath, "packed raw image"))
             {
-                packed = InspectPackedRaw(raw, baseHeader, material.LoaderBudget.MaxRawBytes, token, usesArmadaBoot);
+                packed = InspectPackedRaw(raw, baseHeader, material.LoaderBudget.MaxRawBytes, token, request.Slot, sourceSlot, usesArmadaBoot);
             }
 
             string unpackedDirectory = Path.Combine(child, UnpackedDirectoryName);
@@ -928,6 +928,8 @@ public static partial class EdlRawBootBuilder
         byte[] baseHeader,
         long maxRawBytes,
         CancellationToken cancellationToken,
+        string? targetSlot = null,
+        string? sourceSlot = null,
         bool usesArmadaBoot = false)
     {
         long bytes = raw.Length;
@@ -938,7 +940,14 @@ public static partial class EdlRawBootBuilder
 
         if (bytes > maxRawBytes)
         {
-            throw new InvalidDataException("packed raw image exceeds the slot loader budget");
+            throw new InvalidDataException(
+                "packed raw image exceeds the slot loader budget"
+                + " (raw image actual bytes " + bytes.ToString(CultureInfo.InvariantCulture)
+                + ", MaxRawBytes limit " + maxRawBytes.ToString(CultureInfo.InvariantCulture)
+                + (targetSlot is null
+                    ? string.Empty
+                    : ", target slot '" + targetSlot + "', source slot '" + sourceSlot + "'")
+                + ")");
         }
 
         byte[] head = new byte[Arm64HeaderProbeBytes];
