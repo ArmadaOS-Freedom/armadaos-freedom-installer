@@ -147,6 +147,13 @@ public sealed class WindowsAndroidDriverTests
         Assert.Equal(expected, Method("ResolveAdbUsbSerial").Invoke(null,
             new object?[] { @"USB\VID_17EF&PID_7FE2&MI_01\6&ABC&0&0001", @"USB\VID_17EF&PID_7FE2\SERIAL-01", uniqueId }));
 
+    [Theory]
+    [InlineData("SERIAL_01", "SERIAL_01")]
+    [InlineData("SERIAL.01", "SERIAL.01")]
+    public void ResolveAdbUsbSerialAcceptsCompositeSerialWithUnderscoreAndDot(string parentSerial, string expected) =>
+        Assert.Equal(expected, Method("ResolveAdbUsbSerial").Invoke(null,
+            new object?[] { @"USB\VID_17EF&PID_7FE2&MI_01\6&ABC&0&0001", @"USB\VID_17EF&PID_7FE2\" + parentSerial, true }));
+
     [Fact]
     public void ResolveAdbUsbSerialRejectsNonUsbParents()
     {
@@ -209,6 +216,35 @@ public sealed class WindowsAndroidDriverTests
         Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([], [ep]), "SERIAL-01").State);
         ep.GetType().GetProperty("InboxAdbPackage")!.SetValue(ep, Package("winusb.inf", emptyIds, signed: false));
         Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([], [ep]), "SERIAL-01").State);
+    }
+
+    [Fact]
+    public async Task DiagnosticBundle_SelectedAdbVerifierDetail_RedactsSyntheticIdentityButKeepsCauseAndCode()
+    {
+        var ep = Create("DriverEndpointEvidence", @"USB\VID_17EF&PID_7FE2&MI_01\PRIVATE_USB.77", "winusb.inf", "WinUSB", 8u, 0u, true,
+            "SetupVerifyInfFileW could not verify 0x00000005 for " + @"USB\VID_17EF&PID_7FE2&MI_01\PRIVATE_USB.77 using " + @"C:\Users\private-fixture\driver.inf");
+        ep.GetType().GetProperty("UsbSerial")!.SetValue(ep, "PRIVATE_USB.77");
+        var result = SelectedAdb(CreateSnapshot([], [ep]), "PRIVATE_USB.77");
+        Assert.Equal(WindowsDriverCheckState.Unknown, result.State);
+
+        var dest = Directory.CreateTempSubdirectory();
+        try
+        {
+            var request = new DiagnosticExportRequest("summary", "log", [], [], false, false)
+            {
+                HostEnvironment = new Dictionary<string, string?> { ["driver.adb.deviceCheck.detail"] = result.Detail }
+            };
+            await DiagnosticBundle.ExportAsync(Path.Combine(dest.FullName, "bundle.zip"), request);
+            using var zip = System.IO.Compression.ZipFile.OpenRead(Path.Combine(dest.FullName, "bundle.zip"));
+            using var stream = zip.Entries.Single(e => e.FullName == "environment.json").Open();
+            using var doc = System.Text.Json.JsonDocument.Parse(stream);
+            var text = doc.RootElement.GetProperty("driver.adb.deviceCheck.detail").GetString();
+            Assert.Contains("SetupVerifyInfFileW could not verify", text);
+            Assert.Contains("0x00000005", text);
+            Assert.DoesNotContain("private-fixture", text);
+            Assert.DoesNotContain("PRIVATE_USB.77", text);
+        }
+        finally { dest.Delete(true); }
     }
 
     private static WindowsDriverCheckResult SelectedAdb(object snapshot, string serial) =>

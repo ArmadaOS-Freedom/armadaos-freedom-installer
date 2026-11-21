@@ -132,15 +132,18 @@ public sealed partial class WindowsQualcommDriver
                 return WithEvidence(UnknownResult($"Cannot read device state for {prefix}."));
             if (endpoint.Problem != 0 || (endpoint.Status & DnHasProblem) != 0 || (endpoint.Status & DnStarted) == 0)
                 return Problem($"{prefix}: Windows device problem {endpoint.Problem}, status 0x{endpoint.Status:X8}.");
+            bool selectedAdb = mode == AndroidUsbMode.Adb && evidence.Endpoints.Count == 1 && endpoint.UsbSerial is not null;
+            var selectedInbox = selectedAdb
+                && endpoint.BoundInfName is not null
+                && string.Equals(endpoint.BoundInfName, InboxWinUsbInf, StringComparison.OrdinalIgnoreCase);
             if (endpoint.FailureDetail is not null)
-                return WithEvidence(UnknownResult($"Cannot read driver binding for {prefix}."));
+                return WithEvidence(UnknownResult(selectedInbox
+                    ? endpoint.FailureDetail
+                    : $"Cannot read driver binding for {prefix}."));
             if (!string.Equals(endpoint.Service, WinUsbService, StringComparison.OrdinalIgnoreCase))
                 return Problem($"{prefix}: expected WinUSB; bound service is '{endpoint.Service ?? "<none>"}'.");
-            bool selectedAdb = mode == AndroidUsbMode.Adb && evidence.Endpoints.Count == 1 && endpoint.UsbSerial is not null;
             var id = AndroidEndpointHardwareId(prefix, mode, selectedAdb);
-            if (selectedAdb
-                && endpoint.BoundInfName is not null
-                && string.Equals(endpoint.BoundInfName, InboxWinUsbInf, StringComparison.OrdinalIgnoreCase))
+            if (selectedInbox)
             {
                 var inbox = endpoint.InboxAdbPackage;
                 if (id is null || inbox is null || !inbox.SignatureAccepted
@@ -265,7 +268,13 @@ public sealed partial class WindowsQualcommDriver
                             string.Equals(candidate, AdbCompatibleUsbId, StringComparison.OrdinalIgnoreCase));
                         if (inboxPackage is not null) binding = binding with { InboxAdbPackage = inboxPackage };
                     }
-                    catch (Exception ex) when (IsOsQueryFailure(ex)) { binding = binding with { FailureDetail = Bound("Windows could not verify the bound inbox ADB driver: " + ex.Message) }; }
+                    catch (Exception ex) when (IsOsQueryFailure(ex))
+                    {
+                        var prefix = ex is Win32Exception win32
+                            ? $"Windows could not verify the bound inbox ADB driver (0x{win32.NativeErrorCode:X8}): "
+                            : "Windows could not verify the bound inbox ADB driver: ";
+                        binding = binding with { FailureDetail = Bound(prefix + ex.Message) };
+                    }
                     results[^1] = binding;
                 }
             }
