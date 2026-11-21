@@ -268,6 +268,7 @@ public sealed class UiTextTests
             "Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown",
             "Dynamic.InternalInstall.Prepared.GblInstallMode",
             "Dynamic.InternalInstall.Execution.Stage.WritingGblRuntime",
+            "Dynamic.InternalInstall.Execution.Stage.WritingAbl",
         };
 
         foreach (var key in keys)
