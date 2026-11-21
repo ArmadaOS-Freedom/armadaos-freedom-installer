@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -77,6 +78,9 @@ internal sealed class GblDirectSourceFixture : IDisposable
 
             ParentPublicKeySha256 = Sha256Hex(_parentA.KeyBlob);
             BootChildPublicKeySha256 = Sha256Hex(_child.KeyBlob);
+
+            WriteCoherentRecovery(_parentA);
+            WriteCoherentRecovery(_parentB);
 
             // One root per parent slot. Slot A normally chains boot to the child key; the mismatch
             // flag only rewrites that single descriptor, so the RSA root still verifies while the
@@ -158,6 +162,19 @@ internal sealed class GblDirectSourceFixture : IDisposable
     internal string Region { get; }
 
     internal bool MismatchParentBootChild { get; }
+
+    private static void WriteCoherentRecovery(EdlRawAvbChainTests.AvbFixture fixture)
+    {
+        byte[][] originalDescriptors = fixture.PlainDescriptors;
+        byte[] payload = Enumerable.Repeat((byte)0x21, 32768).ToArray();
+        byte[] salt = Enumerable.Repeat((byte)0x9d, 16).ToArray();
+        byte[] descriptor = BootMaintenanceStockChainTests.RecoveryHashDescriptor(
+            payload.Length, salt, SHA256.HashData(salt.Concat(payload).ToArray()), "sha256");
+        byte[] bytes = BootMaintenanceStockChainTests.BuildRecoveryPartition(fixture, descriptor, null);
+        fixture.PlainDescriptors = originalDescriptors;
+        fixture.RecoveryBytes = bytes;
+        File.WriteAllBytes(fixture.RecoveryPath, bytes);
+    }
 
     // Opt-in synthetic ABI alignment: rewrite only the ARM64 header text_offset (LE64 @8) in the
     // base image and at the boot-leaf body offset 4096+8, BEFORE _child.RewriteBootLeaf re-signs.

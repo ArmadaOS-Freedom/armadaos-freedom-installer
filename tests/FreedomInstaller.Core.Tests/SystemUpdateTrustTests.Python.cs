@@ -49,7 +49,7 @@ def fake_inspect_physical_slots():
     inspect_calls += 1
     snap = copy.deepcopy(physical_template)
     if scenario == 'physical-changed' and inspect_calls >= 2:
-        snap['selectedSlot'] = 'b'
+        snap['actualSlot'] = 'b'
     return snap
 
 lock_calls = 0

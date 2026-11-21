@@ -847,7 +847,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         // Standard route: before ANY write, each DISTINCT role boot_a, boot_b and every
         // write-target role is read exactly once from its captured source region, whole,
         // with a full SHA check against the captured hash and the target's pinned
-        // original hash. Each involved LUN is warm probed before that LUN is read.
+        // original hash, and the initialized-source proof roles are also reread. Each
+        // involved LUN is warm probed before that LUN is read.
         if (_currentMenu is not null)
         {
             SafeStage(Stages.PreflightMenu);
@@ -856,7 +857,9 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             // Qualcomm active-slot flags live in the boot LUN GPT. Re-read both copies before
             // any boot or partition write, alongside the previously checked misc/LUN0 capture.
             foreach (int bootLun in new[] { "boot_a", "boot_b" }
-                .Select(role => _currentMenu.SourceRegions[role].Lun).Distinct())
+                .Concat(_currentMenu.InitializedProofRoles)
+                .Select(role => _currentMenu.SourceRegions[role].Lun)
+                .Distinct())
             {
                 preflightRoles.Add("gpt_lun" + bootLun + "_primary");
                 preflightRoles.Add("gpt_lun" + bootLun + "_backup");
@@ -864,6 +867,14 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             foreach (string bootRole in new[] { "boot_a", "boot_b" })
             {
                 preflightRoles.Add(bootRole);
+            }
+
+            foreach (string proofRole in _currentMenu.InitializedProofRoles)
+            {
+                if (!preflightRoles.Contains(proofRole))
+                {
+                    preflightRoles.Add(proofRole);
+                }
             }
 
             foreach (MenuWriteTarget target in _currentMenu.WriteTargets)
