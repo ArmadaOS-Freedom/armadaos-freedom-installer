@@ -182,6 +182,66 @@ public sealed class EdlUninstallCurrentMenuTests
         Assert.Equal(0, h.Ib.ResetCount);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InitializedInactiveBFromA_WorkflowAndPhysicalPreflightTamperAsync(bool tamper)
+    {
+        using Harness h = await PrepareAsync(initializedBFromA: true);
+
+        CurrentBootMenuSlot slotA = h.Menu.Slots.Single(s => s.Slot == "a");
+        CurrentBootMenuSlot slotB = h.Menu.Slots.Single(s => s.Slot == "b");
+        Assert.Equal("a", slotB.SourceSlot);
+        Assert.Equal(BootMaintenanceSourceKind.Project, slotB.SourceKind);
+        Assert.NotNull(slotB.Original);
+        Assert.Equal(h.Current.Files["boot_b"].Sha256, slotB.Original!.Sha256, StringComparer.OrdinalIgnoreCase);
+
+        if (tamper)
+        {
+            (int vendorALun, long vendorAStart, _, _) = h.Device.Expectation("vendor_boot_a");
+            byte[] distinct = new byte[IB001SyntheticDevice.SectorSize];
+            new Random(23).NextBytes(distinct);
+            string overlay = Path.Combine(h.CaseDirectory, "initialized-preflight-mismatch.bin");
+            File.WriteAllBytes(overlay, distinct);
+            h.Device.AddWriteOverlay(vendorALun, vendorAStart, 1, overlay);
+
+            UninstallResult result = await RunWorkflowAsync(h);
+
+            Assert.False(result.Success);
+            Assert.False(string.IsNullOrEmpty(result.Error));
+            Assert.Contains("vendor_boot_a", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, h.Ib.Writes.Count);
+            Assert.Equal(0, h.Ib.ResetCount);
+            return;
+        }
+
+        UninstallResult ok = await RunWorkflowAsync(h);
+        Assert.True(ok.Success);
+        Assert.Null(ok.Error);
+        Assert.Equal(0, h.Ib.ResetCount);
+
+        VerifiedEdlFile? candidateB = slotB.Candidate;
+        Assert.NotNull(candidateB);
+
+        (int bootBLun, long bootBStart, _, _) = h.Device.Expectation("boot_b");
+        long bootBSectors = candidateB!.Length / SectorBytes;
+        Assert.True(h.Ib.Writes.Count >= 1);
+        Assert.Equal((bootBLun, bootBStart, bootBSectors),
+            (h.Ib.Writes[0].Lun, h.Ib.Writes[0].StartSector, h.Ib.Writes[0].SectorCount));
+        Assert.Equal(candidateB.Sha256, h.Ib.Writes[0].Sha256, StringComparer.OrdinalIgnoreCase);
+
+        VerifiedEdlFile? candidateA = slotA.Candidate;
+        if (candidateA is not null)
+        {
+            (int bootALun, long bootAStart, _, _) = h.Device.Expectation("boot_a");
+            long bootASectors = candidateA.Length / SectorBytes;
+            Assert.True(h.Ib.Writes.Count >= 2);
+            Assert.Equal((bootALun, bootAStart, bootASectors),
+                (h.Ib.Writes[1].Lun, h.Ib.Writes[1].StartSector, h.Ib.Writes[1].SectorCount));
+            Assert.Equal(candidateA.Sha256, h.Ib.Writes[1].Sha256, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
     [Fact]
     public async Task PhysicalPreflightBootMismatch_AbortsWithZeroWritesAsync()
     {
@@ -356,7 +416,7 @@ public sealed class EdlUninstallCurrentMenuTests
         return result;
     }
 
-    internal async Task<Harness> PrepareAsync(bool qualcomm = false, string currentSlot = "a", bool stockOnly = false)
+    internal async Task<Harness> PrepareAsync(bool qualcomm = false, string currentSlot = "a", bool stockOnly = false, bool initializedBFromA = false)
     {
         string caseDirectory = _toolchain.NewCaseDirectory(
             nameof(EdlUninstallCurrentMenuTests) + "-" + Guid.NewGuid().ToString("N"));
@@ -527,6 +587,23 @@ public sealed class EdlUninstallCurrentMenuTests
                 device.AddWriteOverlay(extent.Lun, extent.Start, extent.Count, companion.Value.Path);
             }
 
+
+            if (initializedBFromA)
+            {
+                // Sparse all-zero whole-extent files over the four B ancillary roles, layered after
+                // the captured current companions and before the current GPT overlay capture so the
+                // current B ancillary hashes are the all-zero proof while A stays intact.
+                foreach (string role in new[] { "vendor_boot_b", "init_boot_b", "abl_b", "xbl_config_b" })
+                {
+                    (int bLun, long bStart, long bCount, _) = device.Expectation(role);
+                    string zeroPath = Path.Combine(caseDirectory, "initialized-b-zero-" + role + ".bin");
+                    using (var fs = new FileStream(zeroPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                    {
+                        fs.SetLength(bCount * SectorBytes);
+                    }
+                    device.AddWriteOverlay(bLun, bStart, bCount, zeroPath);
+                }
+            }
 
             device.AddWriteOverlay(0, 0, 64, currentPrimaryPath);
             device.AddWriteOverlay(0, device.TotalSectors(0) - 64, 64, currentBackupPath);
