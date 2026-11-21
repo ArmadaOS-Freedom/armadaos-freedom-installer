@@ -1263,7 +1263,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
                 expanded.Add(lease);
                 expandedByRole.Add(target.Image.Artifact.Role, lease);
 
-                VerifyExpandedFilesystem(lease, target.Image, contract.BootRecipe, cancellationToken);
+                VerifyExpandedFilesystem(lease, target.Image, contract, cancellationToken);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -1696,12 +1696,17 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
     private static void VerifyExpandedFilesystem(
         DerivedLease lease,
         EdlRawImage image,
-        EdlRawBootRecipe recipe,
+        EdlRawPackageContract contract,
         CancellationToken cancellationToken)
     {
+        EdlRawBootRecipe recipe = contract.BootRecipe;
         if (string.Equals(image.FsType, "ext4", StringComparison.Ordinal))
         {
             VerifyExt4Superblock(lease, image, recipe.BootUuid, cancellationToken);
+            if (recipe.UsesArmadaBoot)
+            {
+                BootMaintenanceInstalledLinux.VerifyArmadaBootImage(lease.Stream, contract, cancellationToken);
+            }
             return;
         }
 
@@ -2193,7 +2198,12 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
                 "\"normalBootArgs\":" + Quote(contract.BootRecipe.NormalBootArgs),
                 "\"diagnosticBootArgs\":" + Quote(contract.BootRecipe.DiagnosticBootArgs),
                 "\"defaultEntry\":" + Quote(contract.BootRecipe.DefaultEntry),
-            });
+            }
+            // Append only when the wire flag was declared, so legacy bootRecipe JSON
+            // (and its canonical hash) stays byte-identical for packages without it.
+            .Concat(contract.BootRecipe.UsesArmadaBoot
+                ? new[] { "\"linuxBootSource\":\"armada-boot-v1\"" }
+                : Array.Empty<string>()));
 
         var deploymentFields = string.Join(
             ",",

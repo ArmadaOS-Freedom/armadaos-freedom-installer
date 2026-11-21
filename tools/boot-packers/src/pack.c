@@ -248,6 +248,11 @@ int PackImage(const PackConfig *config)
     FileContent            extra = {.filePath = image->path};
     if (!load_file(&extra))
       goto cleanup;
+    if (image->type == MF_ENTRY_TYPE_DISK_LINUX && extra.fileSize != 64) {
+        log_err("DiskLinux image '%s' payload must be exactly 64 bytes, got %zu", image->name, extra.fileSize);
+        free(extra.fileBuffer);
+        goto cleanup;
+    }
     if (!inspect_typed_blob(&extra, image)) {
       free(extra.fileBuffer);
       goto cleanup;

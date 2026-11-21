@@ -268,7 +268,10 @@ public static partial class EdlRawBootBuilder
 
             compressedSha256 = HashFileSha256(tempPath, cancellationToken);
 
-            long originalImageSize = checked(BootHeaderBytes + Align(compressedLength, PageSize));
+            long newKernelAligned = Align(compressedLength, PageSize);
+            long targetRamdiskOffset = checked(BootHeaderBytes + newKernelAligned);
+            long targetRamdiskAligned = Align((long)metadata.SourceRamdiskSize, PageSize);
+            long originalImageSize = checked(targetRamdiskOffset + targetRamdiskAligned);
             if (partitionSize <= MetadataReserveBytes || originalImageSize > partitionSize - MetadataReserveBytes)
             {
                 throw new InvalidDataException(
@@ -277,6 +280,7 @@ public static partial class EdlRawBootBuilder
 
             byte[] newHeader = (byte[])metadata.Header.Clone();
             WriteLeU32(newHeader, 8, (uint)compressedLength);
+            WriteLeU32(newHeader, 12, metadata.SourceRamdiskSize);
 
             HashAlgorithmName hashName = HashNameFor(metadata.Vbmeta.Hash.Algorithm);
             byte[] newDigest;
@@ -294,7 +298,25 @@ public static partial class EdlRawBootBuilder
                         CopyTo(compressed, output, contentHash, cancellationToken);
                     }
 
-                    WriteZeros(output, originalImageSize - BootHeaderBytes - compressedLength, contentHash, cancellationToken);
+                    WriteZeros(output, targetRamdiskOffset - BootHeaderBytes - compressedLength, contentHash, cancellationToken);
+                    long targetRamdiskStart = output.Position;
+                    long sourceRamdiskStart = source.Position;
+                    long copiedRamdisk = (long)metadata.SourceRamdiskSize;
+                    if (copiedRamdisk > 0)
+                    {
+                        source.Position = (long)metadata.SourceRamdiskOffset;
+                        using BoundedReadStream boundedSource = new(source, copiedRamdisk);
+                        CopyTo(boundedSource, output, contentHash, cancellationToken);
+                    }
+
+                    source.Position = sourceRamdiskStart;
+
+                    if (output.Position - targetRamdiskStart != copiedRamdisk)
+                    {
+                        throw new InvalidOperationException("streamed source ramdisk length differs from the source header");
+                    }
+
+                    WriteZeros(output, originalImageSize - targetRamdiskOffset - copiedRamdisk, contentHash, cancellationToken);
                     newDigest = contentHash.GetHashAndReset();
                 }
 
@@ -373,6 +395,11 @@ public static partial class EdlRawBootBuilder
                     throw new InvalidOperationException("candidate header kernel_size mismatch");
                 }
 
+                if (ReadLeU32(writtenHeader, 12) != metadata.SourceRamdiskSize)
+                {
+                    throw new InvalidOperationException("candidate header ramdisk_size mismatch");
+                }
+
                 string writtenGzipSha256 = HashRangeSha256(check, BootHeaderBytes, compressedLength, cancellationToken);
                 if (!string.Equals(writtenGzipSha256, compressedSha256, StringComparison.Ordinal))
                 {
@@ -381,7 +408,20 @@ public static partial class EdlRawBootBuilder
 
                 VerifyDecompressedKernel(check, compressedLength, rawLength, packedRaw.Sha256, cancellationToken);
 
-                AssertZeros(check, BootHeaderBytes + compressedLength, originalImageSize - BootHeaderBytes - compressedLength, cancellationToken);
+                if (metadata.SourceRamdiskSize > 0)
+                {
+                    string sourceRamdiskSha256 = HashRangeSha256(
+                        source, (long)metadata.SourceRamdiskOffset, (long)metadata.SourceRamdiskSize, cancellationToken);
+                    string candidateRamdiskSha256 = HashRangeSha256(
+                        check, targetRamdiskOffset, (long)metadata.SourceRamdiskSize, cancellationToken);
+                    if (!string.Equals(sourceRamdiskSha256, candidateRamdiskSha256, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException("candidate ramdisk bytes differ from the preserved source ramdisk");
+                    }
+                }
+
+                AssertZeros(check, BootHeaderBytes + compressedLength, targetRamdiskOffset - BootHeaderBytes - compressedLength, cancellationToken);
+                AssertZeros(check, targetRamdiskOffset + (long)metadata.SourceRamdiskSize, originalImageSize - targetRamdiskOffset - (long)metadata.SourceRamdiskSize, cancellationToken);
                 AssertZeros(check, originalImageSize + vbmeta.Length, trailing, cancellationToken);
                 AssertZeros(
                     check,
@@ -516,10 +556,7 @@ public static partial class EdlRawBootBuilder
             throw new InvalidDataException("source boot kernel_size is zero");
         }
 
-        if (ReadLeU32(header, 12) != 0)
-        {
-            throw new InvalidDataException("source boot ramdisk_size is nonzero");
-        }
+        uint oldRamdiskSize = ReadLeU32(header, 12);
 
         if (ReadLeU32(header, 20) != HeaderSizeField)
         {
@@ -541,6 +578,15 @@ public static partial class EdlRawBootBuilder
             throw new InvalidDataException("source boot kernel exceeds the partition bounds");
         }
 
+        ulong oldKernelAligned = Align4096((ulong)oldKernelSize);
+        ulong sourceRamdiskOffset = (ulong)BootHeaderBytes + oldKernelAligned;
+        ulong oldRamdiskAligned = Align4096((ulong)oldRamdiskSize);
+        ulong sourcePaddedEnd = sourceRamdiskOffset + oldRamdiskAligned;
+        if (sourcePaddedEnd > (ulong)partitionSize - (ulong)AvbFooterBytes)
+        {
+            throw new InvalidDataException("source boot padded kernel and ramdisk exceed the partition bounds");
+        }
+
         byte[] footer = new byte[AvbFooterBytes];
         ReadExactly(source, footer, partitionSize - AvbFooterBytes, AvbFooterBytes);
 
@@ -558,10 +604,10 @@ public static partial class EdlRawBootBuilder
         ulong vbmetaOffset = ReadBeU64(footer, 20);
         ulong vbmetaSize = ReadBeU64(footer, 28);
 
-        ulong minimumOriginal = (ulong)BootHeaderBytes + Align4096((ulong)oldKernelSize);
+        ulong minimumOriginal = sourceRamdiskOffset + oldRamdiskAligned;
         if (originalImageSize < minimumOriginal)
         {
-            throw new InvalidDataException("source boot original_image_size is below the kernel-aligned minimum");
+            throw new InvalidDataException("source boot original_image_size is below the padded kernel and ramdisk minimum");
         }
 
         if (vbmetaOffset < originalImageSize)
@@ -599,6 +645,8 @@ public static partial class EdlRawBootBuilder
             Header = header,
             Vbmeta = vbmeta,
             VbmetaSha256 = vbmeta.BlobSha256,
+            SourceRamdiskOffset = sourceRamdiskOffset,
+            SourceRamdiskSize = oldRamdiskSize,
         };
     }
 
@@ -1477,6 +1525,10 @@ public static partial class EdlRawBootBuilder
         public ParsedVbmeta Vbmeta = null!;
 
         public string VbmetaSha256 = string.Empty;
+
+        public ulong SourceRamdiskOffset;
+
+        public uint SourceRamdiskSize;
     }
 
     private sealed class ParsedVbmeta

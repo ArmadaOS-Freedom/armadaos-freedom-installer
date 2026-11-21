@@ -129,7 +129,7 @@ public sealed partial class InternalInstallBackend
                     ct)
                 .ConfigureAwait(false);
 
-            await WriteFreshMiscAsync(fresh, run, progress, ct).ConfigureAwait(false);
+            await WriteFreshMiscAsync(fresh, run, progress, ct, androidDataErase: true).ConfigureAwait(false);
 
             await ResetExecutionAsync(fresh, run, InternalInstallStage.BootingAndroid, progress, ct)
                 .ConfigureAwait(false);
@@ -862,6 +862,16 @@ public sealed partial class InternalInstallBackend
         }
 
         /// <summary>
+        /// Marks the irreversible post-write evidence unproven after a failed verification. Keeps the sticky
+        /// poison and no terminal success can be produced from this run.
+        /// </summary>
+        internal void MarkVerificationUnproven()
+        {
+            _interrupted = true;
+            _writeState = InternalInstallWriteState.Unknown;
+        }
+
+        /// <summary>
         /// Caches a verified Android acceptance once. Later absent, unauthorized, initialization and rejected
         /// results never downgrade the Android fact, and a non-verified result is never cached as verified.
         /// </summary>
@@ -1361,7 +1371,7 @@ public sealed partial class InternalInstallBackend
         ExecutionRun run,
         IProgress<InternalInstallProgress>? progress,
         CancellationToken cancellationToken,
-        bool androidDataErase = true)
+        bool androidDataErase)
     {
         ArgumentNullException.ThrowIfNull(freshClient);
         ArgumentNullException.ThrowIfNull(run);

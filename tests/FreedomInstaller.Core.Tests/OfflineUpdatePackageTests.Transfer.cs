@@ -96,6 +96,33 @@ public sealed partial class OfflineUpdatePackageTests
     }
 
     [Fact]
+    public async Task Transfer_ArmadaBootUsesNullSlotsWithoutSelectedSlot()
+    {
+        var c = new Case(Path.Combine(root, "armada01"));
+        var work = Directory.CreateDirectory(Path.Combine(root, "armada01-work")).FullName;
+        using var imported = await Import(c.ArchivePath, Model, "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer(Model, c.DescriptorBytes, c.Entries["images/linux-root.img.gz"], [1, 2], [3, 4])
+        {
+            ArmadaBoot = true,
+        };
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+
+        var session = await transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask);
+        var prepared = await transfer.PrepareAsync(imported, session);
+
+        Assert.Equal("prepared", prepared.GetProperty("state").GetString());
+        var physical = prepared.GetProperty("physical");
+        Assert.True(physical.TryGetProperty("actualSlot", out var actual));
+        Assert.Equal(JsonValueKind.Null, actual.ValueKind);
+        Assert.True(physical.TryGetProperty("inactiveSlot", out var inactive));
+        Assert.Equal(JsonValueKind.Null, inactive.ValueKind);
+        Assert.False(physical.TryGetProperty("selectedSlot", out _));
+        Assert.Equal("armada_boot", physical.GetProperty("bootSource").GetString());
+        Assert.Equal(0, server.ExecuteCalls);
+    }
+
+    [Fact]
     public async Task Transfer_Legacy07InfoAndReceipts_AreAcceptedForBothSlotFlow()
     {
         var c = new Case(Path.Combine(root, "legacy07"));
@@ -723,6 +750,7 @@ public sealed partial class OfflineUpdatePackageTests
         }
 
         public bool LegacyController { get; set; }
+        public bool ArmadaBoot { get; set; }
 
         /// <summary>
         /// The <c>bootPolicy</c> the device advertises. The default is the
@@ -752,6 +780,12 @@ public sealed partial class OfflineUpdatePackageTests
                 info["inactiveSlot"] = null;
                 info["selectedSlot"] = "b";
                 info["bootContext"] = "legacy-controller";
+            }
+            else if (ArmadaBoot)
+            {
+                info["actualSlot"] = null;
+                info["inactiveSlot"] = null;
+                info["bootSource"] = "armada_boot";
             }
             else
             {
@@ -917,14 +951,24 @@ public sealed partial class OfflineUpdatePackageTests
                         ["deployment"] = new string('a', 64) + ".0",
                         ["recoveryPartUuid"] = RecoveryPartUuid
                     }
-                    : new JsonObject
-                    {
-                        ["model"] = _model,
-                        ["actualSlot"] = "a",
-                        ["inactiveSlot"] = "b",
-                        ["deployment"] = new string('a', 64) + ".0",
-                        ["recoveryPartUuid"] = RecoveryPartUuid
-                    },
+                    : ArmadaBoot
+                        ? new JsonObject
+                        {
+                            ["model"] = _model,
+                            ["bootSource"] = "armada_boot",
+                            ["actualSlot"] = null,
+                            ["inactiveSlot"] = null,
+                            ["deployment"] = new string('a', 64) + ".0",
+                            ["recoveryPartUuid"] = RecoveryPartUuid
+                        }
+                        : new JsonObject
+                        {
+                            ["model"] = _model,
+                            ["actualSlot"] = "a",
+                            ["inactiveSlot"] = "b",
+                            ["deployment"] = new string('a', 64) + ".0",
+                            ["recoveryPartUuid"] = RecoveryPartUuid
+                        },
                 ["payload"] = new JsonObject
                 {
                     ["path"] = "images/linux-root.img.gz",

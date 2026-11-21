@@ -1,5 +1,6 @@
-// ES2: proof of an original factory-uninitialized inactive slot (A or B).
-// This type owns five read leases over zero-filled inputs and makes no device, readiness or write claim.
+// ES2: proof of an original factory-uninitialized inactive slot (A or B), or of a
+// known initialized project boot preserved by the project proof. This type owns five
+// read leases over its inactive-slot zero inputs and makes no device, readiness or write claim.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -10,8 +11,10 @@ using System.Threading.Tasks;
 namespace FreedomInstaller.Core;
 
 /// <summary>
-/// One verified original inactive slot: the target slot every byte of which is still factory zero while
-/// the other slot holds the real source material.
+/// One verified inactive slot. In the original form the target slot is still factory zero
+/// while the other slot holds the real source material. In the project form the wrapper
+/// preserves a known initialized project Boot whose five input claims were bound by the
+/// existing verifier, and its own five read leases are absent (streams are null).
 /// <para>
 /// <see cref="VerifyAsync"/> resolves a known complete profile, requires the target to be the opposite of
 /// the actual current slot, and then makes exactly one bounded streaming pass per input that proves the
@@ -24,15 +27,17 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
 {
     private const int ScanBufferBytes = 81920;
 
-    private readonly FileStream _bootStream;
+    private readonly FileStream? _bootStream;
 
-    private readonly FileStream _vendorBootStream;
+    private readonly FileStream? _vendorBootStream;
 
-    private readonly FileStream _initBootStream;
+    private readonly FileStream? _initBootStream;
 
-    private readonly FileStream _ablStream;
+    private readonly FileStream? _ablStream;
 
-    private readonly FileStream _xblConfigStream;
+    private readonly FileStream? _xblConfigStream;
+
+    private readonly CurrentBootInitializedInactiveProof? _projectProof;
 
     private int _disposed;
 
@@ -45,11 +50,12 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
         VerifiedEdlFile initBoot,
         VerifiedEdlFile abl,
         VerifiedEdlFile xblConfig,
-        FileStream bootStream,
-        FileStream vendorBootStream,
-        FileStream initBootStream,
-        FileStream ablStream,
-        FileStream xblConfigStream)
+        FileStream? bootStream,
+        FileStream? vendorBootStream,
+        FileStream? initBootStream,
+        FileStream? ablStream,
+        FileStream? xblConfigStream,
+        CurrentBootInitializedInactiveProof? projectProof = null)
     {
         Profile = profile;
         SourceSlot = sourceSlot;
@@ -64,6 +70,7 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
         _initBootStream = initBootStream;
         _ablStream = ablStream;
         _xblConfigStream = xblConfigStream;
+        _projectProof = projectProof;
     }
 
     /// <summary>The complete profile whose model and loader materials the backup belongs to.</summary>
@@ -72,22 +79,22 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
     /// <summary>The slot that holds the real source material: the opposite of <see cref="Slot"/>.</summary>
     public string SourceSlot { get; }
 
-    /// <summary>The inactive, factory-uninitialized target slot: exactly <c>a</c> or <c>b</c>.</summary>
+    /// <summary>The inactive target slot: exactly <c>a</c> or <c>b</c>.</summary>
     public string Slot { get; }
 
-    /// <summary>The held zero-filled current_boot claim of the inactive target.</summary>
+    /// <summary>The held current_boot claim of the inactive target.</summary>
     public VerifiedEdlFile CurrentBoot { get; }
 
-    /// <summary>The held zero-filled vendor_boot claim of the inactive target.</summary>
+    /// <summary>The held vendor_boot claim of the inactive target.</summary>
     public VerifiedEdlFile VendorBoot { get; }
 
-    /// <summary>The held zero-filled init_boot claim of the inactive target.</summary>
+    /// <summary>The held init_boot claim of the inactive target.</summary>
     public VerifiedEdlFile InitBoot { get; }
 
-    /// <summary>The held zero-filled abl claim of the inactive target.</summary>
+    /// <summary>The held abl claim of the inactive target.</summary>
     public VerifiedEdlFile Abl { get; }
 
-    /// <summary>The held zero-filled xbl_config claim of the inactive target.</summary>
+    /// <summary>The held xbl_config claim of the inactive target.</summary>
     public VerifiedEdlFile XblConfig { get; }
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
@@ -183,17 +190,93 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
     }
 
     /// <summary>
+    /// Wraps an already-verified project proof whose target slot carries a known initialized project
+    /// Boot. The proof transfers ownership to the returned instance only after construction succeeds.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="proof"/> is null.</exception>
+    /// <exception cref="ObjectDisposedException">The proof was already disposed.</exception>
+    /// <exception cref="ArgumentException">The proof's profile is unknown or not TB323FU.</exception>
+    internal static EdlRawInactiveSlotBackup FromVerifiedProjectBoot(CurrentBootInitializedInactiveProof proof)
+    {
+        if (proof is null)
+        {
+            throw new ArgumentNullException(nameof(proof));
+        }
+
+        proof.RequireUsable();
+        EdlDeviceProfile profile = RequireProfile(proof.ProfileId);
+
+        if (!string.Equals(profile.Model, "TB323FU", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("project boot proof is not for model TB323FU.", nameof(proof));
+        }
+
+        if (!string.Equals(proof.SourceSlot, "a", StringComparison.Ordinal) ||
+            !string.Equals(proof.TargetSlot, "b", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "project boot proof must bind source slot 'a' and target slot 'b'.", nameof(proof));
+        }
+
+        return new EdlRawInactiveSlotBackup(
+            profile,
+            proof.SourceSlot,
+            proof.TargetSlot,
+            proof.TargetBoot,
+            proof.Claims["vendor_boot_b"],
+            proof.Claims["init_boot_b"],
+            proof.Claims["abl_b"],
+            proof.Claims["xbl_config_b"],
+            null,
+            null,
+            null,
+            null,
+            null,
+            proof);
+    }
+
+    /// <summary>
     /// Cheap usability gate for the builder: it repeats no scan and opens nothing. A proof disposed in
     /// the middle of a build must abort that build.
     /// </summary>
     internal void RequireUsable()
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
+        _projectProof?.RequireUsable();
     }
 
     /// <summary>
-    /// Releases exactly the five read leases. Idempotent, and a single close failure never skips the
-    /// remaining closes. No original file is written, truncated, moved or deleted.
+    /// For a project-boot donor, requires the request to consume armada boot and to reference exactly
+    /// the same five slot-A input claims the project proof bound. No-op when this instance is a plain
+    /// original factory-zero proof.
+    /// </summary>
+    internal void RequireProjectBootDonor(EdlRawBootBuildRequest request)
+    {
+        if (_projectProof is null)
+        {
+            return;
+        }
+
+        ArgumentNullException.ThrowIfNull(request);
+        RequireUsable();
+
+        if (!request.Package.BootRecipe.UsesArmadaBoot)
+        {
+            throw new ArgumentException(
+                "project boot donor requires an armada boot recipe.", nameof(request));
+        }
+
+        RequireMatchingClaim(request.CurrentBoot, _projectProof.Claims["boot_a"], "current_boot");
+        RequireMatchingClaim(request.VendorBoot, _projectProof.Claims["vendor_boot_a"], "vendor_boot");
+        RequireMatchingClaim(request.InitBoot, _projectProof.Claims["init_boot_a"], "init_boot");
+        RequireMatchingClaim(request.Abl, _projectProof.Claims["abl_a"], "abl");
+        RequireMatchingClaim(request.XblConfig, _projectProof.Claims["xbl_config_a"], "xbl_config");
+    }
+
+    /// <summary>
+    /// Releases the five read leases (when owned) and the project proof (when present). Idempotent, and
+    /// a single close failure never skips the remaining closes. No original file is written, truncated,
+    /// moved or deleted.
     /// </summary>
     public void Dispose()
     {
@@ -207,9 +290,24 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
         CloseQuietly(_initBootStream);
         CloseQuietly(_ablStream);
         CloseQuietly(_xblConfigStream);
+        _projectProof?.Dispose();
     }
 
     // ------------------------------------------------------------------ verification
+
+    private static void RequireMatchingClaim(VerifiedEdlFile actual, VerifiedEdlFile expected, string role)
+    {
+        if (actual is null)
+        {
+            throw new ArgumentNullException(role);
+        }
+
+        if (!actual.Equals(expected))
+        {
+            throw new ArgumentException(
+                role + " does not match the project proof's bound claim.", role);
+        }
+    }
 
     private static EdlDeviceProfile RequireProfile(string profileId)
     {
@@ -414,11 +512,11 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
     private static bool IsLink(FileSystemInfo info) =>
         (info.Attributes & FileAttributes.ReparsePoint) != 0 || info.LinkTarget is not null;
 
-    private static void CloseQuietly(FileStream stream)
+    private static void CloseQuietly(FileStream? stream)
     {
         try
         {
-            stream.Dispose();
+            stream?.Dispose();
         }
         catch (IOException)
         {

@@ -459,7 +459,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         bool omitEfispBackup = false,
         string? smallSystemSlot = null,
         string? ablFixturePath = null,
-        long? reinstallAndroidGiB = null)
+        long? reinstallAndroidGiB = null,
+        string? mediaPath = null)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -773,7 +774,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
             string importRoot = Path.Combine(root, "import");
             Directory.CreateDirectory(importRoot);
             imported = await PackageImporter.ImportAsync(
-                rawPackage.Directory, toolchain.Model, InstallationTarget.Internal, importRoot);
+                mediaPath ?? rawPackage.Directory, toolchain.Model,
+                InstallationTarget.Internal, importRoot);
             Assert.True(imported.Validation.IsValid, string.Join("; ", imported.Validation.Reasons));
 
             EdlRawPackageContract contract =

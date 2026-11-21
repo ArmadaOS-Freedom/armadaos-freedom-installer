@@ -680,7 +680,9 @@ public static partial class EdlRawBootBuilder
         uint defaultBefore = ReadLeU32(raw, mo + 12);
         uint timeout = ReadLeU32(raw, mo + 16);
 
-        if (count < ManifestEntryCount || count > CurrentBootMaxMenuEntries)
+        bool isDiskMenu = count == DiskManifestEntryCount;
+
+        if ((!isDiskMenu && count < ManifestEntryCount) || count > CurrentBootMaxMenuEntries)
         {
             throw new InvalidDataException(
                 "current menu manifest entry count " + count.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -777,6 +779,67 @@ public static partial class EdlRawBootBuilder
             else if ((eFlags & 1u) != 0u)
             {
                 throw new InvalidDataException("a non-base menu entry carries the reserved base flag");
+            }
+
+            if (isDiskMenu)
+            {
+                if (index == 1u || index == 2u)
+                {
+                    if (eType != 7u || eFlags != 4u || eSize != 64u ||
+                        eLoad != 0 || eEntry != 0 || eCopy != 0)
+                    {
+                        throw new InvalidDataException(
+                            "a disk maintenance payload entry does not match the four-entry disk layout");
+                    }
+
+                    if (ReadLeU32(raw, cursor + 36) != 0u)
+                    {
+                        throw new InvalidDataException(
+                            "a disk maintenance payload entry carries a DeviceTreeBlob reference");
+                    }
+
+                    if (eOffset > (ulong)mo ||
+                        eSize > (ulong)mo - eOffset)
+                    {
+                        throw new InvalidDataException(
+                            "a disk maintenance payload is not entirely before the manifest");
+                    }
+
+                    if (!DiskLinuxEntry.IsValid(raw.AsSpan((int)eOffset, 64)))
+                    {
+                        throw new InvalidDataException(
+                            "a disk maintenance payload is not a valid disk Linux entry");
+                    }
+
+                    uint payloadMode = ReadLeU32(raw, (int)(eOffset + 12));
+                    if (payloadMode != index - 1u)
+                    {
+                        throw new InvalidDataException(
+                            "a disk maintenance payload mode does not match its menu index");
+                    }
+                }
+                else if (index == 3u)
+                {
+                    if (eType != 3u || eFlags != 4u || eSize == 0)
+                    {
+                        throw new InvalidDataException(
+                            "the disk maintenance shim entry does not match the four-entry disk layout");
+                    }
+
+                    if (eOffset > (ulong)mo ||
+                        eSize > (ulong)mo - eOffset)
+                    {
+                        throw new InvalidDataException(
+                            "the disk maintenance shim payload is not entirely before the manifest");
+                    }
+
+                    ulong shimOffset = ReadLeU64(raw, Arm64ShimOffsetField);
+                    if (eOffset != shimOffset)
+                    {
+                        throw new InvalidDataException(
+                            "the disk maintenance shim payload does not match the boot shim offset");
+                    }
+                }
             }
 
             names.Add(name);

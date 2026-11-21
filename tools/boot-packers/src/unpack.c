@@ -297,6 +297,13 @@ static bool load_packed(const char *path, PackedImage *packed)
       log_err("Input image has invalid Manifest metadata.");
       return false;
     }
+    if (entry->type == MF_ENTRY_TYPE_DISK_LINUX) {
+        if (entry->size != 64 || copyImage || entry->entryOffset != 0 ||
+            (index == 0) || (entry->loadAddress != 0) || hasDtb) {
+            log_err("Invalid DiskLinux entry");
+            return false;
+        }
+    }
     if (executable != manifest_entry_type_is_executable(entry->type)) {
       log_err("Input image has inconsistent executable metadata.");
       return false;

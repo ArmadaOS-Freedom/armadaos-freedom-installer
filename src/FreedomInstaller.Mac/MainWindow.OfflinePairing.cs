@@ -229,8 +229,9 @@ public partial class MainWindow
             _offlineTransfer = new OfflineUpdateTransfer(conn.Rpc);
             _offlineConnectedModel = model.ToUpperInvariant();
             bool legacyController = OfflineUpdateUiState.IsLegacyController(conn.DeviceInfo);
+            bool diskDevice = string.Equals(GetJsonString(conn.DeviceInfo, "bootSource"), "armada_boot", StringComparison.Ordinal);
             // selectedSlot is never presented as a proven actual slot.
-            _offlineActualSlot = legacyController ? null : GetJsonString(conn.DeviceInfo, "actualSlot");
+            _offlineActualSlot = legacyController || diskDevice ? null : GetJsonString(conn.DeviceInfo, "actualSlot");
             _offlineRecoveryPartUuid = GetJsonString(conn.DeviceInfo, "recoveryPartUuid") ?? string.Empty;
             // prepare, execute and restart are gated until the no-slot-control
             // boot policy is advertised.
@@ -241,6 +242,11 @@ public partial class MainWindow
             {
                 SetText(OfflineDeviceText, "Dynamic.OfflineUpdate.LegacyDeviceConnected", LocalizeModelName(_offlineConnectedModel));
                 AppendOfflineLog("Dynamic.OfflineUpdate.LogLegacyConnected", LocalizeModelName(_offlineConnectedModel));
+            }
+            else if (diskDevice)
+            {
+                SetText(OfflineDeviceText, "Dynamic.OfflineUpdate.DiskDeviceConnected", LocalizeModelName(_offlineConnectedModel));
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogDiskConnected", LocalizeModelName(_offlineConnectedModel));
             }
             else
             {

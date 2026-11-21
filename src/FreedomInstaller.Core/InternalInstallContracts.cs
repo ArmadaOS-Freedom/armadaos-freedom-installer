@@ -102,6 +102,7 @@ public enum InternalInstallStage
     /// verification outcome.
     /// </summary>
     WritingGblRuntime,
+    WritingLauncherSettings,
 }
 
 /// <summary>

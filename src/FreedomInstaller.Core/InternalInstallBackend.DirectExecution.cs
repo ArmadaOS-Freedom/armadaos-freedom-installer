@@ -69,6 +69,7 @@ public sealed partial class InternalInstallBackend
         _context.EnsureDirectExecutionSpace();
         await _context.RevalidateLocalAsync(ct).ConfigureAwait(false);
         await _context.VerifyOriginalDeviceAsync(_initialEdl, "execute-direct", ct).ConfigureAwait(false);
+        await _context.VerifyLauncherDefaultsAsync(_initialEdl, after: false, ct).ConfigureAwait(false);
         _context.EnsureDirectExecutionSpace(includeOriginalCapture: false);
 
         if (!_context.AndroidDataErase)
@@ -317,10 +318,39 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
-        // Only the fresh misc bytes are read and overlaid; the old backup SHA is never restored.
-        await WriteFreshMiscAsync(
-                _initialEdl, run, progress, ct, androidDataErase: _context.AndroidDataErase)
-            .ConfigureAwait(false);
+        // A preserved ARMADA_BOOT layout skips misc entirely; a preserved legacy layout may still clear
+        // an existing installer BCB. The explicit AndroidDataErase decision must accompany every call.
+        if (_context.AndroidDataErase || !_context.Package.EdlRawContract.BootRecipe.UsesArmadaBoot)
+        {
+            await WriteFreshMiscAsync(_initialEdl, run, progress, ct, androidDataErase: _context.AndroidDataErase).ConfigureAwait(false);
+        }
+
+        if (_context.LauncherDefaults is { } plan)
+        {
+            foreach (InternalArtifactRegion region in plan.Writes)
+            {
+                await WriteExecutionRegionAsync(
+                        _initialEdl,
+                        run,
+                        InternalInstallStage.WritingLauncherSettings,
+                        null,
+                        region,
+                        true,
+                        progress,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        try
+        {
+            await _context.VerifyLauncherDefaultsAsync(_initialEdl, after: true, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            run.MarkVerificationUnproven();
+            throw;
+        }
 
         // The one reset of this run, and only after every write and readback above.
         await ResetExecutionAsync(

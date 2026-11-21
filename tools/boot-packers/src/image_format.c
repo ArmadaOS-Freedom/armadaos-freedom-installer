@@ -64,7 +64,8 @@ bool image_inspect_arm64_linux(const FileContent *file, Arm64ImageInfo *info)
 bool manifest_entry_type_is_executable(uint32_t type)
 {
   return type == MF_ENTRY_TYPE_LINUX || type == MF_ENTRY_TYPE_FREE_EXEC ||
-         type == MF_ENTRY_TYPE_SHIM;
+         type == MF_ENTRY_TYPE_SHIM ||
+         type == MF_ENTRY_TYPE_DISK_LINUX;
 }
 
 const char *manifest_entry_type_name(uint32_t type)
@@ -80,6 +81,8 @@ const char *manifest_entry_type_name(uint32_t type)
     return "Blob";
   case MF_ENTRY_TYPE_DTB:
     return "DTB";
+  case MF_ENTRY_TYPE_DISK_LINUX:
+    return "DiskLinux";
   default:
     return NULL;
   }

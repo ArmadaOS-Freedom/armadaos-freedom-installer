@@ -1097,7 +1097,8 @@ public sealed class InternalInstallArtifactsTests
         // The uninitialised synthetic set owns no locks of its own; only the produced artifact set is disposed.
         var backup = fixture.CreateBackupSet();
         var artifacts = await InternalInstallArtifacts.PrepareAsync(
-            backup, 16, Storage(), fixture.RootPath, CancellationToken.None);
+            backup, 16, Storage(), fixture.RootPath, CancellationToken.None,
+            initializeDiskLauncherSettings: true);
 
         try
         {
@@ -1113,6 +1114,24 @@ public sealed class InternalInstallArtifactsTests
                 "VerifyBoardArchive", image, fixture.Model, CancellationToken.None)!;
 
             Assert.Equal(2, verified.GetProperty("schemaVersion").GetInt32());
+
+            // BootSettingsRegion trailer: read the final 64 KiB and validate descriptor v3 + slot0.
+            var bootSettingsBytes = new byte[BootSettingsRegion.Bytes];
+            image.Position = BootSettingsRegion.Offset;
+            ReadExactly(image, bootSettingsBytes, 0, bootSettingsBytes.Length);
+
+            var descriptorVersion = BinaryPrimitives.ReadUInt32LittleEndian(
+                bootSettingsBytes.AsSpan(8, sizeof(uint)));
+            Assert.Equal(3u, descriptorVersion);
+
+            var slot0 = bootSettingsBytes.AsSpan(BootSettingsRegion.SlotBytes, BootSettingsRegion.SlotBytes);
+            var slot0Sequence = BinaryPrimitives.ReadUInt64LittleEndian(
+                slot0.Slice(16, sizeof(ulong)));
+            Assert.Equal(1ul, slot0Sequence);
+
+            var slot0LinuxDefault = BinaryPrimitives.ReadUInt32LittleEndian(
+                slot0.Slice(60, sizeof(uint)));
+            Assert.Equal(2u, slot0LinuxDefault);
 
             var entries = verified.GetProperty("entries").EnumerateArray().ToArray();
             Assert.Equal(51, entries.Length);

@@ -354,10 +354,17 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     internal InternalArtifactRegion? BoardSummary => _boardSummary;
 
-    internal bool AndroidDataErase =>
-        !(_isDirect &&
-          _boardSummary is null &&
-          string.Equals(_originalTables[0].SourceFingerprint, _postGpt.SourceFingerprint, StringComparison.Ordinal));
+    internal bool AndroidDataErase => !(_isDirect && PreservesAndroidLayout(_boardSummary, _originalTables[0], _postGpt, _allocation));
+
+    private static bool PreservesAndroidLayout(
+        InternalArtifactRegion? boardSummary,
+        GptTable originalTable,
+        GptTable postTable,
+        InternalAllocationPlan allocation) =>
+        boardSummary is null &&
+        InternalPartitionPlanner.FindInstalledLinuxLayout(originalTable) is not null &&
+        allocation.AndroidSectorCount == allocation.OriginalUserdata.SectorCount &&
+        string.Equals(originalTable.SourceFingerprint, postTable.SourceFingerprint, StringComparison.Ordinal);
 
     internal IReadOnlyDictionary<string, InternalSlotMaterial> SlotMaterials => _slotMaterials;
 
@@ -645,6 +652,33 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
             string evidenceDirectory = CreateEvidenceDirectory(evidenceParent, identity.Serial);
 
+            if (string.Equals(profile.Model, "TB323FU", StringComparison.Ordinal)
+                && string.Equals(deviceCheck.CurrentSlot, "a", StringComparison.Ordinal)
+                && deviceCheck.FastbootLockState == BootloaderState.Locked
+                && PreservesAndroidLayout(artifactSet.BoardSummary, backupFacts.Tables[0], artifactSet.PostGpt, artifactSet.Allocation)
+                && artifactSet.RecoveryBackup is not null
+                && !IsBootHeaderZero(Claim(backupFacts.Files, "boot_b"), cancellationToken)
+                && await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(Claim(backupFacts.Files, "vbmeta_b"), cancellationToken).ConfigureAwait(false))
+            {
+                packageSnapshot = await InternalInstallPackageSnapshot
+                    .CaptureEdlRawAsync(package, identity, evidenceParent, cancellationToken)
+                    .ConfigureAwait(false);
+
+                RequireDirectContract(packageSnapshot.EdlRawContract, packageSnapshot, identity, firmware, profile);
+
+                if (packageSnapshot.EdlRawContract.BootRecipe?.UsesArmadaBoot == true)
+                {
+                    EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
+                        profile.ProfileId,
+                        backupFacts.Files,
+                        installAssets.Tools,
+                        services.CommandRunner,
+                        evidenceDirectory,
+                        cancellationToken).ConfigureAwait(false);
+                    inactiveTargets["b"] = proof;
+                }
+            }
+
             Dictionary<string, string> sourceSlots = await DetermineDirectSourceSlotsAsync(
                 profile.ProfileId,
                 deviceCheck.CurrentSlot,
@@ -723,7 +757,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                     new Dictionary<string, EdlRawResignedAvbNode>(StringComparer.Ordinal));
             }
 
-            packageSnapshot = await InternalInstallPackageSnapshot
+            packageSnapshot ??= await InternalInstallPackageSnapshot
                 .CaptureEdlRawAsync(package, identity, evidenceParent, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -958,6 +992,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             context._deviceEvidence.AddRange(original.Evidence);
             context._originalDeviceVerified = true;
 
+            await context.PrepareLauncherDefaultsAsync(initialEdl, cancellationToken).ConfigureAwait(false);
             context.SealConfirmation(cancellationToken);
 
             // Ready is only reached after every builder output, this factory's own original capture and the
@@ -1587,13 +1622,53 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         EdlRawDtbEvidence diagnosticDtb,
         EdlRawPackageContract contract)
     {
-        string[] required = { "base", "linux-padded", "runtime", "dtb-normal", "dtb-diagnostic", "initramfs" };
-        if (payloads.Count != required.Length)
+        if (contract.BootRecipe.UsesArmadaBoot)
+        {
+            string[] diskRoles = { "base", "runtime", "normal.disk", "diagnostic.disk" };
+            if (payloads.Count != diskRoles.Length)
+            {
+                throw new InvalidDataException(
+                    "The unpacked payload map does not carry exactly the four fixed disk roles.");
+            }
+
+            foreach (string role in diskRoles)
+            {
+                if (!payloads.TryGetValue(role, out string? sha256) || sha256 is null)
+                {
+                    throw new InvalidDataException("The unpacked payload map is missing the '" + role + "' role.");
+                }
+
+                RequireSha256(sha256, "the unpacked '" + role + "' digest");
+            }
+
+            string expectedNormalDisk = Sha256Text.Hex(DiskLinuxEntry.Encode(
+                contract.BootRecipe.BootUuid,
+                contract.BootRecipe.RootUuid,
+                diagnostic: false));
+            string expectedDiagnosticDisk = Sha256Text.Hex(DiskLinuxEntry.Encode(
+                contract.BootRecipe.BootUuid,
+                contract.BootRecipe.RootUuid,
+                diagnostic: true));
+
+            if (!SameSha(payloads["base"], material.BaseImageSha256)
+                || !SameSha(payloads["runtime"], RequireContractArtifact(contract, "runtime").Sha256)
+                || !SameSha(payloads["normal.disk"], expectedNormalDisk)
+                || !SameSha(payloads["diagnostic.disk"], expectedDiagnosticDisk))
+            {
+                throw new InvalidDataException(
+                    "The unpacked payload map does not carry the actual base, runtime and disk descriptor facts.");
+            }
+
+            return;
+        }
+
+        string[] legacyRoles = { "base", "linux-padded", "runtime", "dtb-normal", "dtb-diagnostic", "initramfs" };
+        if (payloads.Count != legacyRoles.Length)
         {
             throw new InvalidDataException("The unpacked payload map does not carry exactly the six fixed roles.");
         }
 
-        foreach (string role in required)
+        foreach (string role in legacyRoles)
         {
             if (!payloads.TryGetValue(role, out string? sha256) || sha256 is null)
             {
@@ -4280,6 +4355,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         json.WriteString("sourceCommit", contract.SourceCommit);
         json.WriteString("manifestFingerprint", contract.ManifestFingerprint);
         json.WriteBoolean("testOnly", contract.TestOnly);
+        WriteLauncherDefaultsConfirmation(json);
 
         json.WriteStartObject("storage");
         json.WriteNumber("linuxBootBytes", contract.Storage.LinuxBootBytes);
