@@ -30,6 +30,10 @@ public partial class MainWindow
     private bool _environmentBootVerified;
     private bool _environmentStateUnknown;
     private bool _environmentPendingReboot;
+    private bool _environmentWorkCheckCompleted;
+    private DateTime? _environmentCheckStartUtc;
+    private DateTime? _environmentCheckFinishUtc;
+    private string _environmentScanState = "not-run";
 
     /// <summary>最近一次确认过的启动标识；读取失败时保留旧值，不无根据清空内存门禁。</summary>
     private string? _environmentBootIdentity;
@@ -47,11 +51,16 @@ public partial class MainWindow
         && _environmentAdbResult is { IsReady: true } && _environmentFastbootResult is { IsReady: true }
         && _workDirectoryReady;
 
-    /// <summary>与驱动是否就绪无关的平台前置条件：安装按钮也只在此基础上开放。</summary>
-    private bool EnvironmentPlatformReady =>
+    /// <summary>仅宿主平台就绪：不要求 Android 驱动探测结果，供环境页与恢复入口共用。</summary>
+    private bool EnvironmentRestorePlatformReady =>
         _environmentCheckCompleted && _environmentSystemSupported && _environmentToolsReady
         && _transport is not null && _environmentBootVerified && _environmentBootIdentity is not null
         && !_environmentPendingReboot && !_environmentStateUnknown;
+
+    /// <summary>与驱动是否就绪无关的平台前置条件：安装按钮也只在此基础上开放。</summary>
+    private bool EnvironmentPlatformReady =>
+        EnvironmentRestorePlatformReady
+        && _environmentAdbResult is not null && _environmentFastbootResult is not null;
 
     private static bool NeedsDriverInstall(WindowsDriverCheckResult? result) =>
         result?.State is WindowsDriverCheckState.Missing or WindowsDriverCheckState.Problem;
@@ -74,8 +83,8 @@ public partial class MainWindow
         await RunBusyAsync(async token =>
         {
             try { await CheckEnvironmentCoreAsync(token); }
-            catch (OperationCanceledException) { MarkEnvironmentCheckFailed(); throw; }
-            catch (Exception) { MarkEnvironmentCheckFailed(); }
+            catch (OperationCanceledException failure) { MarkEnvironmentCheckFailed(failure); throw; }
+            catch (Exception failure) { MarkEnvironmentCheckFailed(failure); }
         });
     }
 
@@ -141,6 +150,10 @@ public partial class MainWindow
     /// <summary>安装流程已持有 <c>_busy</c> 时也会直接调用，所以这里不碰忙碌状态、不创建取消源。</summary>
     private async Task CheckEnvironmentCoreAsync(CancellationToken cancellationToken)
     {
+        _environmentScanState = "checking";
+        _environmentCheckStartUtc = DateTime.UtcNow;
+        _environmentCheckFinishUtc = null;
+        _environmentWorkCheckCompleted = false;
         _environmentCheckCompleted = false;
         _environmentSystemSupported = false;
         _environmentToolsReady = false;
@@ -204,7 +217,11 @@ public partial class MainWindow
         WindowsDriverCheckResult? result = null;
         try { result = await Task.Run(() => new WindowsQualcommDriver().Inspect(), cancellationToken); }
         catch (OperationCanceledException) { throw; }
-        catch (Exception) { _environmentStateUnknown = true; }
+        catch (Exception failure)
+        {
+            _environmentStateUnknown = true;
+            AppendWorkLogLine("probe-qualcomm: " + InstallerLog.DescribeFailure(failure));
+        }
 
         if (_closed) return;
         cancellationToken.ThrowIfCancellationRequested();
@@ -223,13 +240,20 @@ public partial class MainWindow
             _environmentFastbootResult = android.Fastboot;
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception) { _environmentStateUnknown = true; }
+        catch (Exception failure)
+        {
+            _environmentAdbResult = null;
+            _environmentFastbootResult = null;
+            AppendWorkLogLine("probe-android: " + InstallerLog.DescribeFailure(failure));
+        }
         RenderAndroidDriverStates();
+        // 宿主侧完成状态不再依赖 Android 驱动探测：探测异常只清空其结果，由渲染层显示 CheckFailed。
         _environmentCheckCompleted = _environmentSystemSupported && _environmentToolsReady
-            && _environmentBootVerified && result is not null
-            && _environmentAdbResult is not null && _environmentFastbootResult is not null && !_environmentStateUnknown;
+            && _environmentBootVerified && result is not null && !_environmentStateUnknown;
         await CheckTemporaryWorkDirectoryAsync(cancellationToken);
         if (_closed) return;
+        _environmentCheckFinishUtc = DateTime.UtcNow;
+        _environmentScanState = "finished";
         RenderEnvironmentStatus();
         RefreshEnvironmentActions();
     }
@@ -276,6 +300,7 @@ public partial class MainWindow
             : !_environmentBootVerified ? "Dynamic.Environment.BootUnknown"
             : _environmentStateUnknown ? "Dynamic.Environment.CheckFailed"
             : _environmentPendingReboot ? "Dynamic.Environment.PendingReboot"
+            : _environmentAdbResult is null || _environmentFastbootResult is null ? "Dynamic.Environment.CheckFailed"
             : EnvironmentIsReady ? "Dynamic.Environment.Ready"
             : EnvironmentDriverMissing ? "Dynamic.Environment.NeedDriver"
             : !_workDirectoryReady ? "Dynamic.Environment.WorkNotReady"
@@ -289,8 +314,11 @@ public partial class MainWindow
             ? "Dynamic.Environment.DriverState." + stateName
             : "Dynamic.Environment.DriverState.Unknown";
 
-    private void MarkEnvironmentCheckFailed()
+    private void MarkEnvironmentCheckFailed(Exception failure)
     {
+        _environmentCheckFinishUtc = DateTime.UtcNow;
+        _environmentScanState = failure is OperationCanceledException ? "cancelled" : "failed";
+        AppendWorkLogLine("environment: " + InstallerLog.DescribeFailure(failure));
         _environmentCheckCompleted = false;
         _environmentDriverResult = null;
         _environmentAdbResult = null;
@@ -454,10 +482,12 @@ public partial class MainWindow
 
             QualcommDriverFiles? files = null;
             AndroidDriverFiles? androidFiles = null;
+            var selection = WindowsDriverInstaller.SelectPackages(
+                NeedsDriverInstall(_environmentDriverResult), EnvironmentAndroidDriverMissing);
             try
             {
-                if (NeedsDriverInstall(_environmentDriverResult)) files = BundledQualcommDriver.EnsureAvailable();
-                if (EnvironmentAndroidDriverMissing) androidFiles = BundledAndroidDriver.EnsureAvailable();
+                if (selection.InstallQualcomm) files = BundledQualcommDriver.EnsureAvailable();
+                if (selection.InstallAndroid) androidFiles = BundledAndroidDriver.EnsureAvailable();
             }
             catch (Exception)
             {
@@ -488,7 +518,15 @@ public partial class MainWindow
                     ? new DriverInstallResult(DriverInstallOutcome.Completed, 0, null)
                     : await WindowsDriverInstaller.InstallAsync(files);
                 if (installResult.Outcome == DriverInstallOutcome.Completed && androidFiles is not null)
-                    installResult = await WindowsDriverInstaller.InstallAndroidAsync(androidFiles);
+                {
+                    // 仅当 Qualcomm 是真实安装（files 非空）并明确 Completed 时，才把该事实带给 Android 结果；
+                    // 合成占位（没有 Qualcomm 需要安装）不得把标记记为已完成。
+                    var qualcommCompleted = files is not null;
+                    var androidResult = await WindowsDriverInstaller.InstallAndroidAsync(androidFiles);
+                    installResult = qualcommCompleted
+                        ? androidResult with { EarlierPackageCompleted = true }
+                        : androidResult;
+                }
             }
             catch (Exception)
             {
@@ -518,15 +556,25 @@ public partial class MainWindow
                 _environmentCheckCompleted = false;
                 ReportEnvironment(M("Dynamic.Environment.InstallCompleted"));
                 try { await CheckEnvironmentCoreAsync(CancellationToken.None); }
-                catch (OperationCanceledException) { MarkEnvironmentCheckFailed(); }
-                catch (Exception) { MarkEnvironmentCheckFailed(); }
+                catch (OperationCanceledException failure) { MarkEnvironmentCheckFailed(failure); }
+                catch (Exception failure) { MarkEnvironmentCheckFailed(failure); }
                 return;
 
             case "Cancelled":
-                // 明确取消且标记清理成功：保留已核实的系统 / 工具 / 启动与当前 Missing 结论，
-                // 直接允许重试；不自动重开 UAC，也不宣称就绪或成功。
-                if (!TryClearPendingRebootGate()) _environmentCheckCompleted = false;
+                // 但若取消前已有驱动包完成（例如 Qualcomm 或 Google 已完成、随后的 OPlus 被取消），
+                var gateCleared = TryClearPendingRebootGate();
+                if (!gateCleared) _environmentCheckCompleted = false;
+                var needsRecheck = gateCleared && installResult.EarlierPackageCompleted;
+                // 先报告取消，确保日志顺序保留取消事实，然后再追加复核产生的消息。
                 ReportEnvironment(M("Dynamic.Environment.Cancelled"));
+                if (needsRecheck)
+                {
+                    _environmentCheckCompleted = false;
+                    // 已持有 _busy，直接调用只读核心自检，不进入 RunBusyAsync。
+                    try { await CheckEnvironmentCoreAsync(CancellationToken.None); }
+                    catch (OperationCanceledException failure) { MarkEnvironmentCheckFailed(failure); }
+                    catch (Exception failure) { MarkEnvironmentCheckFailed(failure); }
+                }
                 return;
 
             case "Failed":
@@ -553,7 +601,7 @@ public partial class MainWindow
         }
     }
 
-    private bool CanInstallDriverNow() => EnvironmentPlatformReady && EnvironmentDriverMissing;
+    private bool CanInstallDriverNow() => EnvironmentPlatformReady;
 
     // ---------- 可用性与日志 ----------
 
@@ -562,11 +610,18 @@ public partial class MainWindow
         if (_closed) return;
         var idle = !_busy && !_environmentDriverInstalling;
         EnvironmentCheckButton.IsEnabled = idle;
-        EnvironmentInstallDriverButton.Visibility =
-            EnvironmentDriverMissing ? Visibility.Visible : Visibility.Collapsed;
-        EnvironmentInstallDriverButton.IsEnabled =
-            idle && EnvironmentDriverMissing && EnvironmentPlatformReady;
+        EnvironmentInstallDriverButton.IsEnabled = idle && CanInstallDriverNow();
         EnvironmentContinueButton.IsEnabled = idle && EnvironmentIsReady;
+
+        // 快捷入口只在完整环境门禁阻止正常访问时出现；环境就绪后隐藏。
+        if (EnvironmentGlobalRestoreButton is not null)
+        {
+            EnvironmentGlobalRestoreButton.Visibility = EnvironmentIsReady
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            EnvironmentGlobalRestoreButton.IsEnabled = idle && !HasGlobalRecoveryProtectedState && !HasPendingTfTabletRecovery;
+        }
+
         RefreshTemporaryWorkDirectoryActions();
         // 受保护 TF 现场存在时不允许经环境页「返回首页」丢掉已知状态。
         HomeEnvironmentButton.IsEnabled = idle && !ProtectedModernTfInstallState && !HasPendingTfTabletRecovery;

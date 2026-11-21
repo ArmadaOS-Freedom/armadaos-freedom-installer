@@ -719,6 +719,28 @@ public partial class MainWindow
                             return;
                         }
 
+                        if (internalAutoBranch && !useBoardBackup && !useExisting
+                            && profile.Model == "TB323FU"
+                            && _internalInstallDeviceCheck is { FastbootLockState: BootloaderState.Locked, CurrentSlot: "a" or "b" } checkedSlot)
+                        {
+                            var slotCheck = new InternalInstallDeviceCheck(
+                                transport.AdbPath,
+                                transport.FastbootPath,
+                                _runner);
+                            try
+                            {
+                                await slotCheck.RequireUnchangedAndroidSlotAsync(
+                                    freshIdentity.Serial,
+                                    checkedSlot.CurrentSlot!,
+                                    token);
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                InvalidateInternalInstallCheckFromMismatch();
+                                throw;
+                            }
+                        }
+
                         // 已有采样时才在进入 9008 之前刷新一次；没有采样就不凭空补一个。
                         if (_internalInstallPower is not null)
                         {
@@ -787,16 +809,19 @@ public partial class MainWindow
                     // 唯一一次真实调用：已有模式只校验原始目录，正常模式才在父目录下新建子目录。
                     // 修复模式（非内部使用板备份分支）走修复专用助手，其他模式保持原样。
                     InternalBackupSet set;
+                    BoardRecoveryExtraction? extraction = null;
+                    if (internalAutoBranch)
+                    {
+                        SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.ReadingBoard"));
+                        extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
+                            activeClient, parentPath, TemporaryWorkRoot, token);
+                    }
                     if (IsRepairInstallationMode && IsBootMaintenanceMode && !useBoardBackup && !useExisting)
                     {
                         set = await CaptureRepairCurrentAsync(activeClient, parentPath, progress, token);
                     }
-                    else if (useBoardBackup)
+                    else if (extraction is not null)
                     {
-                        SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.ReadingBoard"));
-                        var extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
-                            activeClient, parentPath, TemporaryWorkRoot, token)
-                            ?? throw new InvalidDataException(T("Dynamic.RecoverySource.BoardMissing"));
                         InternalBackupSet? recovery = null;
                         try
                         {
@@ -817,12 +842,24 @@ public partial class MainWindow
                         _boardRecoveryDiscoveredDirectory = extraction.DirectoryPath;
                         _boardRecoveryAttemptManifest = set.ManifestSha256;
                         extraction.Retain();
+                        useBoardBackup = true;
                         AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", extraction.DirectoryPath));
+                    }
+                    else if (useBoardBackup)
+                    {
+                        throw new InvalidDataException(T("Dynamic.RecoverySource.BoardMissing"));
                     }
                     else set = useExisting
                         ? await InternalInstallBackup.OpenExistingAsync(
                             activeClient,
                             existingDirectory!,
+                            progress,
+                            token)
+                        : internalAutoBranch && _internalInstallDeviceCheck is { } checkedDevice
+                        ? await InternalInstallBackup.CreateForFirstInstallAsync(
+                            activeClient,
+                            parentPath,
+                            checkedDevice,
                             progress,
                             token)
                         : await InternalInstallBackup.CreateAsync(
@@ -921,6 +958,7 @@ public partial class MainWindow
                             : M("Dynamic.InternalInstall.Backup.FailedNote"));
                     RenderInternalInstallBackupDetail();
                     AppendLocalizedLog(failure);
+                    RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Backup"), diagnostic);
                 }
                 finally
                 {

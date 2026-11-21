@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
+using FreedomInstaller.Core;
 
 namespace FreedomInstaller.App;
 
@@ -213,7 +214,7 @@ public partial class MainWindow
 
         Resources["Static.Title"] = T(
             "Static.Title",
-            typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? string.Empty);
+            InstallerDisplayVersion.ForAssembly(typeof(MainWindow).Assembly));
     }
 
     private void UpdateLanguageToggle()

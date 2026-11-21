@@ -51,8 +51,19 @@ internal static class MacTools
 
     internal static bool Exists(string logicalName)
     {
-        using var stream = Open(logicalName);
-        return stream is not null;
+        try
+        {
+            using var stream = Open(logicalName);
+            return stream is not null;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     internal static string? FindAndroidTool(string name)

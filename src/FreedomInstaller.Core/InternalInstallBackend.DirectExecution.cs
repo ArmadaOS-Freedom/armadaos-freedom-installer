@@ -71,6 +71,21 @@ public sealed partial class InternalInstallBackend
         await _context.VerifyOriginalDeviceAsync(_initialEdl, "execute-direct", ct).ConfigureAwait(false);
         _context.EnsureDirectExecutionSpace(includeOriginalCapture: false);
 
+        if (!_context.AndroidDataErase)
+        {
+            EdlCapturedRegion pendingMisc = RequireCapturedRegion("misc");
+            int pendingUnitBytes = CheckedWriteUnitBytes(pendingMisc.SectorSize);
+            byte[] pendingUnit = await ReadFirstExecutionBytesAsync(
+                    pendingMisc.FilePath, pendingUnitBytes, ct)
+                .ConfigureAwait(false);
+            _ = BuildBcbWriteUnit(pendingUnit, pendingMisc.SectorSize, androidDataErase: false);
+        }
+
+        // Consumer-side reinstall: the mode is derived from the original verified LUN0 GPT inside this
+        // preparation context, never from caller input. A retained backup means the original archive bytes
+        // are the recovery source that BindArtifacts already validated, so the plan is a reinstall.
+        bool reinstall = InternalPartitionPlanner.FindInstalledLinuxLayout(_context.OriginalTables[0]) is not null;
+
         // Every local view is built before the first device write, so a metadata or size mismatch refuses the
         // run while nothing has been issued yet.
         EdlGeometry lun0 = _context.Geometries[0];
@@ -180,31 +195,47 @@ public sealed partial class InternalInstallBackend
         run.VerifyStage(InternalInstallStage.Revalidating);
         PublishExecution(run, progress, InternalInstallProgressKind.Verified);
 
-        // The four explicit GPT regions stay in the array order the artifact preparation froze.
-        foreach (InternalArtifactRegion region in _context.GptWriteRegions)
+        // The shared decision drives the GPT writes: any fresh, resized or legacy layout erases data and writes
+        // the frozen GPT regions, while only a verified unchanged installed layout preserves the original table.
+        if (_context.AndroidDataErase)
         {
+            // The four explicit GPT regions stay in the array order the artifact preparation froze.
+            foreach (InternalArtifactRegion region in _context.GptWriteRegions)
+            {
+                await WriteExecutionRegionAsync(
+                        _initialEdl,
+                        run,
+                        InternalInstallStage.WritingGpt,
+                        null,
+                        region,
+                        true,
+                        progress,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        // A reinstall keeps the existing ARMADA_BACKUP contents: the bound recovery source was proven during
+        // BindArtifacts, so no board archive is written and no fresh board summary is produced.
+        if (!reinstall)
+        {
+            if (_context.BoardSummary is not { } boardSummary)
+            {
+                throw new InvalidOperationException(
+                    "A fresh direct preparation must carry a board summary before the physical write.");
+            }
+
             await WriteExecutionRegionAsync(
                     _initialEdl,
                     run,
-                    InternalInstallStage.WritingGpt,
+                    InternalInstallStage.WritingBoardBackup,
                     null,
-                    region,
+                    boardSummary,
                     true,
                     progress,
                     ct)
                 .ConfigureAwait(false);
         }
-
-        await WriteExecutionRegionAsync(
-                _initialEdl,
-                run,
-                InternalInstallStage.WritingBoardBackup,
-                null,
-                _context.BoardSummary,
-                true,
-                progress,
-                ct)
-            .ConfigureAwait(false);
 
         await WriteExecutionRegionAsync(
                 _initialEdl,
@@ -287,7 +318,9 @@ public sealed partial class InternalInstallBackend
         }
 
         // Only the fresh misc bytes are read and overlaid; the old backup SHA is never restored.
-        await WriteFreshMiscAsync(_initialEdl, run, progress, ct).ConfigureAwait(false);
+        await WriteFreshMiscAsync(
+                _initialEdl, run, progress, ct, androidDataErase: _context.AndroidDataErase)
+            .ConfigureAwait(false);
 
         // The one reset of this run, and only after every write and readback above.
         await ResetExecutionAsync(

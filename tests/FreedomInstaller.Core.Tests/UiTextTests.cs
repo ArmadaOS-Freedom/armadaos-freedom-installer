@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using FreedomInstaller.App;
+using FreedomInstaller.Core;
 using Xunit;
 
 namespace FreedomInstaller.Core.Tests;
@@ -27,6 +28,150 @@ public sealed class UiTextTests
     private static readonly Regex PlaceholderPattern = new(
         @"\{(\d+)(?:,[^}]*)?(?::[^}]*)?\}",
         RegexOptions.CultureInvariant);
+
+    [Fact]
+    public void InternalInstallPreparationFailure_MessageIsLocalizedInBothLanguages()
+    {
+        var exception = Assert.Throws<InternalInstallWorkDiskSpaceException>(
+            () => InternalInstallPreparationContext.RequireDirectExecutionSpaceAvailable(38408839168L, 14706802688L));
+        var message = UiText.InternalInstallPreparationFailure(exception);
+
+        var text = new UiText(UiText.ChineseLanguage);
+        var chinese = text.Format(message);
+        Assert.Contains("电脑上安装器工作目录所在磁盘空间不足", chinese);
+        Assert.Contains("13.69 GiB", chinese);
+        Assert.Contains("35.78 GiB", chinese);
+        Assert.DoesNotContain("insufficient-direct-execution-space", chinese);
+
+        text.SetLanguage(UiText.EnglishLanguage);
+        var english = text.Format(message);
+        Assert.Contains("Not enough free space", english);
+        Assert.Contains("13.69 GiB", english);
+        Assert.Contains("35.78 GiB", english);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_NearThresholdRoundsConservatively()
+    {
+        const long gib = 1073741824L;
+        const long required = 36L * gib;
+        var exception = Assert.Throws<InternalInstallWorkDiskSpaceException>(
+            () => InternalInstallPreparationContext.RequireDirectExecutionSpaceAvailable(
+                required,
+                required - (4L * 1024 * 1024)));
+        var message = UiText.InternalInstallPreparationFailure(exception);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.Contains("35.99 GiB", english);
+        Assert.Contains("36.00 GiB", english);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_UnexpectedExceptionHasNoRawEnglish()
+    {
+        var message = UiText.InternalInstallPreparationFailure(
+            new InvalidOperationException("raw english detail"));
+
+        var chinese = new UiText(UiText.ChineseLanguage).Format(message);
+        Assert.DoesNotContain("raw english detail", chinese);
+        Assert.Contains("安装日志", chinese);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.DoesNotContain("raw english detail", english);
+        Assert.Contains("install log", english);
+    }
+
+    [Theory]
+    [InlineData("blocked-locked-g4-first-install-firmware: TB322FC with locked bootloader and ZUXOS 1.5.10.358 cannot be safely installed.", BootloaderState.Locked)]
+    [InlineData("requires-compatible-bootloader: TB323FU requires a compatible bootloader.", BootloaderState.Locked)]
+    [InlineData("requires-compatible-bootloader: TB710FU requires a compatible bootloader.", BootloaderState.Locked)]
+    [InlineData("gbl-boot-chain-key-mismatch: TB322FC boot chain key does not match.", BootloaderState.Locked)]
+    [InlineData("gbl-runtime-region-unknown: TB323FU runtime region is unknown.", BootloaderState.Locked)]
+    public void InternalInstallPreparationFailure_LockedBootloaderCompatibilityIsLocalized(string detail, BootloaderState state)
+    {
+        var exception = new InvalidOperationException(detail);
+        var message = UiText.InternalInstallPreparationFailure(exception, state);
+
+        var chinese = new UiText(UiText.ChineseLanguage).Format(message);
+        Assert.Contains("免解锁方案检查不通过，请解锁 BL。", chinese);
+        Assert.Contains(detail, chinese);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.Contains("The check for installation with a locked bootloader failed. Please unlock the bootloader.", english);
+        Assert.Contains(detail, english);
+    }
+
+    [Theory]
+    [InlineData("gbl-boot-chain-key-mismatch: some detail", BootloaderState.Unknown, "Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch")]
+    [InlineData("gbl-boot-chain-key-mismatch: some detail", BootloaderState.Unlocked, "Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch")]
+    [InlineData("gbl-runtime-region-unknown: some detail", BootloaderState.Unknown, "Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown")]
+    [InlineData("gbl-runtime-region-unknown: some detail", BootloaderState.Unlocked, "Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown")]
+    public void InternalInstallPreparationFailure_GblCodesPreserveSpecificMessage(string detail, BootloaderState state, string expectedKey)
+    {
+        var exception = new InvalidOperationException(detail);
+        var message = UiText.InternalInstallPreparationFailure(exception, state);
+
+        Assert.Equal(expectedKey, message.Key);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.DoesNotContain("Please unlock the bootloader", english);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_PlainIoExceptionUsesGenericMessage()
+    {
+        var exception = new IOException("disk fell over");
+        var message = UiText.InternalInstallPreparationFailure(exception, BootloaderState.Unlocked);
+
+        Assert.Equal("Dynamic.InternalInstall.Prepared.Failed", message.Key);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.DoesNotContain("Please unlock the bootloader", english);
+        Assert.DoesNotContain("免解锁方案检查不通过", new UiText(UiText.ChineseLanguage).Format(message));
+        Assert.DoesNotContain("disk fell over", english);
+    }
+
+    [Theory]
+    [InlineData(BootloaderState.Unlocked)]
+    [InlineData(BootloaderState.Unknown)]
+    [InlineData(null)]
+    public void InternalInstallPreparationFailure_RequiresCompatibleBootloaderStaysGeneric(BootloaderState? state)
+    {
+        var exception = new InvalidOperationException("requires-compatible-bootloader: some future detail");
+        var message = UiText.InternalInstallPreparationFailure(exception, state);
+
+        Assert.Equal("Dynamic.InternalInstall.Prepared.Failed", message.Key);
+
+        var english = new UiText(UiText.EnglishLanguage).Format(message);
+        Assert.DoesNotContain("Please unlock the bootloader", english);
+        Assert.DoesNotContain("requires-compatible-bootloader", english);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_UnknownFreeSpaceIsLocalized()
+    {
+        var exception = Assert.Throws<InternalInstallWorkDiskSpaceException>(
+            () => InternalInstallPreparationContext.RequireDirectExecutionSpaceAvailable(38408839168L, null));
+        var message = UiText.InternalInstallPreparationFailure(exception);
+
+        var chinese = new UiText(UiText.ChineseLanguage).Format(message);
+        Assert.Contains("无法确定电脑上安装器工作目录所在磁盘的剩余空间", chinese);
+        Assert.Contains("35.78 GiB", chinese);
+        Assert.Contains("请确认该磁盘可访问", chinese);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_LocalizedInvalidOperationMapsToItsKey()
+    {
+        var expected = new UiMessage("Dynamic.InternalInstall.Prepared.NeedInputs");
+        var message = UiText.InternalInstallPreparationFailure(
+            new LocalizedInvalidOperationException(expected));
+
+        Assert.Equal("Dynamic.InternalInstall.Prepared.NeedInputs", message.Key);
+        Assert.Empty(message.Arguments);
+        var chinese = new UiText(UiText.ChineseLanguage).Format(message);
+        Assert.Contains("容量、系统包或 9008 连接尚未就绪", chinese);
+    }
 
     [Fact]
     public void EmbeddedCatalogs_ResolveAuthorNameInBothLanguagesAndDefaultToChinese()

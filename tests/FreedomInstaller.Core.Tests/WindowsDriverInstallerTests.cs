@@ -56,6 +56,21 @@ public sealed class WindowsDriverInstallerTests
         }
     }
 
+    [Theory]
+    [InlineData(false, false, true, true)]
+    [InlineData(true, false, true, false)]
+    [InlineData(false, true, false, true)]
+    [InlineData(true, true, true, true)]
+    public void SelectPackages_TargetsOnlyIndicatedCategoriesOrRepairsBoth(
+        bool qualcommNeedsInstall, bool androidNeedsInstall,
+        bool expectedQualcomm, bool expectedAndroid)
+    {
+        var selection = WindowsDriverInstaller.SelectPackages(qualcommNeedsInstall, androidNeedsInstall);
+
+        Assert.Equal(expectedQualcomm, selection.InstallQualcomm);
+        Assert.Equal(expectedAndroid, selection.InstallAndroid);
+    }
+
     [Fact]
     public void InterpretStartFailure_TreatsOrdinaryExceptionAsFailure()
     {

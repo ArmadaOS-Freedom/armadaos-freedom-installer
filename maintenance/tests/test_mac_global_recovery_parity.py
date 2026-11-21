@@ -28,7 +28,7 @@ MAC_CODE = [
 #   lead text without the drawing, so neither the drawing nor its expander title appear there;
 # - the WPF log expander and output section carry names the code never uses.
 _WPF_ONLY_KEYS = {"Static.Global.ConnectionGuideTitle"}
-_WPF_ONLY_NAMES = {"GlobalOutputSection"}
+_WPF_ONLY_NAMES = set()
 # The WPF window may run without an adb transport; the Mac page is only reachable after the environment check
 # found adb, so its transport always exists and this refusal cannot occur there.
 _WPF_ONLY_MESSAGES = {"Dynamic.Global.Error.TransportUnavailable"}

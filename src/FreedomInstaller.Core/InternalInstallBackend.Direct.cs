@@ -6,6 +6,19 @@ namespace FreedomInstaller.Core;
 
 public sealed partial class InternalInstallBackend
 {
+    public static void RequireFirstInstallFirmwareCompatibility(InternalDeviceCheckResult deviceCheck)
+    {
+        ArgumentNullException.ThrowIfNull(deviceCheck);
+
+        if (deviceCheck.Android?.Identity is not { } identity || identity.Firmware is not { } firmware)
+        {
+            return;
+        }
+
+        InternalInstallPreparationContext.RejectLockedG4FirstInstallFirmware(identity.Model, deviceCheck.FastbootLockState, firmware, deviceCheck.CurrentSlot);
+    }
+
+
     /// <summary>
     /// The direct EDL raw preparation entry point. It uses the same cheap guards as the legacy factory, then
     /// delegates to the parameterised <see cref="InternalInstallPreparationContext.PrepareDirectAsync"/> body:

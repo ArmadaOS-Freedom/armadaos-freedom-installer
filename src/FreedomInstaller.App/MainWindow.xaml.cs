@@ -2207,6 +2207,8 @@ public partial class MainWindow : Window
         {
             SetText(ProgressStatusText, "Dynamic.Progress.Failed", exception.Message);
             AppendLocalizedLog(M("Dynamic.Log.Failed", exception.Message));
+            AppendWorkLogLine(InstallerLog.DescribeFailure(exception));
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Operation"), exception.Message);
         }
         finally
         {

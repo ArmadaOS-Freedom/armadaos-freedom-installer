@@ -302,11 +302,11 @@ public partial class MainWindow
     private void ApplyFunctionView()
     {
         // 准备页、首页、向导与支持页互斥；支持页打开时三者都收起，返回后按原状态恢复。
-        var environment = _showingEnvironment && !_showingSupport;
-        var global = !_showingEnvironment && _showingGlobalRecovery && !_showingSupport;
-        var offline = !_showingEnvironment && !_showingHome && _showingOfflineUpgrade && !_showingSupport && !_showingGlobalRecovery;
-        var home = !_showingEnvironment && _showingHome && !_showingSupport && !_showingGlobalRecovery && !offline;
-        var workflow = !_showingEnvironment && !_showingHome && !_showingSupport && !_showingGlobalRecovery && !offline;
+        var environment = _showingEnvironment && !_showingSupport && !_showingDiagnostics;
+        var global = !_showingEnvironment && _showingGlobalRecovery && !_showingSupport && !_showingDiagnostics;
+        var offline = !_showingEnvironment && !_showingHome && _showingOfflineUpgrade && !_showingSupport && !_showingGlobalRecovery && !_showingDiagnostics;
+        var home = !_showingEnvironment && _showingHome && !_showingSupport && !_showingGlobalRecovery && !offline && !_showingDiagnostics;
+        var workflow = !_showingEnvironment && !_showingHome && !_showingSupport && !_showingGlobalRecovery && !offline && !_showingDiagnostics;
 
         // 首页占满主体三列；左侧步骤栏、向导正文与底栏的「上一步 / 下一步 / 执行」一起收起。
         EnvironmentPage.Visibility = environment ? Visibility.Visible : Visibility.Collapsed;
@@ -317,7 +317,15 @@ public partial class MainWindow
         HomeFooterHint.Visibility = home ? Visibility.Visible : Visibility.Collapsed;
 
         // 支持页同样占满三列，只在打开时显示；当前功能与选中操作始终不变。
-        SupportPage.Visibility = _showingSupport ? Visibility.Visible : Visibility.Collapsed;
+        SupportPage.Visibility = (_showingSupport && !_showingDiagnostics) ? Visibility.Visible : Visibility.Collapsed;
+
+        // 诊断导出页占满主体三列，只在打开时显示；不改其他可见性标志。
+        DiagnosticExportPage.Visibility = _showingDiagnostics ? Visibility.Visible : Visibility.Collapsed;
+
+        if (DiagnosticFailurePanel is not null)
+            DiagnosticFailurePanel.Visibility = (!_showingDiagnostics && !string.IsNullOrWhiteSpace(DiagnosticFailureText?.Text))
+                ? Visibility.Visible
+                : Visibility.Collapsed;
 
         // 全局救援页同样占满三列；只在它自己的标志下显示，不改选中操作。
         GlobalRecoveryPage.Visibility = global ? Visibility.Visible : Visibility.Collapsed;

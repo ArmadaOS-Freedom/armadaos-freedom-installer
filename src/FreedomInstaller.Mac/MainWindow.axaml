@@ -586,6 +586,12 @@
                                         Theme="{StaticResource SecondaryButton}"
                                         IsEnabled="False"
                                         Margin="0,0,8,8" />
+                                <Button x:Name="EnvironmentGlobalRestoreButton"
+                                        Content="{DynamicResource Static.Global.RestoreTitle}"
+                                        Click="OnOpenGlobalRestoreFromEnvironment"
+                                        Theme="{StaticResource SecondaryButton}"
+                                        IsVisible="False"
+                                        Margin="0,0,8,8" />
                             </WrapPanel>
                         </StackPanel>
                     </Border>
@@ -710,7 +716,7 @@
                     <TextBlock x:Name="GlobalBackupTitleText" Text="{DynamicResource Static.Global.BackupTitle}" Classes="H1Text" />
                     <TextBlock x:Name="GlobalRestoreTitleText" Text="{DynamicResource Static.Global.RestoreTitle}" Classes="H1Text" IsVisible="False" />
                     <TextBlock x:Name="GlobalBackupLeadText" Text="{DynamicResource Static.Global.BackupLead}" Classes="BodyText" Margin="0,6,0,0" />
-                    <TextBlock x:Name="GlobalRestoreLeadText" Text="{DynamicResource Static.Global.RestoreLead}" Classes="BodyText" Margin="0,6,0,0" IsVisible="False" />
+                    <TextBlock x:Name="GlobalRestoreLeadText" Text="{DynamicResource Static.Global.ManualRestoreLead}" Classes="BodyText" Margin="0,6,0,0" IsVisible="False" />
 
                     <WrapPanel Margin="0,12,0,0">
                         <Button x:Name="GlobalBackHomeButton"
@@ -720,11 +726,141 @@
                                 Margin="0,0,8,8" />
                     </WrapPanel>
 
+                    <!-- 仅恢复视图显示的 9008 手动进入指南；默认折叠但展开状态为 True，不自动访问设备。 -->
+                    <Expander x:Name="GlobalManualEdlGuide"
+                              IsExpanded="True"
+                              IsVisible="False"
+                              Margin="0,12,0,0"
+                              Header="{DynamicResource Static.Global.ManualEdlGuideTitle}">
+                        <StackPanel Margin="0,6,0,0">
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlForceShutdown}"
+                                       Classes="BodyText"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,0" />
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlStep1}"
+                                       Classes="BodyText"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlTb323fu}"
+                                       Classes="BodyText"
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0" />
+                            <Viewbox Stretch="Uniform" MaxWidth="360" MaxHeight="154"
+                                     HorizontalAlignment="Left" Margin="0,8,0,0">
+                                <Canvas Width="360" Height="154">
+                                    <!-- 顶部标签区：按 TB323FU 正面横向渲染，音量加键位于上长边靠左。 -->
+                                    <TextBlock Canvas.Left="10" Canvas.Top="3" Width="210"
+                                               Text="{DynamicResource Static.Global.ManualEdlVolumeUp}"
+                                               Foreground="{DynamicResource AccentBrush}"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
+                                               TextWrapping="NoWrap"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextAlignment="Left" />
+                                    <!-- 引线：从文字下方起始，绕至音量加键上缘，不穿越文字。 -->
+                                    <Path Data="M 36,17 L 36,26 L 39,30"
+                                          Stroke="{DynamicResource AccentBrush}"
+                                          StrokeThickness="1.5" />
+                                    <!-- 平板：屏幕面向用户横向放置。 -->
+                                    <Rectangle Canvas.Left="12" Canvas.Top="34" Width="144" Height="90"
+                                               RadiusX="8" RadiusY="8"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="2" />
+                                    <Rectangle Canvas.Left="18" Canvas.Top="40" Width="132" Height="78"
+                                               RadiusX="4" RadiusY="4"
+                                               Fill="#0F1115" />
+                                    <!-- 上长边按键：音量加键高亮部分偏左端，中间为中性其余部分，电源键靠右。 -->
+                                    <Rectangle Canvas.Left="32" Canvas.Top="30" Width="13" Height="5"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource AccentBrush}" />
+                                    <Rectangle Canvas.Left="45" Canvas.Top="30" Width="8" Height="5"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <Rectangle Canvas.Left="59" Canvas.Top="30" Width="11" Height="5"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <!-- 右侧短边次要接口：开口状态，保持低调。 -->
+                                    <Rectangle Canvas.Left="156" Canvas.Top="76" Width="4" Height="10"
+                                               RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource MutedBrush}"
+                                               Opacity="0.5" />
+                                    <!-- 下长边中央 USB-C 接口与插头。 -->
+                                    <Rectangle Canvas.Left="76" Canvas.Top="121" Width="16" Height="6"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <Rectangle Canvas.Left="79" Canvas.Top="126" Width="10" Height="9"
+                                               RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <!-- 下长边中央 USB-C 接口标注：单行，避开 y145 走线。 -->
+                                    <TextBlock Canvas.Left="100" Canvas.Top="124" Width="110"
+                                               Text="{DynamicResource Static.Global.ManualEdlLongEdgePort}"
+                                               Foreground="{DynamicResource MutedBrush}"
+                                               FontSize="10"
+                                               TextWrapping="NoWrap"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextAlignment="Left" />
+                                    <!-- 电脑：底座与上盖。 -->
+                                    <Rectangle Canvas.Left="244" Canvas.Top="36" Width="100" Height="51"
+                                               RadiusX="4" RadiusY="4"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="2" />
+                                    <Rectangle Canvas.Left="234" Canvas.Top="87" Width="120" Height="10"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="2" />
+                                    <!-- 电脑侧插头：底座外左侧，接触底座左缘 x234。 -->
+                                    <Rectangle Canvas.Left="222" Canvas.Top="87" Width="12" Height="10"
+                                               RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <!-- 数据线：从平板下长边插头向下，右折至 x212 上行接电脑侧插头。 -->
+                                    <Path Data="M 84,135 L 84,145 L 212,145 L 212,92 L 222,92"
+                                          Stroke="{DynamicResource MutedBrush}"
+                                          StrokeThickness="3"
+                                          StrokeJoin="Round" />
+                                    <!-- 黑屏说明置于深色屏幕内部，固定浅色避免与 #0F1115 重影。 -->
+                                    <TextBlock Canvas.Left="18" Canvas.Top="68" Width="132"
+                                               Text="{DynamicResource Static.Global.ManualEdlScreenDark}"
+                                               Foreground="#DFE2E7"
+                                               FontSize="10"
+                                               TextWrapping="Wrap"
+                                               TextAlignment="Center" />
+                                    <TextBlock Canvas.Left="244" Canvas.Top="106" Width="100"
+                                               Text="{DynamicResource Static.Global.ManualEdlPc}"
+                                               Foreground="{DynamicResource MutedBrush}"
+                                               FontSize="10"
+                                               TextWrapping="Wrap"
+                                               TextAlignment="Center" />
+                                </Canvas>
+                            </Viewbox>
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlStep2}"
+                                       Classes="BodyText"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlStep3}"
+                                       Classes="BodyText"
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Expander>
+
                     <!-- 连接：型号由连接时自动识别；进入本页不会自动访问设备。 -->
                     <Border Classes="CardBorder" Margin="0,12,0,0">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource Static.Global.ConnectionGuideLead}" Classes="BodyText" />
-                            <TextBlock Text="{DynamicResource Static.Global.AutoDetect}" Classes="CaptionText" Margin="0,8,0,0" />
+                            <TextBlock x:Name="GlobalAndroidConnectionGuide" Text="{DynamicResource Static.Global.ConnectionGuideLead}" Classes="BodyText" />
+                            <TextBlock x:Name="GlobalAutoDetectText" Text="{DynamicResource Static.Global.AutoDetect}" Classes="CaptionText" Margin="0,8,0,0" />
                             <WrapPanel Margin="0,10,0,10">
                                 <Button x:Name="GlobalConnectButton"
                                         Content="{DynamicResource Static.Global.Connect}"
@@ -737,11 +873,10 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- 公共保存位置：备份与恢复都要有工作记录目录，标签随视图切换。 -->
-                    <Border Classes="CardBorder" Margin="0,12,0,0">
+                    <!-- 备份保存位置：只在备份视图出现；恢复的工作记录目录由程序自动使用。 -->
+                    <Border x:Name="GlobalOutputSection" Classes="CardBorder" Margin="0,12,0,0">
                         <StackPanel>
-                            <TextBlock x:Name="GlobalOutputBackupLabelText" Text="{DynamicResource Static.Global.BackupDirectoryLabel}" Classes="CaptionText" />
-                            <TextBlock x:Name="GlobalOutputRestoreLabelText" Text="{DynamicResource Static.Global.OutputDirectoryLabelRestore}" Classes="CaptionText" IsVisible="False" />
+                            <TextBlock Text="{DynamicResource Static.Global.BackupDirectoryLabel}" Classes="CaptionText" />
                             <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
                                 <TextBox x:Name="GlobalBackupDirectoryBox" Grid.Column="0" Theme="{StaticResource InputTextBox}" IsReadOnly="True" />
                                 <Button x:Name="GlobalBrowseBackupButton"
@@ -1805,7 +1940,7 @@
 
                     <!-- 开发者 -->
                     <TextBlock Text="{DynamicResource Dynamic.AboutDevelopers}" Classes="H2Text" Margin="0,12,0,8" />
-                    <UniformGrid Columns="3" Rows="1" Margin="0,0,0,4">
+                    <UniformGrid Columns="4" Rows="1" Margin="0,0,0,4">
                         <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="0,0,8,0">
                             <Grid ColumnDefinitions="Auto,*">
                                 <Image Source="/Assets/about-mydanyi.jpg"
@@ -1872,7 +2007,7 @@
                                 </StackPanel>
                             </Grid>
                         </Border>
-                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="8,0,0,0">
+                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="8,0,8,0">
                             <Grid ColumnDefinitions="Auto,*">
                                 <Image Source="/Assets/about-h0cheung.png"
                                        Width="56"
@@ -1899,6 +2034,39 @@
                                         <Button Content="{DynamicResource Static.AuthorBilibili}"
                                                 Theme="{StaticResource GhostButton}"
                                                 Click="OnOpenH0CheungBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Classes="CardBorder" Padding="14" MinHeight="108" Margin="8,0,0,0">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <Image Source="/Assets/about-cody.png"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       Margin="0,0,14,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutCodyName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutCodyName}"
+                                               Classes="H2Text"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleDeveloper}"
+                                               Classes="CaptionText"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenCodyGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Theme="{StaticResource GhostButton}"
+                                                Click="OnOpenCodyBilibili"
                                                 Padding="0,4"
                                                 Margin="0,0,12,0" />
                                     </WrapPanel>
@@ -1970,12 +2138,11 @@
                                        Classes="BodyText"
                                        TextWrapping="Wrap"
                                        Margin="0,6,0,0" />
-                            <Button Content="{DynamicResource Dynamic.AboutCopyQq}"
+                            <Button Content="{DynamicResource Dynamic.AboutJoinQq}"
                                     Theme="{StaticResource SecondaryButton}"
-                                    Click="OnCopyQqGroup"
+                                    Click="OnOpenQqGroupInvite"
                                     HorizontalAlignment="Left"
                                     Margin="0,10,0,0" />
-                            <TextBlock x:Name="AboutCopyStatus" Classes="CaptionText" IsVisible="False" Margin="0,6,0,0" />
                         </StackPanel>
                     </Border>
 
