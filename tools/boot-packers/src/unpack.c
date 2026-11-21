@@ -299,7 +299,7 @@ static bool load_packed(const char *path, PackedImage *packed)
     }
     if (entry->type == MF_ENTRY_TYPE_DISK_LINUX) {
         if (entry->size != 64 || copyImage || entry->entryOffset != 0 ||
-            (index == 0) || (entry->loadAddress != 0)) {
+            (index == 0) || (entry->loadAddress != 0) || hasDtb) {
             log_err("Invalid DiskLinux entry");
             return false;
         }

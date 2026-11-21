@@ -60,7 +60,9 @@ internal static class InternalInstallLauncherDefaults
             throw new InvalidOperationException("Tail file SHA256 does not match evidence.");
 
         InternalInstallArtifacts.BoardArchiveHeader header = InternalInstallArtifacts.ParseBoardArchiveHeader(headerBytes, model);
-        if (header.SchemaVersion != 3) return null;
+        if (header.SchemaVersion != 3)
+            throw new InvalidDataException(
+                $"Retained ARMADA_BACKUP schema {header.SchemaVersion} is not supported; a compatible schema-3 backup is required before ARMADA_BOOT reinstall.");
         if (header.ConfigPartitionUuid != expectedPartition)
             throw new InvalidDataException("The recovery header does not belong to the target partition.");
 

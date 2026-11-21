@@ -792,6 +792,12 @@ public static partial class EdlRawBootBuilder
                             "a disk maintenance payload entry does not match the four-entry disk layout");
                     }
 
+                    if (ReadLeU32(raw, cursor + 36) != 0u)
+                    {
+                        throw new InvalidDataException(
+                            "a disk maintenance payload entry carries a DeviceTreeBlob reference");
+                    }
+
                     if (eOffset > (ulong)mo ||
                         eSize > (ulong)mo - eOffset)
                     {

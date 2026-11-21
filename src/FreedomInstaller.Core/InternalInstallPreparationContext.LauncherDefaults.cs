@@ -14,7 +14,7 @@ internal sealed partial class InternalInstallPreparationContext
 
     private async Task PrepareLauncherDefaultsAsync(EdlClient edl, CancellationToken ct)
     {
-        if (!_package.EdlRawContract.BootRecipe.UsesArmadaBoot || AndroidDataErase)
+        if (!_package.EdlRawContract.BootRecipe.UsesArmadaBoot || _boardSummary is null)
         {
             return;
         }
