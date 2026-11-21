@@ -194,17 +194,8 @@ public partial class MainWindow
                 var acceptProgress = true;
                 try
                 {
+                    _diagnosticLastConnectedAdb = null;
                     SetInternalInstallCheckProgress(M("Dynamic.InternalInstall.Check.Listing"));
-                    if (IsInternalInstallMode)
-                    {
-                        var driver = new WindowsAndroidDriver();
-                        var driverResult = await Task.Run(() => driver.Inspect(AndroidUsbMode.Adb), token);
-                        _diagnosticLastConnectedAdb = driverResult;
-                        if (!driverResult.IsReady)
-                        {
-                            throw new InvalidOperationException(driverResult.Detail ?? UnknownValue);
-                        }
-                    }
                     var devices = await transport.ListDevicesAsync(token);
                     PopulateInternalInstallDeviceChoices(devices, previousSerial);
                     RefreshInternalInstallActions();
@@ -257,6 +248,18 @@ public partial class MainWindow
                         && lastConnectedAdb.MissingHardwareIds.Count > 0)
                     {
                         throw new InvalidOperationException(lastConnectedAdb.Detail ?? UnknownValue);
+                    }
+
+                    if (IsInternalInstallMode)
+                    {
+                        var inspected = await Task.Run(
+                            () => new WindowsAndroidDriver().InspectSelectedAdb(target.Serial),
+                            token);
+                        _diagnosticLastConnectedAdb = inspected;
+                        if (inspected.State != WindowsDriverCheckState.Connected)
+                        {
+                            throw new InvalidOperationException(inspected.Detail ?? UnknownValue);
+                        }
                     }
 
                     SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Started", target.Serial));

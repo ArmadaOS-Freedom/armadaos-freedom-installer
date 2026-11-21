@@ -102,7 +102,21 @@ internal sealed record DriverEndpointEvidence(
     uint Status,
     uint Problem,
     bool StatusQuerySucceeded,
-    string? FailureDetail);
+    string? FailureDetail)
+{
+    /// <summary>
+    /// Authoritative USB serial reported by the physical (composite parent) USB devnode when
+    /// <c>CM_DEVCAP_UNIQUEID</c> is set and the instance suffix is a stable, non-generated value.
+    /// Null when the endpoint has no verifiable physical USB serial.
+    /// </summary>
+    public string? UsbSerial { get; init; }
+
+    /// <summary>
+    /// Signed package captured for the inbox WinUSB INF when a selected ADB endpoint is bound to it and
+    /// exposes the generic ADB-compatible USB class ID. Null otherwise.
+    /// </summary>
+    public DriverPackageEvidence? InboxAdbPackage { get; init; }
+}
 
 /// <summary>
 /// Everything the pure decision needs, and nothing that requires a live OS. Tests construct this shape

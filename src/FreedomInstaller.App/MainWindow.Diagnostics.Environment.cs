@@ -88,8 +88,7 @@ public partial class MainWindow
 
             if (result?.RejectedPackages is { Count: > 0 } rejected)
             {
-                var count = Math.Min(rejected.Count, 12);
-                for (var i = 0; i < count; i++)
+                for (var i = 0; i < rejected.Count; i++)
                 {
                     var entry = rejected[i];
                     var p = prefix + ".rejectedPackage." + i.ToString(CultureInfo.InvariantCulture) + ".";
