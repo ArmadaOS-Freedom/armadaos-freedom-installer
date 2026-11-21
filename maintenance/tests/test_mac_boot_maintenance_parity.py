@@ -77,6 +77,12 @@ _WPF_ONLY_CALLS = {
     # install's automatic backup reads that result, so the maintenance page has no use for the probe.
     "BoardRecoveryBackup.DetectAdbAsync",
 }
+# - Core calls the shared WPF backup reaches only on the internal install's automatic branch
+#   (`internalAutoBranch`, which is `IsInternalInstallMode`): the maintenance modes never take them, so they are not
+#   part of the boot-maintenance path. test_install_only_calls_stay_on_the_install_branch keeps that true.
+_WPF_INSTALL_ONLY_CALLS = {
+    "InternalInstallBackup.CreateForFirstInstallAsync",
+}
 # - WPF wires Checked and Unchecked to one handler; Avalonia has one IsCheckedChanged event for both.
 
 
@@ -191,8 +197,22 @@ class MacBootMaintenanceParityTests(unittest.TestCase):
         self.assertEqual(set(), extra - _keys(WPF_XAML.read_text(encoding="utf-8"), "Dynamic."))
 
     def test_code_makes_the_same_core_calls(self):
-        wpf = _core_calls(_code(WPF_CODE)) - _WPF_ONLY_CALLS
+        wpf = _core_calls(_code(WPF_CODE)) - _WPF_ONLY_CALLS - _WPF_INSTALL_ONLY_CALLS
         self.assertEqual(wpf, _core_calls(_code(MAC_CODE)))
+
+    def test_install_only_calls_stay_on_the_install_branch(self):
+        # The calls left out of the boot-maintenance comparison above must stay behind the internal install's
+        # automatic branch in the shared WPF backup; if one moves onto a path the maintenance modes take, this fails.
+        backup = (APP / "MainWindow.InternalInstall.Backup.cs").read_text(encoding="utf-8")
+        self.assertRegex(backup, r"\bvar internalAutoBranch = IsInternalInstallMode;")
+        wpf = _code(WPF_CODE)
+        for call in sorted(_WPF_INSTALL_ONLY_CALLS):
+            sites = [m.start() for m in re.finditer(r"(?<![.\w])" + re.escape(call) + r"\(", wpf)]
+            self.assertTrue(sites, call)
+            for site in sites:
+                guard = wpf[max(0, site - 200):site]
+                self.assertRegex(guard, r"internalAutoBranch\s*&&[^;]*\?\s*await\s*$", call)
+            self.assertNotIn(call, _code(MAC_CODE))
 
     def test_write_route_gate_is_the_wpf_one(self):
         # TB710FU stays held back by Core's write-route gate at the same entry points; no Mac-only gate.
