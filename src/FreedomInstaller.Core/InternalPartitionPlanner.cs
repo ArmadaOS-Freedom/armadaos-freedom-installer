@@ -134,7 +134,8 @@ public static class InternalPartitionPlanner
 
         ValidatePartitions(original.Partitions, sectorSize, firstUsable, lastUsable);
         GptPartition userdata = FindUserdata(original.Partitions);
-        GptPartition? retainedBackup = FindReusableBackup(original);
+        var installed = FindInstalledLinuxLayout(original);
+        GptPartition? retainedBackup = installed?.Backup ?? FindReusableBackup(original);
 
         ValidatePackageStorage(storage, out long bootBytes, out long systemBytes, out long requiredRootBytes);
 
@@ -253,6 +254,81 @@ public static class InternalPartitionPlanner
             tailSectors,
             alignmentLossBytes);
     }
+
+    /// <summary>
+    /// Recognises the layout the installer itself leaves behind: exactly the canonical labels ARMADA_BOOT,
+    /// ARMADA_ROOT and ARMADA_BACKUP, all three Linux type, all three with distinct non-empty PARTUUIDs,
+    /// boot starting at the aligned end of the current userdata, boot-&gt;root-&gt;backup contiguous, the boot
+    /// extent one GiB wide and the backup extent the 2 GiB aligned tail. Any other shape that touches the
+    /// managed window is rejected exactly as the legacy planner would reject it. Returns null when no managed
+    /// label is present at all.
+    /// </summary>
+    public static (GptPartition Boot, GptPartition Root, GptPartition Backup)? FindInstalledLinuxLayout(
+        GptTable original)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        if (original.SectorSize is not (512 or 4096))
+            throw new InvalidOperationException("Unsupported GPT sector size.");
+
+        GptPartition? boot = null;
+        GptPartition? root = null;
+        GptPartition? backup = null;
+        int owned = 0;
+        foreach (var partition in original.Partitions)
+        {
+            var trimmed = partition.Name.Trim();
+            if (!trimmed.StartsWith("ARMADA_", StringComparison.OrdinalIgnoreCase)) continue;
+            owned++;
+            if (string.Equals(partition.Name, "ARMADA_BOOT", StringComparison.Ordinal)) { if (boot is not null) return null; boot = partition; }
+            else if (string.Equals(partition.Name, "ARMADA_ROOT", StringComparison.Ordinal)) { if (root is not null) return null; root = partition; }
+            else if (string.Equals(partition.Name, "ARMADA_BACKUP", StringComparison.Ordinal)) { if (backup is not null) return null; backup = partition; }
+            else throw new InvalidOperationException("An unrecognised ARMADA_ partition is present.");
+        }
+
+        if (owned <= 1) return null;
+        if (boot is null || root is null || backup is null)
+            throw new InvalidOperationException("The installed Linux layout is incomplete; uninstall Linux first.");
+
+        var userdata = FindUserdata(original.Partitions);
+        var alignment = MiB / original.SectorSize;
+        var bootWidth = GiB / original.SectorSize;
+        var backupWidth = BackupTailBytes / original.SectorSize;
+
+        var userdataEnd = checked(userdata.StartSector + userdata.SectorCount);
+        var bootStart = CeilToAlignment(userdataEnd, alignment);
+        var rootStart = checked(boot.StartSector + boot.SectorCount);
+        var backupStart = checked(root.StartSector + root.SectorCount);
+        var backupEnd = checked(backup.StartSector + backup.SectorCount);
+        var diskEnd = checked(original.LastUsableSector + 1);
+
+        var uuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var partition in new[] { boot, root, backup })
+        {
+            if (!string.Equals(partition.TypeGuid, LinuxTypeGuid, StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(partition.PartUuid)
+                || !Guid.TryParse(partition.PartUuid, out var uuid) || uuid == Guid.Empty
+                || !uuids.Add(partition.PartUuid))
+                throw new InvalidOperationException("The installed ARMADA_ partitions have invalid identity.");
+        }
+
+        if (boot.StartSector != bootStart
+            || boot.SectorCount != bootWidth
+            || root.StartSector != rootStart
+            || backup.StartSector != backupStart
+            || backup.SectorCount != backupWidth
+            || (backupEnd != diskEnd && backupEnd != diskEnd / alignment * alignment))
+            throw new InvalidOperationException("The installed ARMADA_ partitions have invalid size or placement.");
+
+        foreach (var partition in original.Partitions)
+            if (partition.Number != userdata.Number && partition.Number != boot.Number
+                && partition.Number != root.Number && partition.Number != backup.Number
+                && checked(partition.StartSector + partition.SectorCount) > userdata.StartSector)
+                throw new InvalidOperationException("An unrelated partition occupies the userdata recovery window.");
+
+        return (boot, root, backup);
+    }
+
+    private const string LinuxTypeGuid = "0FC63DAF-8483-4772-8E79-3D69D8477DE4";
 
     internal static GptPartition? FindReusableBackup(GptTable original)
     {

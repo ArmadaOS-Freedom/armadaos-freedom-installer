@@ -8,24 +8,49 @@ namespace FreedomInstaller.Core
         // NE/LO/LS, so this family keeps its own value instead of widening them.
         private const int Arm64Gen5CondHs = 2;
 
+        // Initializer qword at the dynamic data page.
+        private static readonly byte[] Arm64Gen5StateInitBytes = { 0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF };
+
         // Gen5 prefix: dual GetVariable success relation plus gzip detector.
-        private static bool Arm64Gen5Variables(Arm64PeView view, long p, out long q)
+        // The x22 global-slot load word is layout-bound: two observed Gen5 ABLs
+        // use either [x22+0x1C8] (0xF940E6C8) or [x22+0x1A0] (0xF940D2C8) at the
+        // same four instruction sites. The variant is chosen from the first
+        // prefix load (p-0x14 ADRP + p+0x8 word) and threaded to Output/StreamState.
+        private static bool Arm64Gen5Variables(Arm64PeView view, long p, out long q, out uint slotLoad)
         {
             q = p + 0xC4L;
+            slotLoad = 0u;
 
-            // p-0x14: x22 global page; both loads must bind to [x22+0x1C8].
-            if (!Arm64TryAdrp(view, p - 0x14L, 22, out long globalPage))
+            // p-0x14: x22 global page; the first prefix load fixes the slot variant.
+            if (!Arm64TryAdrp(view, p - 0x14L, 22, out long globalPage) ||
+                !Arm64TryReadWord(view, p + 0x8L, out uint firstLoad))
             {
                 return false;
             }
 
-            if (!view.Arm64TryMapRva(globalPage + 0x1C8L, 8, false, out _))
+            long slotOff;
+            if (firstLoad == 0xF940E6C8u)
+            {
+                slotLoad = 0xF940E6C8u;
+                slotOff = 0x1C8L;
+            }
+            else if (firstLoad == 0xF940D2C8u)
+            {
+                slotLoad = 0xF940D2C8u;
+                slotOff = 0x1A0L;
+            }
+            else
             {
                 return false;
             }
 
-            if (!Arm64Words(view, p + 0x8L, 0xF940E6C8u) ||
-                !Arm64Words(view, p + 0x28L, 0xF940E6C8u))
+            if (!view.Arm64TryMapRva(globalPage + slotOff, 8, false, out _))
+            {
+                return false;
+            }
+
+            if (!Arm64Words(view, p + 0x8L, slotLoad) ||
+                !Arm64Words(view, p + 0x28L, slotLoad))
             {
                 return false;
             }
@@ -51,11 +76,11 @@ namespace FreedomInstaller.Core
             if (!Arm64Words(view, p - 0x8L,
                     0x914007E4u, 0x52800115u) ||
                 !Arm64Words(view, p + 0x8L,
-                    0xF940E6C8u, 0x911AC3E3u, 0x91230084u,
+                    slotLoad, 0x911AC3E3u, 0x91230084u,
                     0xAA1903E1u, 0xAA1F03E2u, 0xF9035BF5u,
                     0xF9402508u, 0xD63F0100u) ||
                 !Arm64Words(view, p + 0x28L,
-                    0xF940E6C8u, 0x914007E4u, 0xAA0003FAu) ||
+                    slotLoad, 0x914007E4u, 0xAA0003FAu) ||
                 !Arm64Words(view, p + 0x3CL,
                     0x911AC3E3u, 0x91168084u, 0xAA1903E1u,
                     0xF9402508u, 0xAA1F03E2u, 0xF9035BF5u,
@@ -260,9 +285,9 @@ namespace FreedomInstaller.Core
         // Full Gen5 family link: Variables -> SourceFlow -> inline inflate Output.
         private static bool Arm64Gen5Matches(Arm64PeView view, long p)
         {
-            return Arm64Gen5Variables(view, p, out long q) &&
+            return Arm64Gen5Variables(view, p, out long q, out uint slotLoad) &&
                 Arm64Gen5SourceFlow(view, p, q, out long m) &&
-                Arm64Gen5Output(view, p, m);
+                Arm64Gen5Output(view, p, m, slotLoad);
         }
 
         // Failure edges may not land inside the admitted positive range that the
@@ -276,14 +301,19 @@ namespace FreedomInstaller.Core
         // inline inflater handoff: g+0x70..g+0x138 with no unknown word inside.
         // x26 is fixed by g+0x5C and this gap never writes it, so the state
         // pointer stored at [x26,0x38] is the same qword the handoff reloads.
-        private static bool Arm64Gen5StreamState(Arm64PeView view, long p, long g)
+        private static bool Arm64Gen5StreamState(Arm64PeView view, long p, long g, uint slotLoad)
         {
-            // gzip flag byte, then TBNZ bit3 into the relative reject block. The
-            // displacement is decoded from the verified word instead of naming
-            // any absolute image address.
+            // TBNZ bit3 target and d0 constant are derived from the same chosen
+            // layout, so prefix, k and stream state cannot mix variants.
+            bool alternate = slotLoad == 0xF940D2C8u;
+            uint expectedFlag = alternate ? 0x371A0B88u : 0x371A0C48u;
+            long expectedDistance = alternate ? 0x41E4L : 0x41FCL;
+            uint expectedData = alternate ? 0xFD443120u : 0xFD445D20u;
+            long expectedDataOff = alternate ? 0x860L : 0x8B8L;
+
             if (!Arm64Words(view, g + 0x70L, 0x39400F08u) ||
                 !Arm64TryReadWord(view, g + 0x74L, out uint flagTest) ||
-                flagTest != 0x371A0C48u)
+                flagTest != expectedFlag)
             {
                 return false;
             }
@@ -295,7 +325,7 @@ namespace FreedomInstaller.Core
             }
 
             long flagReject = g + 0x74L + flagImm * 4L;
-            if (flagReject != g + 0x41FCL ||
+            if (flagReject != g + expectedDistance ||
                 !Arm64Gen5OutsideAdmitted(p, g, flagReject) ||
                 !view.Arm64TryMapRva(flagReject, 4, true, out _))
             {
@@ -353,13 +383,13 @@ namespace FreedomInstaller.Core
             }
 
             // Internal state words, then the dynamic read-only data page whose
-            // +0x8B8 qword is the vector constant loaded into d0 and copied to
-            // state+0x1BE0.
+            // vector qword is loaded into d0 and copied to state+0x1BE0. The
+            // qword bytes are identical between the two admitted layouts.
             if (!Arm64Words(view, g + 0x108L,
                     0x52900009u, 0x29007D1Fu, 0xB9000D1Fu, 0xF900151Fu, 0xB9001509u) ||
                 !Arm64TryAdrp(view, g + 0x11CL, 9, out long statePage) ||
-                !view.Arm64TryMapRva(statePage + 0x8B8L, 8, false, out _) ||
-                !Arm64Words(view, g + 0x120L, 0xF900251Fu, 0xB900511Fu, 0xFD445D20u) ||
+                !Arm64BytesAt(view, statePage + expectedDataOff, Arm64Gen5StateInitBytes) ||
+                !Arm64Words(view, g + 0x120L, 0xF900251Fu, 0xB900511Fu, expectedData) ||
                 !Arm64Words(view, g + 0x12CL,
                     0x91154109u, 0xF9004509u, 0xA9062509u, 0xFD0DF100u))
             {
@@ -373,7 +403,7 @@ namespace FreedomInstaller.Core
 
         // Capacity guard, post-limit variables, room bind and stream handoff.
         // Gen5 inlines inflate, so there is no standalone BL inflate to follow.
-        private static bool Arm64Gen5Output(Arm64PeView view, long p, long m)
+        private static bool Arm64Gen5Output(Arm64PeView view, long p, long m, uint slotLoad)
         {
             if (m != p + 0x1F8L)
             {
@@ -418,7 +448,7 @@ namespace FreedomInstaller.Core
             // k: two 8-byte GetVariable calls, same GUID, out sp19D0/sp1A48
             // (disjoint from D/U/L). Extra variables may not rewrite capacity
             // slots: both admit paths rejoin o and the miss goes err+8.
-            if (!Arm64Words(view, k, 0xF940E6C8u) ||
+            if (!Arm64Words(view, k, slotLoad) ||
                 !Arm64TryAddress(view, k + 0x4L, k + 0x8L, 25, out long guidRva) ||
                 !Arm64BytesAt(view, guidRva, new Guid(Arm64PrefixGuid).ToByteArray()) ||
                 !Arm64Words(view, k + 0xCL, 0x914007E4u, 0x52800115u) ||
@@ -426,7 +456,7 @@ namespace FreedomInstaller.Core
                 !view.Arm64TryMapRva(nameRva, 2, false, out _) ||
                 !Arm64Words(view, k + 0x1CL,
                     0x911AC3E3u, 0xF9402508u, 0x91274084u, 0xAA1903E1u,
-                    0xAA1F03E2u, 0xF9035BF5u, 0xD63F0100u, 0xF940E6C8u,
+                    0xAA1F03E2u, 0xF9035BF5u, 0xD63F0100u, slotLoad,
                     0x914007E4u, 0xAA0003FAu) ||
                 !Arm64TryAddress(view, k + 0x44L, k + 0x48L, 0, out nameRva) ||
                 !view.Arm64TryMapRva(nameRva, 2, false, out _) ||
@@ -498,7 +528,7 @@ namespace FreedomInstaller.Core
 
             // Stream/state initialisation g+0x70..g+0x138 is consumed whole by
             // the handoff; x26 must still be the producer z_stream pointer.
-            if (!Arm64Gen5StreamState(view, p, g))
+            if (!Arm64Gen5StreamState(view, p, g, slotLoad))
             {
                 return false;
             }

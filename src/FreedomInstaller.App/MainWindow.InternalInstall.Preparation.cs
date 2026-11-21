@@ -76,13 +76,13 @@ public partial class MainWindow
             || string.IsNullOrWhiteSpace(transport.AdbPath)
             || !HasCheckedInternalInstallDevice)
         {
-            throw new InvalidOperationException(T("Dynamic.InternalInstall.Prepared.NeedInputs"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.InternalInstall.Prepared.NeedInputs"));
         }
 
         await EnsureInternalInstallAssetsAsync(evidenceParent, backup, cancellationToken);
 
         var assets = _internalInstallAssets
-            ?? throw new InvalidOperationException(T("Dynamic.InternalInstall.Prepared.AssetsMissing"));
+            ?? throw new LocalizedInvalidOperationException(M("Dynamic.InternalInstall.Prepared.AssetsMissing"));
 
         // 同一个初始客户端只用于只读证据；EdlEntry 在这里只是服务的引用，不调用 EnterAsync。
         var discovery = new WindowsEdlEndpointDiscovery();
@@ -90,7 +90,11 @@ public partial class MainWindow
             new EdlEntry(transport.AdbPath, _runner, discovery),
             _runner,
             discovery,
-            transport.AdbPath);
+            transport.AdbPath)
+        {
+            // 快照在后台线程发布，回调只用 Volatile.Write，不触碰 UI/Dispatcher。
+            DiagnosticBootSourcesVerified = () => PublishDiagnosticBootEvidence(backup, package, artifacts),
+        };
 
         if (_ready)
         {
@@ -207,7 +211,8 @@ public partial class MainWindow
         CancellationToken cancellationToken)
     {
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream(logicalName)
-            ?? throw new InvalidOperationException(
+            ?? throw new LocalizedInvalidOperationException(
+                M("Dynamic.InternalInstall.Prepared.ComponentsMissing", logicalName),
                 T("Dynamic.InternalInstall.Prepared.ComponentsMissing", logicalName));
 
         await using (var destination = new FileStream(

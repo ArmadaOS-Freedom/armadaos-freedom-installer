@@ -430,6 +430,9 @@ public partial class MainWindow
 
                     AppendLocalizedLog(
                         M("Dynamic.InternalInstall.Execution.Log.Exception", exception.Message));
+                    RecordDiagnosticFailure(
+                        M("Dynamic.Diagnostics.Stage.Execute"),
+                        exception.Message);
                 }
                 finally
                 {
@@ -548,7 +551,9 @@ public partial class MainWindow
         }
 
         return T(
-            "Dynamic.InternalInstall.Execution.Dialog.Body",
+            prepared.AndroidDataErase == false
+                ? "Dynamic.InternalInstall.Execution.Dialog.Body.PreserveAndroid"
+                : "Dynamic.InternalInstall.Execution.Dialog.Body",
             UiText.ModelName(_internalInstallBackup!.Model),
             prepared.AndroidSerial,
             FormatInternalInstallExecutionBytes(prepared.AndroidGiB * 1024L * 1024L * 1024L),
@@ -683,10 +688,24 @@ public partial class MainWindow
 
         var backend = _internalInstallBackend;
         var snapshot = backend?.Snapshot;
+        var preserveAndroid = backend?.Prepared.AndroidDataErase == false;
+        var readyLeadKey = preserveAndroid
+            ? "Dynamic.InternalInstall.Execution.Lead.Ready.PreserveAndroid"
+            : "Dynamic.InternalInstall.Execution.Lead.Ready";
+        SetText(
+            InternalInstallConfirmWarningText,
+            preserveAndroid
+                ? "Dynamic.InternalInstall.Execution.Warning.PreserveAndroid"
+                : "Static.InternalInstall.Confirm.Warning");
+        SetText(
+            InternalInstallEraseRiskText,
+            preserveAndroid
+                ? "Dynamic.InternalInstall.Execution.EraseRisk.PreserveAndroid"
+                : "Static.InternalInstall.Confirm.EraseRisk");
 
         if (snapshot is null)
         {
-            SetText(InternalInstallConfirmLeadText, "Dynamic.InternalInstall.Execution.Lead.Ready");
+            SetText(InternalInstallConfirmLeadText, readyLeadKey);
             if (!_internalInstallExecutionActive
                 && !string.IsNullOrWhiteSpace(_internalInstallExecutionError))
             {
@@ -711,7 +730,7 @@ public partial class MainWindow
         // 写状态仍为 NoneIssued 时没有任何写入发生，即使准入标记已置位也按安装前失败展示真实原因。
         if (!snapshot.ExecutionStarted || snapshot.WriteState == InternalInstallWriteState.NoneIssued)
         {
-            SetText(InternalInstallConfirmLeadText, "Dynamic.InternalInstall.Execution.Lead.Ready");
+            SetText(InternalInstallConfirmLeadText, readyLeadKey);
 
             // 仅被准入、从未发出写入的终态同样要给出真实停止原因与证据位置；分支本身保持“尚未开始安装”。
             var prewriteTerminal = snapshot.ExecutionStarted
@@ -1134,6 +1153,14 @@ public partial class MainWindow
                     "Dynamic.InternalInstall.Execution.Log.Diagnostic",
                     string.IsNullOrWhiteSpace(result.ErrorCode) ? "—" : result.ErrorCode,
                     string.IsNullOrWhiteSpace(result.Diagnostic) ? "—" : result.Diagnostic));
+        }
+
+        if (result.Outcome == InternalInstallOutcome.Failed
+            || result.Outcome == InternalInstallOutcome.UnknownWriteOutcome)
+        {
+            RecordDiagnosticFailure(
+                M("Dynamic.Diagnostics.Stage.Execute"),
+                result.Diagnostic ?? result.ErrorCode);
         }
     }
 

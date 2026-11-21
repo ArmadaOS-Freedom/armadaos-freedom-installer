@@ -95,6 +95,12 @@ public partial class MainWindow
     /// <summary>上一次进度文本刷新时间；普通进度最多每秒一次。</summary>
     private DateTime _globalLastProgressAt = DateTime.MinValue;
 
+    /// <summary>恢复视图的环境闸门：整个恢复流程要求本机环境、驱动结果与工作目录同时就绪。</summary>
+    private bool GlobalRestoreEnvironmentReady =>
+        EnvironmentRestorePlatformReady
+        && _environmentDriverResult is { IsReady: true }
+        && _workDirectoryReady;
+
     /// <summary>父级导航用于判断是否可以离开本页 / 回首页的只读闸门。</summary>
     internal bool HasGlobalRecoveryProtectedState =>
         _globalOperationActive
@@ -141,6 +147,13 @@ public partial class MainWindow
         RefreshGlobalRecoveryActions();
         RenderGlobalConnection();
         RenderGlobalPower();
+
+        // 恢复视图进入前需确认本机环境已就绪；否则用同一状态文本提示，不新增控件。
+        if (_globalRecoveryMode == GlobalRecoveryMode.Restore && !GlobalRestoreEnvironmentReady)
+        {
+            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.RestoreEnvironmentRequired");
+        }
+
         GlobalRecoveryPage.ScrollToTop();
     }
 
@@ -159,10 +172,16 @@ public partial class MainWindow
         GlobalRestoreTitleText.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
         GlobalBackupLeadText.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
         GlobalRestoreLeadText.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
-        GlobalOutputBackupLabelText.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
-        GlobalOutputRestoreLabelText.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
+        GlobalOutputSection.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
         GlobalBackupCard.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
         GlobalRestoreCard.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
+        GlobalAndroidConnectionGuide.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
+        GlobalAutoDetectText.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
+        GlobalPowerText.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
+        GlobalManualEdlGuide.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
+        GlobalConnectButton.SetResourceReference(
+            ContentControl.ContentProperty,
+            backup ? "Static.Global.Connect" : "Static.Global.RestoreConnect");
     }
 
     // ---------- 导航 ----------
@@ -174,6 +193,34 @@ public partial class MainWindow
     /// <summary>首页「9008 全局恢复」：只打开恢复视图，不写操作标签，也不发起任何设备 IO。</summary>
     private void OnOpenGlobalRestoreFromHome(object sender, RoutedEventArgs e) =>
         OpenGlobalRecoveryFromHome(GlobalRecoveryMode.Restore);
+
+    /// <summary>环境页快捷入口：仅在本页且完整检查未完成时打开受保护的全局恢复视图。</summary>
+    private void OnOpenGlobalRestoreFromEnvironment(object sender, RoutedEventArgs e)
+    {
+        if (!_showingEnvironment || EnvironmentIsReady)
+        {
+            return;
+        }
+
+        if (!_ready || _busy || _closed || _showingSupport || _environmentDriverInstalling)
+        {
+            return;
+        }
+
+        if (HasGlobalRecoveryProtectedState
+            || HasProtectedUninstallState
+            || ProtectedModernTfInstallState
+            || HasInternalInstallLiveEdlState
+            || (HasInternalInstallExecutionStarted && !IsCompletedInternalInstallExecution)
+            || HasPendingTfTabletRecovery)
+        {
+            return;
+        }
+
+        _globalRecoveryMode = GlobalRecoveryMode.Restore;
+        _showingEnvironment = false;
+        ResumeGlobalRecoveryPage();
+    }
 
     /// <summary>首页入口的唯一闸门：环境已就绪、当前确实在首页、且没有其它受保护流程。</summary>
     private void OpenGlobalRecoveryFromHome(GlobalRecoveryMode mode)
@@ -218,6 +265,17 @@ public partial class MainWindow
         }
 
         _showingGlobalRecovery = false;
+
+        // 环境未就绪时（快捷入口）返回到准备环境页，不暴露其它首页操作。
+        if (!EnvironmentIsReady)
+        {
+            _showingEnvironment = true;
+            ApplyFunctionView();
+            RefreshEnvironmentActions();
+            RefreshActions();
+            return;
+        }
+
         ShowFunctionHome();
         RefreshActions();
     }
@@ -315,13 +373,15 @@ public partial class MainWindow
         bool proof = _globalEdlClient?.HasInitialSaharaProof == true;
         bool idleConnect = _globalEdlClient is null && !_globalEntryAttempted;
         bool reprobeConnect = _globalEdlClient is not null && !proof;
+        bool restoreEnvironmentReady = !restoreView || GlobalRestoreEnvironmentReady;
 
         if (GlobalConnectButton is not null)
         {
             // 型号由连接时自动识别：没有已知配置也允许发起一次显式连接。
             // 入口已尝试却没有客户端时不自动重跑安卓命令，交由人工重新连接 / 关闭。
             GlobalConnectButton.IsEnabled = !busy && !frozen && !writesAttempted
-                && (idleConnect || reprobeConnect);
+                && (idleConnect || reprobeConnect)
+                && restoreEnvironmentReady;
         }
 
         if (GlobalBackupButton is not null)
@@ -334,9 +394,8 @@ public partial class MainWindow
         if (GlobalPrepareRestoreButton is not null)
         {
             GlobalPrepareRestoreButton.IsEnabled = restoreView && !busy && !frozen && !writesAttempted
-                && !string.IsNullOrWhiteSpace(_globalRestoreSource)
-                && !string.IsNullOrWhiteSpace(_globalOutputParent)
-                && GlobalRestoreDirectoriesValid();
+                && restoreEnvironmentReady
+                && !string.IsNullOrWhiteSpace(_globalRestoreSource);
         }
 
         if (GlobalRestoreConfirmCheck is not null)
@@ -365,6 +424,9 @@ public partial class MainWindow
         if (GlobalBackHomeButton is not null)
         {
             GlobalBackHomeButton.IsEnabled = !busy && !HasGlobalRecoveryProtectedState;
+            GlobalBackHomeButton.SetResourceReference(
+                ContentControl.ContentProperty,
+                EnvironmentIsReady ? "Static.Global.BackHome" : "Static.Environment.Title");
         }
     }
 
@@ -476,14 +538,6 @@ public partial class MainWindow
             return;
         }
 
-        // 输出父目录必须位于还原来源之外，避免把证据写进用户备份树。
-        if (!string.IsNullOrWhiteSpace(_globalOutputParent)
-            && !IsInternalInstallBackupParentOutsideExisting(_globalOutputParent!, chosen))
-        {
-            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.OutputInsideRestoreSource");
-            return;
-        }
-
         _globalRestoreSource = chosen;
         GlobalRestoreDirectoryBox.Text = chosen;
         InvalidateGlobalRestorePreparation();
@@ -512,23 +566,6 @@ public partial class MainWindow
 
         string candidate = dialog.FolderName;
         return System.IO.Directory.Exists(candidate) ? candidate : null;
-    }
-
-    private bool GlobalRestoreDirectoriesValid()
-    {
-        if (string.IsNullOrWhiteSpace(_globalRestoreSource) || string.IsNullOrWhiteSpace(_globalOutputParent))
-        {
-            return false;
-        }
-
-        try
-        {
-            return IsInternalInstallBackupParentOutsideExisting(_globalOutputParent!, _globalRestoreSource!);
-        }
-        catch (Exception)
-        {
-            return false;
-        }
     }
 
     /// <summary>只作废本地准备对象：不删备份、不删证据、不触碰设备。</summary>

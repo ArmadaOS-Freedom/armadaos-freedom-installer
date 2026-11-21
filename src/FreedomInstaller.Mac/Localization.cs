@@ -3,6 +3,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using FreedomInstaller.App;
+using FreedomInstaller.Core;
 
 namespace FreedomInstaller.Mac;
 
@@ -53,7 +54,7 @@ internal sealed class Localization
         // As in the WPF window, the title carries the installer version, which the project takes from the WPF one.
         resources["Static.Title"] = _text.Get(
             "Static.Title",
-            typeof(Localization).Assembly.GetName().Version?.ToString(3) ?? string.Empty);
+            InstallerDisplayVersion.ForAssembly(typeof(Localization).Assembly));
 
         foreach (var (target, message) in _texts)
         {

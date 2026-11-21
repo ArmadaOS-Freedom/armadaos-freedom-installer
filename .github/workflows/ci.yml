@@ -65,6 +65,61 @@ jobs:
             echo "::endgroup::"
           done
 
+  # The Windows job above only compiles the Mac C# project. This job runs the
+  # real macOS source build: edl-ng for osx-arm64, the universal boot packers
+  # (clang + lipo from the runner's Xcode command line tools), the three macOS
+  # EDL toolchains, dotnet publish and the ad hoc signed .app bundle. Every
+  # input is public: the checked-in vendor files plus the pinned downloads in
+  # maintenance/build-inputs.json. The bundle is not notarized.
+  build-macos:
+    name: Build the macOS installer (Apple silicon)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.401'
+
+      - name: Build the .app
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B maintenance/build_installer_macos.py \
+            --work-dir "${RUNNER_TEMP}/macos-build-work" \
+            --output-dir "${RUNNER_TEMP}/macos-build-out"
+
+      # upload-artifact drops executable bits and extended attributes, which
+      # would break the bundle and its signature, so the .app is archived with
+      # ditto first. The build record names the exact inputs and tool hashes.
+      - name: Archive the .app
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="${RUNNER_TEMP}/macos-build-out/ArmadaOS Freedom Installer.app"
+          codesign --verify --strict --deep "${app}"
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${app}/Contents/Info.plist")"
+          name="armadaos-freedom-installer-${version}-macos-arm64-${GITHUB_SHA::12}"
+          dist="${RUNNER_TEMP}/macos-dist"
+          mkdir "${dist}"
+          ditto -c -k --sequesterRsrc --keepParent "${app}" "${dist}/${name}.zip"
+          cp "${RUNNER_TEMP}/macos-build-work/build-record-macos.json" "${dist}/"
+          (cd "${dist}" && shasum -a 256 "${name}.zip" > "${name}.zip.sha256")
+          echo "MACOS_ARTIFACT_NAME=${name}" >> "${GITHUB_ENV}"
+
+      - name: Upload the .app archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ env.MACOS_ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/macos-dist/
+          if-no-files-found: error
+          retention-days: 7
+
   maintenance-tests:
     name: Public fixture maintenance checks (Linux)
     runs-on: ubuntu-24.04

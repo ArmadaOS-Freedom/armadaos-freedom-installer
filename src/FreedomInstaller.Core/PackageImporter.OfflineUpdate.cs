@@ -133,68 +133,77 @@ public static partial class PackageImporter
         }
 
         var canonicalWorkRoot = PrepareOfflineWorkRoot(workRoot);
-        var source = ResolveArchiveSource(fullSource);
-        if (source.IsNativeRar)
+        var ciArtifact = PrepareCiArtifactSource(
+            fullSource, normalizedModel, OfflineUpgradeOperation, installerVersion,
+            canonicalWorkRoot, verify, token);
+        return WithPreparedCiArtifact(ciArtifact, () =>
         {
-            throw new InvalidDataException("签名升级包不支持 RAR 分卷格式。");
-        }
-
-        EnsureRegularSourceFiles(source);
-        var (descriptor, descriptorBytes, signatureBytes) = ReadOfflineUpdateDescriptor(
-            source,
-            normalizedModel,
-            installerVersion,
-            verify,
-            token);
-
-        using var stream = source.OpenStream();
-        VerifyUpdateMedia(source, stream, descriptor, token);
-
-        var stageRoot = CreateOfflineStageDirectory(canonicalWorkRoot);
-        try
-        {
-            var payloadDirectory = Path.GetFullPath(Path.Combine(stageRoot, StagedPayloadDirectoryName));
-            var descriptorPath = Path.GetFullPath(Path.Combine(stageRoot, StagedDescriptorFileName));
-            var signaturePath = Path.GetFullPath(Path.Combine(stageRoot, StagedSignatureFileName));
-
-            if (!IsBeneath(payloadDirectory, stageRoot) ||
-                !IsBeneath(descriptorPath, stageRoot) ||
-                !IsBeneath(signaturePath, stageRoot))
+            var source = ResolveArchiveSource(ciArtifact?.MediaPath ?? fullSource);
+            if (source.IsNativeRar)
             {
-                throw new InvalidDataException("离线升级暂存路径超出受控目录。");
+                throw new InvalidDataException("签名升级包不支持 RAR 分卷格式。");
             }
 
-            Directory.CreateDirectory(payloadDirectory);
-            EnsureSafeDirectoryTree(stageRoot, canonicalWorkRoot);
-
-            WriteBoundedStageFile(descriptorPath, descriptorBytes, token);
-            WriteBoundedStageFile(signaturePath, signatureBytes, token);
-            StageVerifiedOfflinePayload(stream, descriptor, payloadDirectory, token);
-            token.ThrowIfCancellationRequested();
-
-            return new ImportedUpdatePackage(
-                fullSource,
-                canonicalWorkRoot,
-                stageRoot,
-                payloadDirectory,
+            EnsureRegularSourceFiles(source);
+            var (descriptor, descriptorBytes, signatureBytes) = ReadOfflineUpdateDescriptor(
+                source,
                 normalizedModel,
-                descriptor,
-                descriptorPath,
-                signaturePath);
-        }
-        catch (Exception ex)
-        {
+                installerVersion,
+                verify,
+                token);
+
+            using var stream = source.OpenStream();
+            VerifyUpdateMedia(source, stream, descriptor, token);
+
+            var stageRoot = CreateOfflineStageDirectory(canonicalWorkRoot);
             try
             {
-                CleanupOfflineUpdateStage(canonicalWorkRoot, stageRoot);
-            }
-            catch (Exception cleanupEx)
-            {
-                throw new AggregateException("离线升级暂存失败，且清理暂存目录也失败。", ex, cleanupEx);
-            }
+                var payloadDirectory = Path.GetFullPath(Path.Combine(stageRoot, StagedPayloadDirectoryName));
+                var descriptorPath = Path.GetFullPath(Path.Combine(stageRoot, StagedDescriptorFileName));
+                var signaturePath = Path.GetFullPath(Path.Combine(stageRoot, StagedSignatureFileName));
 
-            throw;
-        }
+                if (!IsBeneath(payloadDirectory, stageRoot) ||
+                    !IsBeneath(descriptorPath, stageRoot) ||
+                    !IsBeneath(signaturePath, stageRoot))
+                {
+                    throw new InvalidDataException("离线升级暂存路径超出受控目录。");
+                }
+
+                Directory.CreateDirectory(payloadDirectory);
+                EnsureSafeDirectoryTree(stageRoot, canonicalWorkRoot);
+
+                WriteBoundedStageFile(descriptorPath, descriptorBytes, token);
+                WriteBoundedStageFile(signaturePath, signatureBytes, token);
+                StageVerifiedOfflinePayload(stream, descriptor, payloadDirectory, token);
+                token.ThrowIfCancellationRequested();
+
+                stream.Dispose();
+                ciArtifact?.Dispose();
+
+                return new ImportedUpdatePackage(
+                    fullSource,
+                    canonicalWorkRoot,
+                    stageRoot,
+                    payloadDirectory,
+                    normalizedModel,
+                    descriptor,
+                    descriptorPath,
+                    signaturePath);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    CleanupOfflineUpdateStage(canonicalWorkRoot, stageRoot);
+                }
+                catch (Exception cleanupEx)
+                {
+                    throw new AggregateException("离线升级暂存失败，且清理暂存目录也失败。", ex, cleanupEx);
+                }
+
+                throw;
+            }
+        });
     }
 
     private static (UpdatePackageDescriptor Descriptor, byte[] DescriptorBytes, byte[] SignatureBytes)
@@ -460,8 +469,21 @@ public static partial class PackageImporter
             throw new InvalidDataException($"拒绝清理非离线升级暂存目录：{canonicalStageRoot}。");
         }
 
-        EnsureSafeDirectoryTree(canonicalWorkRoot, canonicalWorkRoot);
-        if (!Path.Exists(canonicalStageRoot))
+        var workRootAttributes = File.GetAttributes(canonicalWorkRoot);
+        if ((workRootAttributes & FileAttributes.Directory) == 0 ||
+            (workRootAttributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidDataException($"暂存目录包含重解析点或无效目录：{canonicalWorkRoot}。");
+        }
+        try
+        {
+            File.GetAttributes(canonicalStageRoot);
+        }
+        catch (FileNotFoundException)
+        {
+            return;
+        }
+        catch (DirectoryNotFoundException)
         {
             return;
         }
@@ -555,11 +577,22 @@ public static partial class PackageImporter
         while (pending.Count > 0)
         {
             var current = pending.Pop();
-            var info = new DirectoryInfo(current);
-            if (!info.Exists ||
-                info.LinkTarget is not null ||
-                (info.Attributes & FileAttributes.ReparsePoint) != 0 ||
-                (info.Attributes & FileAttributes.Directory) == 0)
+            FileAttributes currentAttributes;
+            try
+            {
+                currentAttributes = File.GetAttributes(current);
+            }
+            catch (FileNotFoundException)
+            {
+                throw new InvalidDataException($"拒绝操作重解析点或非目录路径：{current}。");
+            }
+            catch (DirectoryNotFoundException)
+            {
+                throw new InvalidDataException($"拒绝操作重解析点或非目录路径：{current}。");
+            }
+
+            if ((currentAttributes & FileAttributes.ReparsePoint) != 0 ||
+                (currentAttributes & FileAttributes.Directory) == 0)
             {
                 throw new InvalidDataException($"拒绝操作重解析点或非目录路径：{current}。");
             }

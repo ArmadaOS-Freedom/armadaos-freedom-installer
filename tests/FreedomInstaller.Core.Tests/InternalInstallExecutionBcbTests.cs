@@ -131,6 +131,57 @@ public sealed class InternalInstallExecutionBcbTests
         Assert.Throws<ArgumentException>(() => Build(new byte[Unit512Bytes], 4096));
     }
 
+    [Fact]
+    public void Preserve_mode_clears_only_command_block_and_leaves_sentinel_and_input_untouched()
+    {
+        byte[] unit = new byte[Unit4096Bytes];
+        Fill(unit, 32, 32, 0xA5);
+        Fill(unit, 832, Unit4096Bytes - 832, 0x5A);
+        byte[] bootOnce = Encoding.ASCII.GetBytes(BootOnce);
+        Array.Copy(bootOnce, 0, unit, 0, bootOnce.Length);
+        byte[] sentinel = Slice(unit, CommandBytes, Unit4096Bytes - CommandBytes);
+        byte[] inputSnapshot = Slice(unit, 0, Unit4096Bytes);
+
+        byte[] result = BuildPreserve(unit, 4096);
+
+        Assert.Equal(Unit4096Bytes, result.Length);
+        Assert.Equal(new byte[CommandBytes], Slice(result, 0, CommandBytes));
+        Assert.Equal(sentinel, Slice(result, CommandBytes, Unit4096Bytes - CommandBytes));
+        Assert.Equal(inputSnapshot, unit);
+    }
+
+    [Fact]
+    public void Preserve_mode_rejects_existing_wipe_data_bcb()
+    {
+        byte[] unit = new byte[Unit4096Bytes];
+        byte[] command = Encoding.ASCII.GetBytes(FixedCommand);
+        Array.Copy(command, 0, unit, 0, command.Length);
+        byte[] recovery = Encoding.ASCII.GetBytes(FixedRecovery);
+        Array.Copy(recovery, 0, unit, RecoveryOffset, recovery.Length);
+
+        Assert.Throws<InvalidOperationException>(() => BuildPreserve(unit, 4096));
+    }
+
+    private static readonly MethodInfo PreserveBuilder = typeof(InternalInstallBackend).GetMethod(
+        "BuildBcbWriteUnit",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException(
+            "InternalInstallBackend no longer declares the private static BuildBcbWriteUnit method.");
+
+    private static byte[] BuildPreserve(byte[] freshWriteUnit, int sectorSize)
+    {
+        try
+        {
+            return (byte[])PreserveBuilder.Invoke(
+                null, new object?[] { freshWriteUnit, sectorSize, false })!;
+        }
+        catch (TargetInvocationException error) when (error.InnerException is not null)
+        {
+            ExceptionDispatchInfo.Capture(error.InnerException).Throw();
+            throw;
+        }
+    }
+
     private static readonly MethodInfo Builder = typeof(InternalInstallBackend).GetMethod(
         "BuildInstallBcbWriteUnit",
         BindingFlags.Static | BindingFlags.NonPublic)

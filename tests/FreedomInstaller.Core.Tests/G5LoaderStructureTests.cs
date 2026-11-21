@@ -419,6 +419,73 @@ public sealed class G5LoaderStructureTests
                 + "or code positions rather than on the decoded instruction stream.");
     }
 
+    [G5LoaderFixtureFact]
+    public void Gen5AblOlderSlotLayoutKeepsArm64Match()
+    {
+        byte[] abl = LoadAbl();
+        byte[] pe = DecodeBoundedImage(abl);
+
+        Assert.True(MatchArm64Pe(pe), "Original pinned Gen5 ABL must still match.");
+
+        // Six observed words of the older layout, relative to p=KernelBaseLoadOffset.
+        (uint off, uint oldWord, uint newWord)[] patches =
+        {
+            (KernelBaseLoadOffset + 0x008u, 0xF940E6C8u, 0xF940D2C8u),
+            (KernelBaseLoadOffset + 0x028u, 0xF940E6C8u, 0xF940D2C8u),
+            (KernelBaseLoadOffset + 0x250u, 0xF940E6C8u, 0xF940D2C8u),
+            (KernelBaseLoadOffset + 0x288u, 0xF940E6C8u, 0xF940D2C8u),
+            (KernelBaseLoadOffset + 0x46Cu, 0x371A0C48u, 0x371A0B88u),
+            (KernelBaseLoadOffset + 0x520u, 0xFD445D20u, 0xFD443120u),
+        };
+
+        byte[] older = (byte[])pe.Clone();
+        foreach (var (off, oldWord, newWord) in patches)
+        {
+            AssertInSection(PeTextOffset, PeTextSize, off, 4, ".text");
+            Assert.Equal(oldWord, ReadUInt32Le(older, off));
+            WriteUInt32Le(older, off, newWord);
+            Assert.Equal(newWord, ReadUInt32Le(older, off));
+        }
+
+        const uint originalInitializerOffset = 0x448B8u;
+        const uint alternateInitializerOffset = 0x44860u;
+        Assert.Equal(0x00000001u, ReadUInt32Le(older, originalInitializerOffset));
+        Assert.Equal(0xFFFFFFFFu, ReadUInt32Le(older, originalInitializerOffset + 4u));
+        Array.Copy(older, (int)originalInitializerOffset, older, (int)alternateInitializerOffset, 8);
+
+        Assert.True(
+            MatchArm64Pe(older),
+            "Synthetic older Gen5 layout with the six observed instruction words must match.");
+
+        // Independent negative: only the alternate initializer word differs.
+        byte[] alteredInitializer = (byte[])older.Clone();
+        WriteUInt32Le(alteredInitializer, alternateInitializerOffset, 2u);
+        Assert.False(
+            MatchArm64Pe(alteredInitializer),
+            "Alternate initializer value 2 must be rejected.");
+
+        // Independent negative: only the load opcode reverts; initializers stay identical.
+        byte[] restoredOpcode = (byte[])older.Clone();
+        WriteUInt32Le(restoredOpcode, KernelBaseLoadOffset + 0x520u, 0xFD445D20u);
+        Assert.False(
+            MatchArm64Pe(restoredOpcode),
+            "Restored load opcode 0xFD445D20 must be rejected.");
+
+        // Mixed: only the post-limit k slot load restored to the original word.
+        byte[] mixed = (byte[])older.Clone();
+        WriteUInt32Le(mixed, KernelBaseLoadOffset + 0x250u, 0xF940E6C8u);
+        Assert.False(
+            MatchArm64Pe(mixed),
+            "Mixed Gen5 layout (only k restored to 0x1C8) must be rejected.");
+
+        // Mixed: only the TBNZ target restored to the original word.
+        byte[] crossed = (byte[])older.Clone();
+        WriteUInt32Le(crossed, KernelBaseLoadOffset + 0x46Cu, 0x371A0C48u);
+        Assert.False(
+            MatchArm64Pe(crossed),
+            "Mixed Gen5 layout (only TBNZ restored) must be rejected.");
+    }
+
     // ------------------------------------------------------------- fixture claims
 
     /// <summary>

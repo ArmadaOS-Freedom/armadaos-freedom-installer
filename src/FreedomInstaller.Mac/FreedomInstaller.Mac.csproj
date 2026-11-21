@@ -14,7 +14,8 @@
     <SupportedOSPlatformVersion>12.0</SupportedOSPlatformVersion>
     <Authors>danyi (mydanyi)</Authors>
     <Product>ArmadaOS Freedom 安装助手</Product>
-    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- Installer-only opt-in: see FreedomInstaller.App.csproj. SDK appends the real SourceRevisionId to AssemblyInformationalVersion when available. Shared Directory.Build.props keeps this off for every other project. -->
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">

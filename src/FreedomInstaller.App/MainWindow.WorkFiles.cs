@@ -10,6 +10,7 @@ public partial class MainWindow
     private InstallerWorkDirectoryResult? _workDirectory;
     private string? _manualWorkRoot = Environment.GetEnvironmentVariable("FREEDOM_WORK_ROOT");
     private bool _workDirectoryReady;
+    private string? _diagnosticWorkDirectoryError;
 
     /// <summary>
     /// 工作会话建立之前产生的日志行。界面只显示最近 200 行，这里不设上限：
@@ -40,6 +41,8 @@ public partial class MainWindow
         System.Threading.CancellationToken cancellationToken)
     {
         _workDirectoryReady = false;
+        _environmentWorkCheckCompleted = false;
+        _diagnosticWorkDirectoryError = null;
         SetText(EnvironmentWorkStatusText, "Dynamic.Environment.Checking");
         SetEnvironmentIndicator(EnvironmentWorkIndicator, null);
         // An active session must keep its files on the original volume.
@@ -52,6 +55,7 @@ public partial class MainWindow
             cancellationToken.ThrowIfCancellationRequested();
             _workDirectory = result;
             _workDirectoryReady = true;
+            _environmentWorkCheckCompleted = true;
             SetText(EnvironmentWorkPathText, "Dynamic.Environment.WorkPath", result.RootPath);
             SetText(EnvironmentWorkStatusText, "Dynamic.Environment.WorkSpace",
                 result.AvailableFreeBytes / (1024d * 1024 * 1024));
@@ -61,11 +65,14 @@ public partial class MainWindow
             or System.Security.SecurityException or ArgumentException or NotSupportedException)
         {
             if (_closed) return;
+            _environmentWorkCheckCompleted = true;
+            _diagnosticWorkDirectoryError = exception.Message;
             SetText(EnvironmentWorkPathText, string.IsNullOrWhiteSpace(requestedRoot)
                 ? M("Dynamic.Environment.WorkUnselected")
                 : M("Dynamic.Environment.WorkPath", requestedRoot));
             SetText(EnvironmentWorkStatusText, "Dynamic.Environment.WorkFailed", exception.Message);
             SetEnvironmentIndicator(EnvironmentWorkIndicator, false);
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Operation"), exception.Message);
         }
     }
 

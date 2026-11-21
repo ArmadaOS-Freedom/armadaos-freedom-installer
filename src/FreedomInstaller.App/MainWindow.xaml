@@ -760,95 +760,148 @@
         </Grid.RowDefinitions>
 
         <!-- ================= 顶部：品牌 + 主题切换 ================= -->
-        <Grid Grid.Row="0" Margin="20,12,20,8">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-
-            <!-- 星号列约束副标题宽度，说明文字需要换行时在列内自然折行。 -->
-            <Grid Grid.Column="0" VerticalAlignment="Center">
+        <StackPanel Grid.Row="0" Margin="20,12,20,8">
+            <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <Image Grid.Column="0"
-                       Source="{DynamicResource ArmadaBrandMark}"
-                       Width="48"
-                       Height="48"
-                       Stretch="Uniform"
-                       VerticalAlignment="Center"
-                       Margin="0,0,10,0"
-                       ToolTip="ArmadaOS"
-                       AutomationProperties.Name="ArmadaOS" />
+                <!-- 星号列约束副标题宽度，说明文字需要换行时在列内自然折行。 -->
+                <Grid Grid.Column="0" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="ArmadaOS Freedom"
-                               FontSize="17"
-                               FontWeight="SemiBold"
-                               Foreground="{DynamicResource InkBrush}" />
-                    <TextBlock Text="{DynamicResource Static.BrandSubtitle}"
-                               FontSize="11.5"
-                               Foreground="{DynamicResource MutedBrush}"
-                               TextWrapping="Wrap"
-                               Margin="0,2,0,0" />
+                    <Image Grid.Column="0"
+                           Source="{DynamicResource ArmadaBrandMark}"
+                           Width="48"
+                           Height="48"
+                           Stretch="Uniform"
+                           VerticalAlignment="Center"
+                           Margin="0,0,10,0"
+                           ToolTip="ArmadaOS"
+                           AutomationProperties.Name="ArmadaOS" />
+
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="ArmadaOS Freedom"
+                                   FontSize="17"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource InkBrush}" />
+                        <TextBlock Text="{DynamicResource Static.BrandSubtitle}"
+                                   FontSize="11.5"
+                                   Foreground="{DynamicResource MutedBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,2,0,0" />
+                    </StackPanel>
+                </Grid>
+
+                <!--
+                    支持入口：只切换视图去独立支持页，不进入安装向导，也不改动当前选中的功能、
+                    已读到的设备状态或任何输入。星号列仍留给品牌副标题，宽度不够时在列内折行。
+                    诊断导出按钮与支持入口同列并排，仅导出本地诊断信息，不进入安装流程。
+                -->
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="0,0,8,0">
+                    <Button x:Name="SupportProjectButton"
+                            Style="{StaticResource SecondaryButton}"
+                            Click="OnShowSupport"
+                            VerticalAlignment="Center"
+                            Padding="14,8"
+                            Margin="0,0,8,0">
+                        <TextBlock Text="{DynamicResource Static.SupportButton}"
+                                   FontSize="13"
+                                   VerticalAlignment="Center" />
+                    </Button>
+
+                    <Button x:Name="DiagnosticExportButton"
+                            Style="{StaticResource SecondaryButton}"
+                            Click="OnExportDiagnostics"
+                            VerticalAlignment="Center"
+                            Padding="14,8"
+                            AutomationProperties.Name="{DynamicResource Dynamic.Diagnostics.Export}">
+                        <TextBlock Text="{DynamicResource Dynamic.Diagnostics.Export}"
+                                   FontSize="13"
+                                   VerticalAlignment="Center" />
+                    </Button>
                 </StackPanel>
+
+                <Button x:Name="ThemeToggleButton"
+                        Grid.Column="2"
+                        Style="{StaticResource SecondaryButton}"
+                        Click="OnToggleTheme"
+                        VerticalAlignment="Center"
+                        Padding="14,8">
+                    <StackPanel Orientation="Horizontal">
+                        <Border Width="12"
+                                Height="12"
+                                CornerRadius="6"
+                                Background="{DynamicResource AccentBrush}"
+                                VerticalAlignment="Center" />
+                        <TextBlock x:Name="ThemeToggleText"
+                                   Text="{DynamicResource Static.ThemeLabelDark}"
+                                   FontSize="13"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <!-- 语言按钮只在两种界面语言之间切换；按钮显示的是「切换目标」，不是当前语言。 -->
+                <Button x:Name="LanguageToggleButton"
+                        Grid.Column="3"
+                        Style="{StaticResource SecondaryButton}"
+                        Click="OnToggleLanguage"
+                        VerticalAlignment="Center"
+                        Padding="14,8"
+                        Margin="8,0,0,0"
+                        ToolTip="{DynamicResource Static.LanguageTooltip}">
+                    <TextBlock x:Name="LanguageToggleText"
+                               Text="{DynamicResource Static.LanguageToggleLabel}"
+                               FontSize="13"
+                               VerticalAlignment="Center" />
+                </Button>
             </Grid>
 
-            <!--
-                支持入口：只切换视图去独立支持页，不进入安装向导，也不改动当前选中的功能、
-                已读到的设备状态或任何输入。星号列仍留给品牌副标题，宽度不够时在列内折行。
-            -->
-            <Button x:Name="SupportProjectButton"
-                    Grid.Column="1"
-                    Style="{StaticResource SecondaryButton}"
-                    Click="OnShowSupport"
-                    VerticalAlignment="Center"
-                    Padding="14,8"
-                    Margin="0,0,8,0">
-                <TextBlock Text="{DynamicResource Static.SupportButton}"
-                           FontSize="13"
-                           VerticalAlignment="Center" />
-            </Button>
+            <!-- 诊断失败提示：默认折叠，仅在导出诊断信息失败时显示。 -->
+            <Border x:Name="DiagnosticFailurePanel"
+                    Visibility="Collapsed"
+                    Margin="0,8,0,0"
+                    Padding="10,8"
+                    CornerRadius="4"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource AccentBrush}"
+                    BorderThickness="1">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="DiagnosticFailureText"
+                               Grid.Column="0"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource InkBrush}"
+                               FontSize="12.5" />
+                    <Button Grid.Column="1"
+                            Style="{StaticResource SecondaryButton}"
+                            Click="OnExportDiagnostics"
+                            VerticalAlignment="Center"
+                            Padding="12,6"
+                            Margin="10,0,0,0"
+                            AutomationProperties.Name="{DynamicResource Dynamic.Diagnostics.Export}">
+                        <TextBlock Text="{DynamicResource Dynamic.Diagnostics.Export}"
+                                   FontSize="12.5"
+                                   VerticalAlignment="Center" />
+                    </Button>
+                </Grid>
+            </Border>
 
-            <Button x:Name="ThemeToggleButton"
-                    Grid.Column="2"
-                    Style="{StaticResource SecondaryButton}"
-                    Click="OnToggleTheme"
-                    VerticalAlignment="Center"
-                    Padding="14,8">
-                <StackPanel Orientation="Horizontal">
-                    <Border Width="12"
-                            Height="12"
-                            CornerRadius="6"
-                            Background="{DynamicResource AccentBrush}"
-                            VerticalAlignment="Center" />
-                    <TextBlock x:Name="ThemeToggleText"
-                               Text="{DynamicResource Static.ThemeLabelDark}"
-                               FontSize="13"
-                               Margin="8,0,0,0"
-                               VerticalAlignment="Center" />
-                </StackPanel>
-            </Button>
-
-            <!-- 语言按钮只在两种界面语言之间切换；按钮显示的是「切换目标」，不是当前语言。 -->
-            <Button x:Name="LanguageToggleButton"
-                    Grid.Column="3"
-                    Style="{StaticResource SecondaryButton}"
-                    Click="OnToggleLanguage"
-                    VerticalAlignment="Center"
-                    Padding="14,8"
-                    Margin="8,0,0,0"
-                    ToolTip="{DynamicResource Static.LanguageTooltip}">
-                <TextBlock x:Name="LanguageToggleText"
-                           Text="{DynamicResource Static.LanguageToggleLabel}"
-                           FontSize="13"
-                           VerticalAlignment="Center" />
-            </Button>
-        </Grid>
+        </StackPanel>
 
         <!-- ================= 主体：左侧步骤 + 页内内容 ================= -->
         <Grid Grid.Row="1" Margin="20,0,20,0">
@@ -2420,7 +2473,8 @@
                                        Text="{DynamicResource Static.InternalInstall.Confirm.Lead}"
                                        Style="{StaticResource BodyText}"
                                        Margin="0,6,0,0" />
-                            <TextBlock Text="{DynamicResource Static.InternalInstall.Confirm.Warning}"
+                            <TextBlock x:Name="InternalInstallConfirmWarningText"
+                                       Text="{DynamicResource Static.InternalInstall.Confirm.Warning}"
                                        Style="{StaticResource BodyText}"
                                        Foreground="{DynamicResource WarnBrush}"
                                        FontWeight="SemiBold"
@@ -2603,7 +2657,8 @@
                                           IsEnabled="False"
                                           Checked="OnInternalInstallEraseRiskChanged"
                                           Unchecked="OnInternalInstallEraseRiskChanged">
-                                    <TextBlock Text="{DynamicResource Static.InternalInstall.Confirm.EraseRisk}"
+                                    <TextBlock x:Name="InternalInstallEraseRiskText"
+                                               Text="{DynamicResource Static.InternalInstall.Confirm.EraseRisk}"
                                                TextWrapping="Wrap"
                                                FontSize="13" />
                                 </CheckBox>
@@ -3009,21 +3064,40 @@
                 启动后先停在这一页：只做只读自检与显式安装随附驱动，准备完成后点「继续」才进入功能首页。
                 页面里的状态文字全部来自控制器登记的本地化消息；可见性只由 ApplyFunctionView() 改。
             -->
-            <ScrollViewer x:Name="EnvironmentPage"
-                          Grid.Column="0"
-                          Grid.ColumnSpan="3"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled"
-                          Padding="0,0,6,0"
-                          Margin="0,0,0,12">
-                <StackPanel>
+            <DockPanel x:Name="EnvironmentPage"
+                       Grid.Column="0"
+                       Grid.ColumnSpan="3"
+                       Margin="0,0,0,12">
+                <StackPanel DockPanel.Dock="Top">
                     <TextBlock Text="{DynamicResource Static.Environment.Title}"
                                Style="{StaticResource H1Text}" />
                     <TextBlock Text="{DynamicResource Static.Environment.Lead}"
                                Style="{StaticResource BodyText}"
                                TextWrapping="Wrap"
                                Margin="0,6,0,0" />
-
+                </StackPanel>
+                <WrapPanel DockPanel.Dock="Bottom" Margin="0,8,6,0">
+                    <Button x:Name="EnvironmentCheckButton"
+                            Content="{DynamicResource Static.Environment.Check}"
+                            Click="OnEnvironmentCheck"
+                            Style="{StaticResource PrimaryButton}"
+                            Margin="0,0,8,8" />
+                    <Button x:Name="EnvironmentContinueButton"
+                            Content="{DynamicResource Static.Environment.Continue}"
+                            Click="OnEnvironmentContinue"
+                            Style="{StaticResource SecondaryButton}"
+                            IsEnabled="False"
+                            Margin="0,0,8,8" />
+                    <Button x:Name="EnvironmentInstallDriverButton"
+                            Content="{DynamicResource Static.Environment.InstallDriver}"
+                            Click="OnEnvironmentInstall"
+                            Style="{StaticResource SecondaryButton}"
+                            IsEnabled="False"
+                            Margin="0,0,8,8" />
+                </WrapPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="0,0,6,0">
                     <Border Style="{StaticResource CardBorder}" Margin="0,12,0,0">
                         <StackPanel>
                             <!-- 六行状态：系统 / 运行组件 / 连接工具 / 驱动 / ADB / Fastboot。✓ 就绪，✗ 未就绪，… 检查中。 -->
@@ -3266,25 +3340,12 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- 英文或窄窗口时按钮自动换行，不挤压状态文字。 -->
-                            <WrapPanel Margin="0,12,0,0">
-                                <Button x:Name="EnvironmentCheckButton"
-                                        Content="{DynamicResource Static.Environment.Check}"
-                                        Click="OnEnvironmentCheck"
-                                        Style="{StaticResource PrimaryButton}"
-                                        Margin="0,0,8,8" />
-                                <Button x:Name="EnvironmentInstallDriverButton"
-                                        Content="{DynamicResource Static.Environment.InstallDriver}"
-                                        Click="OnEnvironmentInstall"
+                            <WrapPanel Margin="0,8,0,0">
+                                <Button x:Name="EnvironmentGlobalRestoreButton"
+                                        Content="{DynamicResource Static.Global.RestoreTitle}"
+                                        Click="OnOpenGlobalRestoreFromEnvironment"
                                         Style="{StaticResource SecondaryButton}"
                                         Visibility="Collapsed"
-                                        IsEnabled="False"
-                                        Margin="0,0,8,8" />
-                                <Button x:Name="EnvironmentContinueButton"
-                                        Content="{DynamicResource Static.Environment.Continue}"
-                                        Click="OnEnvironmentContinue"
-                                        Style="{StaticResource SecondaryButton}"
-                                        IsEnabled="False"
                                         Margin="0,0,8,8" />
                             </WrapPanel>
 
@@ -3305,8 +3366,8 @@
                             </Expander>
                         </StackPanel>
                     </Border>
-                </StackPanel>
-            </ScrollViewer>
+                </ScrollViewer>
+            </DockPanel>
 
             <!--
                 ================= 9008 全局备份 / 恢复（两个独立视图） =================
@@ -3340,7 +3401,7 @@
                                TextWrapping="Wrap"
                                Margin="0,6,0,0" />
                     <TextBlock x:Name="GlobalRestoreLeadText"
-                               Text="{DynamicResource Static.Global.RestoreLead}"
+                               Text="{DynamicResource Static.Global.ManualRestoreLead}"
                                Style="{StaticResource BodyText}"
                                TextWrapping="Wrap"
                                Margin="0,6,0,0"
@@ -3356,7 +3417,8 @@
                     </WrapPanel>
 
                     <!-- 连接前的准备：可折叠的连接图示与说明，默认展开；进入本页不会自动访问设备。 -->
-                    <Expander Style="{StaticResource SectionExpander}"
+                    <Expander x:Name="GlobalAndroidConnectionGuide"
+                              Style="{StaticResource SectionExpander}"
                               IsExpanded="True"
                               Margin="0,12,0,0"
                               Header="{DynamicResource Static.Global.ConnectionGuideTitle}">
@@ -3368,10 +3430,142 @@
                         </StackPanel>
                     </Expander>
 
+                    <!-- 仅恢复视图显示的 9008 手动进入指南；默认折叠但展开状态为 True，不自动访问设备。 -->
+                    <Expander x:Name="GlobalManualEdlGuide"
+                              Style="{StaticResource SectionExpander}"
+                              IsExpanded="True"
+                              Visibility="Collapsed"
+                              Margin="0,12,0,0"
+                              Header="{DynamicResource Static.Global.ManualEdlGuideTitle}">
+                        <StackPanel Margin="0,6,0,0">
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlForceShutdown}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,0" />
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlStep1}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlTb323fu}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0" />
+                            <Viewbox Stretch="Uniform" MaxWidth="360" MaxHeight="154"
+                                     HorizontalAlignment="Left" Margin="0,8,0,0">
+                                <Canvas Width="360" Height="154">
+                                    <!-- 顶部标签区：按 TB323FU 正面横向渲染，音量加键位于上长边靠左。 -->
+                                    <TextBlock Canvas.Left="10" Canvas.Top="3" Width="210"
+                                               Text="{DynamicResource Static.Global.ManualEdlVolumeUp}"
+                                               Foreground="{DynamicResource AccentBrush}"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
+                                               TextWrapping="NoWrap"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextAlignment="Left" />
+                                    <!-- 引线：从文字下方起始，绕至音量加键上缘，不穿越文字。 -->
+                                    <Path Data="M 36,17 L 36,26 L 39,30"
+                                          Stroke="{DynamicResource AccentBrush}"
+                                          StrokeThickness="1.5" />
+                                    <!-- 平板：屏幕面向用户横向放置。 -->
+                                    <Rectangle Canvas.Left="12" Canvas.Top="34" Width="144" Height="90"
+                                               RadiusX="8" RadiusY="8"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="2" />
+                                    <Rectangle Canvas.Left="18" Canvas.Top="40" Width="132" Height="78"
+                                               RadiusX="4" RadiusY="4"
+                                               Fill="#0F1115" />
+                                    <!-- 上长边按键：音量加键高亮部分偏左端，中间为中性其余部分，电源键靠右。 -->
+                                    <Rectangle Canvas.Left="32" Canvas.Top="30" Width="13" Height="5"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource AccentBrush}" />
+                                    <Rectangle Canvas.Left="45" Canvas.Top="30" Width="8" Height="5"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <Rectangle Canvas.Left="59" Canvas.Top="30" Width="11" Height="5"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <!-- 右侧短边次要接口：开口状态，保持低调。 -->
+                                    <Rectangle Canvas.Left="156" Canvas.Top="76" Width="4" Height="10"
+                                               RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource MutedBrush}"
+                                               Opacity="0.5" />
+                                    <!-- 下长边中央 USB-C 接口与插头。 -->
+                                    <Rectangle Canvas.Left="76" Canvas.Top="121" Width="16" Height="6"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <Rectangle Canvas.Left="79" Canvas.Top="126" Width="10" Height="9"
+                                               RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <!-- 下长边中央 USB-C 接口标注：单行，避开 y145 走线。 -->
+                                    <TextBlock Canvas.Left="100" Canvas.Top="124" Width="110"
+                                               Text="{DynamicResource Static.Global.ManualEdlLongEdgePort}"
+                                               Foreground="{DynamicResource MutedBrush}"
+                                               FontSize="10"
+                                               TextWrapping="NoWrap"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextAlignment="Left" />
+                                    <!-- 电脑：底座与上盖。 -->
+                                    <Rectangle Canvas.Left="244" Canvas.Top="36" Width="100" Height="51"
+                                               RadiusX="4" RadiusY="4"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="2" />
+                                    <Rectangle Canvas.Left="234" Canvas.Top="87" Width="120" Height="10"
+                                               RadiusX="2" RadiusY="2"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="2" />
+                                    <!-- 电脑侧插头：底座外左侧，接触底座左缘 x234。 -->
+                                    <Rectangle Canvas.Left="222" Canvas.Top="87" Width="12" Height="10"
+                                               RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource SurfaceBrush}"
+                                               Stroke="{DynamicResource StrokeBrush}"
+                                               StrokeThickness="1" />
+                                    <!-- 数据线：从平板下长边插头向下，右折至 x212 上行接电脑侧插头。 -->
+                                    <Path Data="M 84,135 L 84,145 L 212,145 L 212,92 L 222,92"
+                                          Stroke="{DynamicResource MutedBrush}"
+                                          StrokeThickness="3"
+                                          StrokeLineJoin="Round" />
+                                    <!-- 黑屏说明置于深色屏幕内部，固定浅色避免与 #0F1115 重影。 -->
+                                    <TextBlock Canvas.Left="18" Canvas.Top="68" Width="132"
+                                               Text="{DynamicResource Static.Global.ManualEdlScreenDark}"
+                                               Foreground="#DFE2E7"
+                                               FontSize="10"
+                                               TextWrapping="Wrap"
+                                               TextAlignment="Center" />
+                                    <TextBlock Canvas.Left="244" Canvas.Top="106" Width="100"
+                                               Text="{DynamicResource Static.Global.ManualEdlPc}"
+                                               Foreground="{DynamicResource MutedBrush}"
+                                               FontSize="10"
+                                               TextWrapping="Wrap"
+                                               TextAlignment="Center" />
+                                </Canvas>
+                            </Viewbox>
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlStep2}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <TextBlock Text="{DynamicResource Static.Global.ManualEdlStep3}"
+                                       Style="{StaticResource BodyText}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Expander>
+
                     <!-- 连接：型号由连接时自动识别，页面没有手动选择；进入本页不会自动访问设备。 -->
                     <Border Style="{StaticResource CardBorder}" Margin="0,12,0,0">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource Static.Global.AutoDetect}"
+                            <TextBlock x:Name="GlobalAutoDetectText"
+                                       Text="{DynamicResource Static.Global.AutoDetect}"
                                        FontSize="12"
                                        Foreground="{DynamicResource MutedBrush}"
                                        TextWrapping="Wrap" />
@@ -3400,23 +3594,13 @@
                         </StackPanel>
                     </Border>
 
-                    <!--
-                        公共保存位置：备份与恢复都要有工作记录目录，标签随视图切换，
-                        因此恢复视图即使隐藏备份动作也仍然可以选目录。
-                    -->
+                    <!-- 备份保存位置：只在备份视图出现；恢复的工作记录目录由程序自动使用启动时选定目录下的 records。 -->
                     <Border x:Name="GlobalOutputSection" Style="{StaticResource CardBorder}" Margin="0,12,0,0">
                         <StackPanel>
-                            <TextBlock x:Name="GlobalOutputBackupLabelText"
-                                       Text="{DynamicResource Static.Global.BackupDirectoryLabel}"
+                            <TextBlock Text="{DynamicResource Static.Global.BackupDirectoryLabel}"
                                        FontSize="12"
                                        Foreground="{DynamicResource MutedBrush}"
                                        TextWrapping="Wrap" />
-                            <TextBlock x:Name="GlobalOutputRestoreLabelText"
-                                       Text="{DynamicResource Static.Global.OutputDirectoryLabelRestore}"
-                                       FontSize="12"
-                                       Foreground="{DynamicResource MutedBrush}"
-                                       TextWrapping="Wrap"
-                                       Visibility="Collapsed" />
                             <Grid Margin="0,4,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -3894,6 +4078,127 @@
                 </StackPanel>
             </ScrollViewer>
 
+            <!-- 诊断导出页：占满主体三列，独立页面。 -->
+            <ScrollViewer x:Name="DiagnosticExportPage"
+                          Grid.Column="0"
+                          Grid.ColumnSpan="3"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Padding="0,0,6,0"
+                          Margin="0,0,0,12"
+                          Visibility="Collapsed">
+                <StackPanel MaxWidth="720" HorizontalAlignment="Stretch">
+                    <!-- 返回：只关闭诊断页，不发起查询、不清空输入、不写文件。 -->
+                    <Button Content="{DynamicResource Static.SupportBack}"
+                            Style="{StaticResource GhostButton}"
+                            Click="OnCloseDiagnosticPage"
+                            HorizontalAlignment="Left"
+                            Padding="0,4"
+                            Margin="0,0,0,8" />
+
+                    <TextBlock Text="{DynamicResource Dynamic.Diagnostics.Export}"
+                               Style="{StaticResource H1Text}"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,12"
+                               Foreground="{DynamicResource InkBrush}" />
+
+                    <Border Style="{StaticResource CardBorder}" Padding="16">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Dynamic.Diagnostics.Options}"
+                                       Style="{StaticResource H2Text}"
+                                       FontSize="17"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource InkBrush}" />
+                            <TextBlock Text="{DynamicResource Dynamic.Diagnostics.NoAttachments}"
+                                       x:Name="DiagnosticNoAttachmentsText"
+                                       Style="{StaticResource CaptionText}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource InkBrush}"
+                                       Margin="0,6,0,0"
+                                       Visibility="Collapsed" />
+
+                            <StackPanel Margin="0,10,0,0">
+                                <CheckBox x:Name="DiagnosticIncludeAblBox"
+                                          Content="{DynamicResource Dynamic.Diagnostics.IncludeAbl}"
+                                          Style="{StaticResource RiskCheckBox}"
+                                          IsChecked="False"
+                                          Foreground="{DynamicResource InkBrush}"
+                                          Margin="0,0,0,8"
+                                          HorizontalAlignment="Left" />
+                                <CheckBox x:Name="DiagnosticIncludeLargeBootBox"
+                                          Content="{DynamicResource Dynamic.Diagnostics.IncludeLargeBoot}"
+                                          Style="{StaticResource RiskCheckBox}"
+                                          IsChecked="False"
+                                          Foreground="{DynamicResource InkBrush}"
+                                          Margin="0,0,0,8"
+                                          HorizontalAlignment="Left" />
+                            </StackPanel>
+
+                            <WrapPanel Margin="0,4,0,0" VerticalAlignment="Center">
+                                <Button Content="{DynamicResource Dynamic.Diagnostics.ChooseLocation}"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Click="OnChooseDiagnosticDestination"
+                                        Padding="14,8"
+                                        Margin="0,0,10,0" />
+                                <Button x:Name="DiagnosticConfirmButton"
+                                        Content="{DynamicResource Dynamic.Diagnostics.ConfirmExport}"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Click="OnConfirmDiagnosticExport"
+                                        IsEnabled="False"
+                                        Padding="14,8" />
+                            </WrapPanel>
+
+                            <TextBlock x:Name="DiagnosticDestinationText"
+                                       TextWrapping="Wrap"
+                                       Margin="0,10,0,0"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource InkBrush}" />
+
+                            <TextBlock x:Name="DiagnosticExportResultText"
+                                       Visibility="Collapsed"
+                                       TextWrapping="Wrap"
+                                       Margin="0,10,0,0"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource InkBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardBorder}" Padding="16" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource Dynamic.AboutCommunity}"
+                                       Style="{StaticResource H2Text}"
+                                       Margin="0,0,0,8" />
+
+                            <WrapPanel VerticalAlignment="Center">
+                                <TextBlock Text="{DynamicResource Dynamic.AboutQqGroup}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0"
+                                           Foreground="{DynamicResource InkBrush}" />
+                                <TextBlock Text="{DynamicResource Dynamic.AboutQqNumber}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,10,0"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource InkBrush}" />
+                                <Button x:Name="DiagnosticJoinQqButton"
+                                        Content="{DynamicResource Dynamic.AboutJoinQq}"
+                                        Style="{StaticResource GhostButton}"
+                                        Click="OnOpenQqGroupInvite"
+                                        Padding="10,6"
+                                        Margin="0,0,10,0" />
+                            </WrapPanel>
+
+                            <Button x:Name="DiagnosticIssuesButton"
+                                    Content="{DynamicResource Dynamic.Diagnostics.Issues}"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Click="OnOpenDiagnosticIssues"
+                                    HorizontalAlignment="Left"
+                                    Padding="14,8"
+                                    Margin="0,12,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
             <!-- 关于项目 -->
             <ScrollViewer x:Name="SupportPage"
                           Grid.Column="0"
@@ -3945,11 +4250,11 @@
                     <TextBlock Text="{DynamicResource Dynamic.AboutDevelopers}"
                                Style="{StaticResource H2Text}"
                                Margin="0,12,0,8" />
-                    <UniformGrid Columns="3" Rows="1" Margin="0,0,0,4">
+                    <UniformGrid Columns="4" Rows="1" Margin="0,0,0,4">
                         <Border Style="{StaticResource CardBorder}"
                                 Padding="14"
                                 MinHeight="108"
-                                Margin="0,0,8,0">
+                                Margin="4,0,4,0">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
@@ -4029,7 +4334,7 @@
                         <Border Style="{StaticResource CardBorder}"
                                 Padding="14"
                                 MinHeight="108"
-                                Margin="8,0,0,0">
+                                Margin="4,0,4,0">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
@@ -4060,6 +4365,46 @@
                                         <Button Content="{DynamicResource Static.AuthorBilibili}"
                                                 Style="{StaticResource GhostButton}"
                                                 Click="OnOpenH0CheungBilibili"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource CardBorder}"
+                                Padding="14"
+                                MinHeight="108"
+                                Margin="4,0,4,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Image Source="pack://application:,,,/Assets/about-cody.png"
+                                       Width="56"
+                                       Height="56"
+                                       Stretch="UniformToFill"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,12,0"
+                                       AutomationProperties.Name="{DynamicResource Dynamic.AboutCodyName}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutCodyName}"
+                                               Style="{StaticResource H2Text}"
+                                               FontSize="17"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Dynamic.AboutRoleDeveloper}"
+                                               Style="{StaticResource CaptionText}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Content="{DynamicResource Static.AuthorGithub}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenCodyGithub"
+                                                Padding="0,4"
+                                                Margin="0,0,12,0" />
+                                        <Button Content="{DynamicResource Static.AuthorBilibili}"
+                                                Style="{StaticResource GhostButton}"
+                                                Click="OnOpenCodyBilibili"
                                                 Padding="0,4"
                                                 Margin="0,0,12,0" />
                                     </WrapPanel>
@@ -4153,15 +4498,12 @@
                                        Style="{StaticResource BodyText}"
                                        TextWrapping="Wrap"
                                        Margin="0,6,0,0" />
-                            <Button Content="{DynamicResource Dynamic.AboutCopyQq}"
+                            <Button x:Name="AboutJoinQqButton"
+                                    Content="{DynamicResource Dynamic.AboutJoinQq}"
                                     Style="{StaticResource SecondaryButton}"
-                                    Click="OnCopyQqGroup"
+                                    Click="OnOpenQqGroupInvite"
                                     HorizontalAlignment="Left"
                                     Margin="0,10,0,0" />
-                            <TextBlock x:Name="AboutCopyStatus"
-                                       Style="{StaticResource CaptionText}"
-                                       Visibility="Collapsed"
-                                       Margin="0,6,0,0" />
                         </StackPanel>
                     </Border>
 
