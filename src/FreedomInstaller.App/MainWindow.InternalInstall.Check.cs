@@ -178,6 +178,9 @@ public partial class MainWindow
             return;
         }
 
+        // 进入真实检查前清掉上一轮失败展示：重检查成功时不得继续显示旧失败。
+        ClearDiagnosticFailure();
+
         var previousSerial = SelectedInternalInstallDevice()?.Serial;
 
         // 重新检查前先清掉上一轮结论：结果、电量与派生界面一起回到「未检查」。
@@ -198,7 +201,11 @@ public partial class MainWindow
 
                     if (devices.Count == 0)
                     {
-                        SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.NoDevices"));
+                        var noDevicesMessage = M("Dynamic.InternalInstall.Check.NoDevices");
+                        SetInternalInstallCheckStatus(noDevicesMessage);
+                        RecordDiagnosticFailure(
+                            M("Dynamic.Diagnostics.Stage.Check"),
+                            _uiText.Format(noDevicesMessage));
                         return;
                     }
 
@@ -211,13 +218,20 @@ public partial class MainWindow
                         return;
                     }
 
+                    RememberDiagnosticDeviceSerial(target.Serial);
+                    RememberLastDiagnosticDeviceSerial(target.Serial);
+
                     if (target.ConnectionState != ConnectionState.Authorized)
                     {
-                        SetInternalInstallCheckStatus(
+                        var notAuthorizedMessage =
                             M(
                                 "Dynamic.InternalInstall.Check.NotAuthorized",
                                 target.Serial,
-                                M(ConnectionStateKey(target.ConnectionState))));
+                                M(ConnectionStateKey(target.ConnectionState)));
+                        SetInternalInstallCheckStatus(notAuthorizedMessage);
+                        RecordDiagnosticFailure(
+                            M("Dynamic.Diagnostics.Stage.Check"),
+                            _uiText.Format(notAuthorizedMessage));
                         return;
                     }
 
@@ -255,6 +269,24 @@ public partial class MainWindow
 
                     acceptProgress = false;
 
+                    if (result.Succeeded)
+                    {
+                        // First-install readiness gate: only after a fully verified Step 1 result and only
+                        // in the OEM→AOSP internal install mode. A throw here disables the eligible Step 1
+                        // state through the existing generic check-failure reporting; no new localization
+                        // keys and no change to the diagnostics on other failures.
+                        if (IsInternalInstallMode)
+                        {
+                            InternalInstallBackend.RequireFirstInstallFirmwareCompatibility(result);
+                        }
+
+                        RememberLastSuccessfulDiagnosticCheck(result);
+                    }
+
+                    RememberDiagnosticDeviceSerial(result.FastbootSerial);
+                    RememberDiagnosticDeviceSerial(result.Android?.SocSerial);
+                    RememberDiagnosticDeviceSerial(result.Android?.Identity.Serial);
+
                     var detectedBoardBackup = false;
                     if (result.Succeeded && result.AndroidReturn == AndroidReturnState.Verified)
                     {
@@ -275,6 +307,9 @@ public partial class MainWindow
                     {
                         AppendLocalizedLog(M("Dynamic.InternalInstall.Check.FailedStage", M(InternalInstallCheckStageKey(result.FailedStage))));
                         AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", Placeholder(result.Error)));
+                        RecordDiagnosticFailure(
+                            M("Dynamic.Diagnostics.Stage.Check"),
+                            $"{T(InternalInstallCheckStageKey(result.FailedStage))}: {Placeholder(result.Error)}");
                     }
 
                     RenderInternalInstallPower();
@@ -301,9 +336,15 @@ public partial class MainWindow
                     var diagnostic = string.IsNullOrWhiteSpace(exception.Message)
                         ? UnknownValue
                         : exception.Message;
-                    SetInternalInstallCheckProgress(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
-                    SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
-                    AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
+                    var failure = UiText.BootloaderCompatibilityFailure(exception)
+                        ?? M("Dynamic.InternalInstall.Check.Failed", diagnostic);
+                    SetInternalInstallCheckProgress(failure);
+                    SetInternalInstallCheckStatus(failure);
+                    AppendLocalizedLog(failure);
+                    RecordDiagnosticFailure(
+                        M("Dynamic.Diagnostics.Stage.Check"),
+                        InstallerLog.DescribeFailure(exception),
+                        diagnostic);
                 }
             });
         }

@@ -143,6 +143,15 @@ public sealed partial class InternalInstallBackend : IDisposable
         RequireInitialProof(initialEdl);
         RequireBoundSession(deviceCheck, initialEdl, backup);
 
+        // A reinstall is direct-only: an installed Linux layout must never reach the legacy RAM/seed route
+        // that would have called the strict FindReusableBackup. The direct factory owns that decision.
+        if (InternalPartitionPlanner.FindInstalledLinuxLayout(backup.Tables[0]) is not null)
+        {
+            throw Refuse(
+                "retained-backup-requires-direct-install",
+                "Reinstalling over an installed Linux layout requires the direct 9008 image installation route.");
+        }
+
         if (InternalPartitionPlanner.FindReusableBackup(backup.Tables[0]) is not null)
         {
             throw Refuse(
@@ -401,7 +410,7 @@ public sealed partial class InternalInstallBackend : IDisposable
         && right.AndroidIdentity is not null
         && SameAndroidIdentity(left.AndroidIdentity, right.AndroidIdentity);
 
-    private static bool SameAndroidIdentity(
+    internal static bool SameAndroidIdentity(
         AndroidMaintenanceIdentity left,
         AndroidMaintenanceIdentity right) =>
         string.Equals(left.SocSerial, right.SocSerial, StringComparison.Ordinal)
@@ -487,4 +496,13 @@ public sealed class InternalInstallServices
 
     /// <summary>The adb executable path, non-blank.</summary>
     public string AdbPath { get; }
+
+    /// <summary>
+    /// Invoked after BindBackup and DetermineDirectSourceSlotsAsync have both returned
+    /// successfully and before the direct ABL/AVB chain gate. Any failure in that subsequent
+    /// gate is then diagnosable against a verified-source snapshot. Init-only; may run on a
+    /// worker thread, so subscribers must not touch the UI or dispatcher and should only
+    /// publish a snapshot reference.
+    /// </summary>
+    public Action? DiagnosticBootSourcesVerified { get; init; }
 }

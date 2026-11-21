@@ -116,17 +116,26 @@ public partial class MainWindow
             return;
         }
 
-        // 明确告知：安卓路线会重启到 9008；已有 9008 不会重启。
-        MessageBoxResult answer = MessageBox.Show(
-            this,
-            T("Dynamic.Global.Dialog.ConnectWarning"),
-            T("Dynamic.Global.Dialog.Title"),
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Information,
-            MessageBoxResult.No);
-
-        if (answer != MessageBoxResult.Yes)
+        // 恢复视图只连接在场的 9008，不出现安卓重启确认；备份视图保留原有确认。
+        if (_globalRecoveryMode == GlobalRecoveryMode.Backup)
         {
+            MessageBoxResult answer = MessageBox.Show(
+                this,
+                T("Dynamic.Global.Dialog.ConnectWarning"),
+                T("Dynamic.Global.Dialog.Title"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information,
+                MessageBoxResult.No);
+
+            if (answer != MessageBoxResult.Yes)
+            {
+                return;
+            }
+        }
+
+        if (!GlobalRestoreEnvironmentReady)
+        {
+            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.RestoreEnvironmentRequired");
             return;
         }
 
@@ -145,6 +154,12 @@ public partial class MainWindow
                     {
                         if (_globalRestoreSet is null && !string.IsNullOrWhiteSpace(_globalRestoreSource))
                         {
+                            // 打开备份前先只读确认在场 9008：缺失端点优先要求人工进入 EDL，绝不先打开备份。
+                            if (!await HasPresentGlobalEdlAsync(new WindowsEdlEndpointDiscovery(), token))
+                            {
+                                throw new InvalidOperationException(T("Dynamic.Global.Error.ManualEdlRequired"));
+                            }
+
                             // 备份来源必须先完成本地完整校验，之后的任何重启都只针对已核实的身份。
                             SetText(GlobalProgressStatusText, "Dynamic.Global.Status.VerifyingRestoreSource");
                             _globalRestoreSet = await GlobalEdlBackup.OpenAsync(
@@ -250,8 +265,13 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested();
 
         var discovery = new WindowsEdlEndpointDiscovery();
-        bool anyPresentEdl = discovery.ReadPresent()
-            .Any(endpoint => endpoint is not null && IsGlobalEdlInstance(endpoint.DeviceInstanceId));
+        bool anyPresentEdl = await HasPresentGlobalEdlAsync(discovery, token);
+
+        // 恢复视图只接管在场的 9008；不在场时在访问 ADB 之前明确要求人工进入 EDL。
+        if (_globalRecoveryMode == GlobalRecoveryMode.Restore && !anyPresentEdl)
+        {
+            throw new InvalidOperationException(T("Dynamic.Global.Error.ManualEdlRequired"));
+        }
 
         if (anyPresentEdl)
         {
@@ -393,6 +413,17 @@ public partial class MainWindow
         AppendLocalizedLog(M("Dynamic.Global.Log.Connected", UiText.ModelName(profile.Model), entered.BusSerialHex));
         SetText(GlobalProgressStatusText, "Dynamic.Global.Status.Connected");
     }
+
+    /// <summary>只读在场检查：在工作线程上枚举端点，仅按现有 VID/PID 判定。</summary>
+    private static Task<bool> HasPresentGlobalEdlAsync(IEdlEndpointDiscovery discovery, CancellationToken token) =>
+        Task.Run(
+            () =>
+            {
+                token.ThrowIfCancellationRequested();
+                return discovery.ReadPresent()
+                    .Any(endpoint => endpoint is not null && IsGlobalEdlInstance(endpoint.DeviceInstanceId));
+            },
+            token);
 
     private static bool IsGlobalEdlInstance(string? deviceInstanceId) =>
         !string.IsNullOrEmpty(deviceInstanceId)
@@ -588,34 +619,11 @@ public partial class MainWindow
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_globalOutputParent))
+        // 准备要求主机环境就绪；恢复视图不出现安卓重启确认。
+        if (!GlobalRestoreEnvironmentReady)
         {
-            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.OutputRequired");
+            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.RestoreEnvironmentRequired");
             return;
-        }
-
-        if (!GlobalRestoreDirectoriesValid())
-        {
-            SetText(GlobalProgressStatusText, "Dynamic.Global.Error.OutputInsideRestoreSource");
-            return;
-        }
-
-        // 准备阶段会对未连接的设备隐式建立连接：明确告知一次，覆盖安卓重启到 9008 与纯 9008 接管两种情形。
-        // 复用已有连接时不再重复询问；最终写入仍有它自己的破坏性确认。
-        if (_globalEdlClient is null)
-        {
-            MessageBoxResult connectAnswer = MessageBox.Show(
-                this,
-                T("Dynamic.Global.Dialog.ConnectWarning"),
-                T("Dynamic.Global.Dialog.Title"),
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Information,
-                MessageBoxResult.No);
-
-            if (connectAnswer != MessageBoxResult.Yes)
-            {
-                return;
-            }
         }
 
         _globalOperationActive = true;
@@ -627,6 +635,19 @@ public partial class MainWindow
                 try
                 {
                     InvalidateGlobalRestorePreparation();
+
+                    // 工作记录固定写入启动时选定工作目录下的 records 子目录，绝不落入所选备份来源。
+                    string recordsParent = Path.Combine(_workDirectory!.RootPath, "records");
+                    if (!IsInternalInstallBackupParentOutsideExisting(recordsParent, _globalRestoreSource!))
+                    {
+                        throw new InvalidOperationException(
+                            T("Dynamic.Global.Error.RestoreRecordsInsideSource"));
+                    }
+
+                    if (!Directory.Exists(recordsParent))
+                    {
+                        Directory.CreateDirectory(recordsParent);
+                    }
 
                     SetText(GlobalProgressStatusText, "Dynamic.Global.Status.VerifyingRestoreSource");
                     GlobalEdlBackupSet set = await GlobalEdlBackup.OpenAsync(
@@ -690,7 +711,7 @@ public partial class MainWindow
                     GlobalEdlRestorePlan plan = await GlobalEdlRestore.PrepareAsync(
                         _globalEdlClient!,
                         set,
-                        _globalOutputParent!,
+                        recordsParent,
                         progress,
                         token);
 

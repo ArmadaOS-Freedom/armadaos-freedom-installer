@@ -239,6 +239,7 @@ public partial class MainWindow
                 var client = _internalInstallEdlClient;
                 var resetUnknown = false;
                 string? resetDiagnostic = null;
+                string? resetFullDetail = null;
 
                 if (!_internalInstallExitResetAttempted)
                 {
@@ -296,6 +297,8 @@ public partial class MainWindow
                         {
                             resetUnknown = true;
                             resetDiagnostic = DiagnosticOf(exception);
+                            resetFullDetail = InstallerLog.DescribeFailure(exception);
+                            AppendWorkLogLine(resetFullDetail);
                             SetInternalInstallExitStatus(
                                 M("Dynamic.InternalInstall.Exit.ResetUnknown", resetDiagnostic));
                         }
@@ -322,12 +325,20 @@ public partial class MainWindow
                         break;
 
                     case InternalInstallExitWaitOutcome.Cancelled:
-                        SetInternalInstallExitStatus(
+                        var cancelledMessage =
                             resetUnknown
                                 ? M(
                                     "Dynamic.InternalInstall.Exit.ResetUnknown",
                                     resetDiagnostic ?? UnknownValue)
-                                : M("Dynamic.InternalInstall.Exit.Cancelled"));
+                                : M("Dynamic.InternalInstall.Exit.Cancelled");
+                        SetInternalInstallExitStatus(cancelledMessage);
+                        if (resetUnknown)
+                        {
+                            RecordDiagnosticFailure(
+                                M("Dynamic.Diagnostics.Stage.Exit"),
+                                resetFullDetail ?? _uiText.Format(cancelledMessage),
+                                _uiText.Format(cancelledMessage));
+                        }
                         break;
 
                     default:
@@ -641,6 +652,17 @@ public partial class MainWindow
         }
 
         SetText(InternalInstallExitMaintenanceStatusText, message);
+        switch (message.Key)
+        {
+            case "Dynamic.InternalInstall.Exit.NeedIdentity":
+            case "Dynamic.InternalInstall.Exit.EntryUnconfirmed":
+            case "Dynamic.InternalInstall.Exit.ProofFailed":
+            case "Dynamic.InternalInstall.Exit.Mismatch":
+            case "Dynamic.InternalInstall.Exit.ResetUnknownUnconfirmed":
+            case "Dynamic.InternalInstall.Exit.ReturnUnconfirmed":
+                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Exit"), _uiText.Format(message));
+                break;
+        }
     }
 
     /// <summary>同一阶段不重复写，避免 500ms 轮询反复刷新同一条状态。</summary>

@@ -156,6 +156,8 @@ public sealed class BundledAndroidDriverTests
             return Task.FromResult(new DriverInstallResult((DriverInstallOutcome)outcome, null, null));
         });
         Assert.Equal((DriverInstallOutcome)outcome, result.Outcome);
+        // 第一步未 Completed 时不得标记「前一个包已完成」。
+        Assert.False(result.EarlierPackageCompleted);
         Assert.Equal(["google.inf"], calls);
     }
 
@@ -176,5 +178,7 @@ public sealed class BundledAndroidDriverTests
             });
         Assert.Equal(["google.inf", "oplus.inf"], calls);
         Assert.Equal((DriverInstallOutcome)outcome, result.Outcome);
+        // 第一步 Completed，第二步无论结果如何都应带上「前一个包已完成」标记。
+        Assert.True(result.EarlierPackageCompleted);
     }
 }

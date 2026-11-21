@@ -406,6 +406,10 @@ public partial class MainWindow
                 var check = new InternalInstallDeviceCheck(transport.AdbPath, transport.FastbootPath, _runner);
                 var result = await check.CheckAsync(target.Serial, progress, token);
                 acceptProgress = false;
+                if (result.Succeeded)
+                {
+                    InternalInstallBackend.RequireFirstInstallFirmwareCompatibility(result);
+                }
                 _internalInstallDeviceCheck = result;
                 RenderDeviceCheck(result);
                 if (!result.Succeeded && !result.Cancelled)
@@ -429,9 +433,11 @@ public partial class MainWindow
                 _internalInstallDeviceCheck = null;
                 _internalInstallPower = null;
                 var diagnostic = string.IsNullOrWhiteSpace(exception.Message) ? UnknownValue : exception.Message;
-                SetText(InternalInstallCheckProgressText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
-                SetText(InternalInstallCheckStatusText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
-                AppendLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
+                var failure = UiText.BootloaderCompatibilityFailure(exception)
+                    ?? M("Dynamic.InternalInstall.Check.Failed", diagnostic);
+                SetText(InternalInstallCheckProgressText, failure);
+                SetText(InternalInstallCheckStatusText, failure);
+                AppendLog(failure);
             }
         });
     }
@@ -1202,14 +1208,13 @@ public partial class MainWindow
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
                 ResetConfirmation();
-                var key = exception.Message switch
-                {
-                    var m when m.StartsWith("requires-complete-backup-with-efisp:", StringComparison.Ordinal) =>
-                        M("Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired"),
-                    var m when m.StartsWith("requires-compatible-bootloader:", StringComparison.Ordinal) =>
-                        M("Dynamic.InternalInstall.Prepared.CompatibilityRequired"),
-                    _ => M("Dynamic.InternalInstall.Prepared.Failed", exception.Message),
-                };
+                var key = UiText.BootloaderCompatibilityFailure(exception, check.FastbootLockState)
+                    ?? (exception.Message switch
+                    {
+                        var m when m.StartsWith("requires-complete-backup-with-efisp:", StringComparison.Ordinal) =>
+                            M("Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired"),
+                        _ => M("Dynamic.InternalInstall.Prepared.Failed", exception.Message),
+                    });
                 SetText(InternalInstallCapacityStatusText, key);
                 AppendLog(key);
             }
@@ -1264,8 +1269,11 @@ public partial class MainWindow
         InternalInstallEraseRiskCheck.IsEnabled = backup is not null && validation is { IsValid: true };
 
         var recoveryImageUsedMiB = (set.SummaryUsedBytes / 1024d / 1024d).ToString("0.0", CultureInfo.CurrentCulture) + " MiB";
+        var summaryKey = set.BoardSummary is null
+            ? "Dynamic.InternalInstall.Prepared.ReinstallSummary"
+            : "Dynamic.InternalInstall.Prepared.Summary";
         var summary = M(
-            "Dynamic.InternalInstall.Prepared.Summary",
+            summaryKey,
             model,
             prepared.AndroidSerial,
             prepared.AndroidBuild,
@@ -1281,7 +1289,7 @@ public partial class MainWindow
             FormatBytes(set.Allocation.LinuxBootBytes),
             FormatBytes(prepared.BoardBackupBytes),
             recoveryImageUsedMiB,
-            FormatBytes(set.BoardSummary.Length),
+            set.BoardSummary is { } boardSummary ? FormatBytes(boardSummary.Length) : string.Empty,
             prepared.ArtifactPlanSha256,
             set.DirectoryPath);
         summary = prepared.BootTrustMode switch
@@ -1296,7 +1304,13 @@ public partial class MainWindow
             InternalInstallSummaryText,
             inactiveWarning is null ? summary : M("Dynamic.InternalInstall.Execution.WithFailureDetails", summary, inactiveWarning));
 
-        AppendLog(M("Dynamic.InternalInstall.Prepared.RecoveryImageLog", recoveryImageUsedMiB, FormatBytes(set.BoardSummary.Length)));
+        var recoveryImageLogKey = set.BoardSummary is null
+            ? "Dynamic.InternalInstall.Prepared.ReinstallSummaryLog"
+            : "Dynamic.InternalInstall.Prepared.RecoveryImageLog";
+        AppendLog(M(
+            recoveryImageLogKey,
+            recoveryImageUsedMiB,
+            set.BoardSummary is { } logBoardSummary ? FormatBytes(logBoardSummary.Length) : string.Empty));
         AppendLog(M(
             "Dynamic.InternalInstall.Prepared.DirectEvidenceLog",
             prepared.ConfirmationId,

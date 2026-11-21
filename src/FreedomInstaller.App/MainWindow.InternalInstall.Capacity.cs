@@ -326,6 +326,7 @@ public partial class MainWindow
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
                 M("Dynamic.InternalInstall.Capacity.ImportFailed", exception.Message));
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
         }
         catch (Exception exception)
         {
@@ -333,6 +334,7 @@ public partial class MainWindow
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
                 M("Dynamic.InternalInstall.Capacity.ImportFailed", exception.Message));
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
         }
         finally
         {
@@ -354,6 +356,7 @@ public partial class MainWindow
             var reasons = string.Join(T("Dynamic.Package.ReasonSeparator"), validation.Reasons);
             SetInternalInstallCapacityPackageStatus(
                 M("Dynamic.InternalInstall.Capacity.Invalid", reasons));
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), reasons);
             return;
         }
 
@@ -424,6 +427,7 @@ public partial class MainWindow
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Capacity"), exception.Message);
             DisableInternalInstallCapacitySlider(
                 M("Dynamic.InternalInstall.Capacity.RangeFailed", exception.Message));
             return false;
@@ -454,7 +458,10 @@ public partial class MainWindow
         return ApplyInternalInstallCapacityPlan(chosen);
     }
 
-    /// <summary>默认提案是原始 userdata 整 GiB 的一半，再夹到真实范围内；不读取当前安卓已用空间。</summary>
+    /// <summary>
+    /// 默认提案：全新 / 旧路线取原始 userdata 整 GiB 的一半；重装（原始 GPT 已是已安装 Linux 布局）取整个
+    /// userdata 范围（whole GiB）。两者都夹到真实范围内，不读取当前安卓已用空间。
+    /// </summary>
     private static long InternalInstallDefaultAndroidGiB(GptTable table, AndroidAllocationRange range)
     {
         long userdataBytes = 0;
@@ -468,7 +475,8 @@ public partial class MainWindow
         }
 
         var wholeGiB = userdataBytes / Gibibyte;
-        var proposal = wholeGiB / 2;
+        bool reinstall = InternalPartitionPlanner.FindInstalledLinuxLayout(table) is not null;
+        var proposal = reinstall ? wholeGiB : wholeGiB / 2;
         if (proposal < range.MinimumGiB)
         {
             return range.MinimumGiB;
@@ -667,6 +675,10 @@ public partial class MainWindow
             return;
         }
 
+        // 进入真正的新准备工作前清空旧的引导文件证据与最近一次附件失败判决；
+        // 即使哈希命中等缓存路径不进入此处，旧证据也不会被新失败复用。
+        ResetDiagnosticBootEvidence();
+
         var rendered = false;
 
         SetInternalInstallConfirmProgressIndeterminate(true);
@@ -742,42 +754,6 @@ public partial class MainWindow
                     SetInternalInstallConfirmStatus(M("Dynamic.InternalInstall.Prepared.Cancelled"));
                     throw;
                 }
-                catch (InvalidOperationException exception) when (exception.Message.StartsWith(
-                    "requires-complete-backup-with-efisp:",
-                    StringComparison.Ordinal))
-                {
-                    // 只有后端明确报告备份缺少含 efisp 的完整启动恢复资料时才换成专用提示。
-                    AppendInternalInstallPreparationFailure(exception);
-                    SetInternalInstallConfirmStatus(
-                        M("Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired"));
-                }
-                catch (InvalidOperationException exception) when (exception.Message.StartsWith(
-                    "gbl-boot-chain-key-mismatch:",
-                    StringComparison.Ordinal))
-                {
-                    // 只有后端明确报告签名链不匹配时才换成专用提示；其余异常保留原始消息。
-                    AppendInternalInstallPreparationFailure(exception);
-                    SetInternalInstallConfirmStatus(
-                        M("Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch"));
-                }
-                catch (InvalidOperationException exception) when (exception.Message.StartsWith(
-                    "gbl-runtime-region-unknown:",
-                    StringComparison.Ordinal))
-                {
-                    // 只有后端明确报告地区无法确认或两槽冲突时才换成专用提示，绝不按语言猜地区。
-                    AppendInternalInstallPreparationFailure(exception);
-                    SetInternalInstallConfirmStatus(
-                        M("Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown"));
-                }
-                catch (InvalidOperationException exception) when (exception.Message.StartsWith(
-                    "requires-compatible-bootloader:",
-                    StringComparison.Ordinal))
-                {
-                    // 只有后端明确要求匹配的引导加载器时才换成兼容性提示；其余异常保留原始消息。
-                    AppendInternalInstallPreparationFailure(exception);
-                    SetInternalInstallConfirmStatus(
-                        M("Dynamic.InternalInstall.Prepared.CompatibilityRequired"));
-                }
                 catch (Exception exception) when (exception is IOException
                     or UnauthorizedAccessException
                     or InvalidDataException
@@ -787,9 +763,11 @@ public partial class MainWindow
                     or NotImplementedException
                     or MaintenanceException)
                 {
-                    AppendInternalInstallPreparationFailure(exception);
-                    SetInternalInstallConfirmStatus(
-                        M("Dynamic.InternalInstall.Prepared.Failed", exception.Message));
+                    var failure = UiText.InternalInstallPreparationFailure(exception, _internalInstallDeviceCheck?.FastbootLockState);
+                    SetInternalInstallConfirmStatus(failure);
+                    AppendLocalizedLog(failure);
+                    AppendWorkLogLine(T("Dynamic.InternalInstall.Prepared.TechnicalDetails", InstallerLog.DescribeFailure(exception)));
+                    RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Prepare"), exception.Message);
                 }
                 finally
                 {
@@ -816,13 +794,6 @@ public partial class MainWindow
             RefreshInternalInstallActions();
         }
     }
-
-    /// <summary>
-    /// 准备失败先留下真实诊断：异常类型与完整消息进入日志，之后界面才可以把它替换成简体提示。
-    /// 取消不是失败，因此不经过这里。
-    /// </summary>
-    private void AppendInternalInstallPreparationFailure(Exception exception) =>
-        AppendLocalizedLog(M("Dynamic.RawValue", InstallerLog.DescribeFailure(exception)));
 
     /// <summary>确认页摘要只使用真实后端与方案对象的实际字段，不声称任何写入已完成。</summary>
     private void RenderInternalInstallPreparedSummary(
@@ -935,8 +906,11 @@ public partial class MainWindow
         var recoveryImageUsedMiB = (set.SummaryUsedBytes / 1024d / 1024d)
             .ToString("0.0", System.Globalization.CultureInfo.CurrentCulture) + " MiB";
 
+        var preparedSummaryKey = set.BoardSummary is null
+            ? "Dynamic.InternalInstall.Prepared.ReinstallSummary"
+            : "Dynamic.InternalInstall.Prepared.Summary";
         var preparedSummaryMessage = M(
-            "Dynamic.InternalInstall.Prepared.Summary",
+            preparedSummaryKey,
             model,
             serial,
             build,
@@ -952,7 +926,7 @@ public partial class MainWindow
             FormatBytes(set.Allocation.LinuxBootBytes),
             FormatBytes(prepared.BoardBackupBytes),
             recoveryImageUsedMiB,
-            FormatBytes(set.BoardSummary.Length),
+            set.BoardSummary is { } boardSummary ? FormatBytes(boardSummary.Length) : string.Empty,
             prepared.ArtifactPlanSha256,
             set.DirectoryPath);
 
@@ -984,11 +958,14 @@ public partial class MainWindow
 
         // 指纹、证据目录与材料目录只写进本地化日志，不进入面向用户的工程卡片。
         // 直装路径只记录真实共有的字段：原始工具、候选等哈希留在 Core 证据里，不在这里另造字段。
+        var recoveryImageLogKey = set.BoardSummary is null
+            ? "Dynamic.InternalInstall.Prepared.ReinstallSummaryLog"
+            : "Dynamic.InternalInstall.Prepared.RecoveryImageLog";
         AppendLocalizedLog(
             M(
-                "Dynamic.InternalInstall.Prepared.RecoveryImageLog",
+                recoveryImageLogKey,
                 recoveryImageUsedMiB,
-                FormatBytes(set.BoardSummary.Length)));
+                set.BoardSummary is { } logBoardSummary ? FormatBytes(logBoardSummary.Length) : string.Empty));
 
         AppendLocalizedLog(
             M(
