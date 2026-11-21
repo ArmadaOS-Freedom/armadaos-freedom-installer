@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -480,6 +481,9 @@ public partial class MainWindow
         {
             ReportEnvironment(M("Dynamic.Environment.Installing"));
 
+            // 新一次显式修复：清掉上一次修复留下的快照，避免旧结果污染新的自检导出。
+            _diagnosticLastDriverRepairProbe = null;
+
             QualcommDriverFiles? files = null;
             AndroidDriverFiles? androidFiles = null;
             var selection = WindowsDriverInstaller.SelectPackages(
@@ -492,6 +496,8 @@ public partial class MainWindow
             catch (Exception)
             {
                 // 真实解包与哈希校验失败：不进入 UAC。
+                _diagnosticLastDriverInstall = new DriverInstallResult(
+                    DriverInstallOutcome.Failed, null, "bundled-archive-unavailable");
                 _environmentCheckCompleted = false;
                 ReportEnvironment(M("Dynamic.Environment.InstallFailed"));
                 return;
@@ -501,6 +507,8 @@ public partial class MainWindow
             if (bootIdentity is null || !TryWritePendingRebootMarker(bootIdentity))
             {
                 // 缓存写入失败时绝不进入 UAC。
+                _diagnosticLastDriverInstall = new DriverInstallResult(
+                    DriverInstallOutcome.Failed, null, "pending-reboot-marker-write-failed");
                 _environmentCheckCompleted = false;
                 _environmentStateUnknown = true;
                 ReportEnvironment(M("Dynamic.Environment.MarkerFailed"));
@@ -524,19 +532,34 @@ public partial class MainWindow
                     var qualcommCompleted = files is not null;
                     var androidResult = await WindowsDriverInstaller.InstallAndroidAsync(androidFiles);
                     installResult = qualcommCompleted
-                        ? androidResult with { EarlierPackageCompleted = true }
+                        ? androidResult with
+                        {
+                            EarlierPackageCompleted = true,
+                            Attempts = installResult.Attempts.Concat(androidResult.Attempts).ToArray(),
+                        }
                         : androidResult;
                 }
             }
-            catch (Exception)
+            catch (Exception failure)
             {
                 // 未知失败保留标记，保持未就绪，不宣称成功也不自动重启。
+                _diagnosticLastDriverInstall = new DriverInstallResult(
+                    DriverInstallOutcome.Failed, null, failure.Message);
                 _environmentCheckCompleted = false;
                 ReportEnvironment(M("Dynamic.Environment.InstallFailed"));
                 return;
             }
 
-            await ApplyInstallOutcomeAsync(installResult);
+            var installedResult = installResult;
+            _diagnosticLastDriverInstall = installedResult;
+            var environmentCheckStartUtc = _environmentCheckStartUtc;
+
+            await ApplyInstallOutcomeAsync(installedResult);
+
+            if (_environmentCheckStartUtc != environmentCheckStartUtc)
+            {
+                _diagnosticLastDriverRepairProbe = new DriverRepairProbe(_environmentCheckStartUtc, _environmentCheckFinishUtc, _environmentDriverResult, _environmentAdbResult, _environmentFastbootResult);
+            }
         }
         finally
         {

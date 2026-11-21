@@ -53,7 +53,45 @@ public sealed class WindowsAndroidDriverTests
     {
         Assert.False(Decide([Package("oem1.inf", [D00d, Ee0])], mode: AndroidUsbMode.Adb).IsReady);
         Assert.Equal(WindowsDriverCheckState.Prepared,
-            Decide([Package("oem1.inf", Adb)], mode: AndroidUsbMode.Adb).State);
+            Decide([Package("oem98.inf", Adb[..4], signed: true)], mode: AndroidUsbMode.Adb).State);
+    }
+
+    [Fact]
+    public void AdbEndpointRequiresBoundPackage()
+    {
+        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var endpoint = Create("DriverEndpointEvidence", Adb[0] + @"\PRIVATE-SERIAL", "oem98.inf", "WinUSB", 8u, 0u, true, null);
+        Assert.Equal(WindowsDriverCheckState.Connected, Decide([adb], [endpoint], mode: AndroidUsbMode.Adb).State);
+    }
+
+    [Fact]
+    public void AdbUntrustedBindingIsProblem()
+    {
+        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var google = Package("oem56.inf", Adb, signed: false);
+        var endpoint = Create("DriverEndpointEvidence", Adb[4] + @"\PRIVATE-SERIAL", "oem56.inf", "WinUSB", 8u, 0u, true, null);
+        Assert.Equal(WindowsDriverCheckState.Problem, Decide([adb, google], [endpoint], mode: AndroidUsbMode.Adb).State);
+    }
+
+    [Fact]
+    public void RejectedGooglePackageRemainsProblem()
+    {
+        Assert.Equal(WindowsDriverCheckState.Problem,
+            Decide([Package("oem56.inf", Adb, signed: false)], mode: AndroidUsbMode.Adb).State);
+    }
+
+    [Fact]
+    public void MissingAdbEndpointsReportRejectedGooglePackage()
+    {
+        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var google = Package("oem56.inf", Adb, signed: false);
+        google.GetType().GetProperty("SignatureErrorCode")!.SetValue(google, unchecked((int)0xE0000242));
+        var result = Decide([adb, google], mode: AndroidUsbMode.Adb);
+        Assert.Equal(WindowsDriverCheckState.Prepared, result.State);
+        Assert.Equal(Adb[4..], result.MissingHardwareIds.ToArray());
+        var rejection = Assert.Single(result.RejectedPackages);
+        Assert.Equal("oem56.inf", rejection.PublishedInf);
+        Assert.Equal<int?>(unchecked((int)0xE0000242), rejection.SignatureErrorCode);
     }
 
     [Fact]
@@ -88,12 +126,137 @@ public sealed class WindowsAndroidDriverTests
         Assert.Equal(WindowsDriverCheckState.Unknown, Decide([Package("oem1.inf", [Ee0, D00d])], endpointFailure: "denied").State);
     }
 
+    [Fact]
+    public void EndpointQueryFailureStillCarriesPackageEvidence()
+    {
+        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var google = Package("oem56.inf", Adb, signed: false);
+        google.GetType().GetProperty("SignatureErrorCode")!.SetValue(google, unchecked((int)0xE0000242));
+        var result = Decide([adb, google], endpointFailure: "fixture endpoint query unavailable", mode: AndroidUsbMode.Adb);
+        Assert.Equal(WindowsDriverCheckState.Unknown, result.State);
+        Assert.Equal(Adb[4..], result.MissingHardwareIds.ToArray());
+        var rejection = Assert.Single(result.RejectedPackages);
+        Assert.Equal("oem56.inf", rejection.PublishedInf);
+        Assert.Equal<int?>(unchecked((int)0xE0000242), rejection.SignatureErrorCode);
+    }
+
+    [Theory]
+    [InlineData(true, "SERIAL-01")]
+    [InlineData(false, null)]
+    public void ResolveAdbUsbSerialUsesParentCompositeSerialOnlyWhenUnique(bool uniqueId, string? expected) =>
+        Assert.Equal(expected, Method("ResolveAdbUsbSerial").Invoke(null,
+            new object?[] { @"USB\VID_17EF&PID_7FE2&MI_01\6&ABC&0&0001", @"USB\VID_17EF&PID_7FE2\SERIAL-01", uniqueId }));
+
+    [Theory]
+    [InlineData("SERIAL_01", "SERIAL_01")]
+    [InlineData("SERIAL.01", "SERIAL.01")]
+    public void ResolveAdbUsbSerialAcceptsCompositeSerialWithUnderscoreAndDot(string parentSerial, string expected) =>
+        Assert.Equal(expected, Method("ResolveAdbUsbSerial").Invoke(null,
+            new object?[] { @"USB\VID_17EF&PID_7FE2&MI_01\6&ABC&0&0001", @"USB\VID_17EF&PID_7FE2\" + parentSerial, true }));
+
+    [Fact]
+    public void ResolveAdbUsbSerialRejectsNonUsbParents()
+    {
+        Assert.Null(Method("ResolveAdbUsbSerial").Invoke(null, new object?[] { @"USB\VID_17EF&PID_7FE2&MI_01\6&ABC&0&0001", @"USB\VID_17EF&PID_7FE3\SERIAL-01", true }));
+        Assert.Null(Method("ResolveAdbUsbSerial").Invoke(null, new object?[] { @"USB\VID_17EF&PID_7FE2&MI_01\6&ABC&0&0001", @"USB\VID_17EF&PID_7FE2&MI_00\SERIAL-01", true }));
+    }
+
+    [Fact]
+    public void ResolveAdbUsbSerialRejectsGeneratedParentSuffixAndAcceptsOwnSerial()
+    {
+        Assert.Null(Method("ResolveAdbUsbSerial").Invoke(null, new object?[] { @"USB\VID_17EF&PID_7FE2&MI_01\6&ABC&0&0001", @"USB\VID_17EF&PID_7FE2\6&ABC&0&0001", true }));
+        Assert.Equal("SERIAL-01", Method("ResolveAdbUsbSerial").Invoke(null, new object?[] { @"USB\VID_17EF&PID_7FE2\SERIAL-01", null, true }));
+    }
+
     private static WindowsDriverCheckResult Decide(object[] packages, object[]? endpoints = null,
         string? packageFailure = null, string? endpointFailure = null, AndroidUsbMode mode = AndroidUsbMode.Fastboot)
     {
         var snapshot = Create("DriverEvidenceSnapshot", true, null, packageFailure, endpointFailure,
             Typed("DriverPackageEvidence", packages), Typed("DriverEndpointEvidence", endpoints ?? []));
         return (WindowsDriverCheckResult)Method("DecideAndroid").Invoke(null, [snapshot, mode])!;
+    }
+    [Fact]
+    public void SelectedAdbMissingWhenNoMatchingEndpointPresent()
+    {
+        var adb = Package("oem98.inf", Adb, signed: true);
+        var snapshot = CreateSnapshot([adb], [Endpoint("oem98.inf")]);
+        Assert.Equal(WindowsDriverCheckState.Missing, SelectedAdb(snapshot, "SERIAL-01").State);
+    }
+
+    [Fact]
+    public void SelectedAdbConnectsExactOemSignedBinding()
+    {
+        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var google = Package("oem56.inf", Adb, signed: false);
+        var good = SelectedEndpoint("oem98.inf", "SERIAL-01");
+        var bad = SelectedEndpoint("oem56.inf", "SERIAL-02");
+        Assert.Equal(WindowsDriverCheckState.Connected, SelectedAdb(CreateSnapshot([adb, google], [good, bad]), "SERIAL-01").State);
+        Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([adb, google], [good, bad]), "SERIAL-02").State);
+    }
+
+    [Fact]
+    public void SelectedAdbDuplicateSerialIsProblem()
+    {
+        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var a = SelectedEndpoint("oem98.inf", "SERIAL-01");
+        var b = SelectedEndpoint("oem98.inf", "SERIAL-01");
+        Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([adb], [a, b]), "SERIAL-01").State);
+    }
+
+    [Fact]
+    public void SelectedAdbLenovoWinUsbInboxPackage()
+    {
+        const string lenovo = @"USB\VID_17EF&PID_7FE2&MI_01";
+        var ep = Create("DriverEndpointEvidence", lenovo + @"\SERIAL-01", "winusb.inf", "WinUSB", 8u, 0u, true, null);
+        ep.GetType().GetProperty("UsbSerial")!.SetValue(ep, "SERIAL-01");
+        var emptyIds = Array.Empty<string>();
+        ep.GetType().GetProperty("InboxAdbPackage")!.SetValue(ep, Package("winusb.inf", emptyIds, signed: true));
+        Assert.Equal(WindowsDriverCheckState.Connected, SelectedAdb(CreateSnapshot([], [ep]), "SERIAL-01").State);
+        ep.GetType().GetProperty("InboxAdbPackage")!.SetValue(ep, null);
+        Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([], [ep]), "SERIAL-01").State);
+        ep.GetType().GetProperty("InboxAdbPackage")!.SetValue(ep, Package("winusb.inf", emptyIds, signed: false));
+        Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([], [ep]), "SERIAL-01").State);
+    }
+
+    [Fact]
+    public async Task DiagnosticBundle_SelectedAdbVerifierDetail_RedactsSyntheticIdentityButKeepsCauseAndCode()
+    {
+        var ep = Create("DriverEndpointEvidence", @"USB\VID_17EF&PID_7FE2&MI_01\PRIVATE_USB.77", "winusb.inf", "WinUSB", 8u, 0u, true,
+            "SetupVerifyInfFileW could not verify 0x00000005 for " + @"USB\VID_17EF&PID_7FE2&MI_01\PRIVATE_USB.77 using " + @"C:\Users\private-fixture\driver.inf");
+        ep.GetType().GetProperty("UsbSerial")!.SetValue(ep, "PRIVATE_USB.77");
+        var result = SelectedAdb(CreateSnapshot([], [ep]), "PRIVATE_USB.77");
+        Assert.Equal(WindowsDriverCheckState.Unknown, result.State);
+
+        var dest = Directory.CreateTempSubdirectory();
+        try
+        {
+            var request = new DiagnosticExportRequest("summary", "log", [], [], false, false)
+            {
+                HostEnvironment = new Dictionary<string, string?> { ["driver.adb.deviceCheck.detail"] = result.Detail }
+            };
+            await DiagnosticBundle.ExportAsync(Path.Combine(dest.FullName, "bundle.zip"), request);
+            using var zip = System.IO.Compression.ZipFile.OpenRead(Path.Combine(dest.FullName, "bundle.zip"));
+            using var stream = zip.Entries.Single(e => e.FullName == "environment.json").Open();
+            using var doc = System.Text.Json.JsonDocument.Parse(stream);
+            var text = doc.RootElement.GetProperty("driver.adb.deviceCheck.detail").GetString();
+            Assert.Contains("SetupVerifyInfFileW could not verify", text);
+            Assert.Contains("0x00000005", text);
+            Assert.DoesNotContain("private-fixture", text);
+            Assert.DoesNotContain("PRIVATE_USB.77", text);
+        }
+        finally { dest.Delete(true); }
+    }
+
+    private static WindowsDriverCheckResult SelectedAdb(object snapshot, string serial) =>
+        (WindowsDriverCheckResult)Method("DecideSelectedAdb").Invoke(null, [snapshot, serial])!;
+    private static object CreateSnapshot(object[] packages, object[] endpoints) =>
+        Create("DriverEvidenceSnapshot", true, null, null, null,
+            Typed("DriverPackageEvidence", packages), Typed("DriverEndpointEvidence", endpoints));
+    private static object SelectedEndpoint(string inf, string serial)
+    {
+        var obj = Create("DriverEndpointEvidence", Adb[0] + @"\" + serial, inf, "WinUSB", 8u, 0u, true, null);
+        obj.GetType().GetProperty("UsbSerial")!.SetValue(obj, serial);
+        return obj;
     }
     private static object Package(string inf, string[] ids, bool signed = true)
     {
