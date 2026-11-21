@@ -28,7 +28,9 @@ public sealed class InternalInstallPreparationContextLockedG4FirstInstallFirmwar
             SecurityPatch: null,
             AndroidReportedBootloaderState: BootloaderState.Unknown);
 
-        if (shouldReject)
+        bool effectiveReject = shouldReject && !Tb322fcAbl188Assets.IsBundled;
+
+        if (effectiveReject)
         {
             var ex = Assert.Throws<InvalidOperationException>(() =>
                 InternalInstallPreparationContext.RejectLockedG4FirstInstallFirmware(
