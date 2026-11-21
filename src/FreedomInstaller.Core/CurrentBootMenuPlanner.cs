@@ -252,6 +252,52 @@ public sealed class CurrentBootMenuPlan : IDisposable
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     /// <summary>
+    /// Confirms this plan still holds the live sealed authority whose initialized-B
+    /// proof actually backs the requested cross-slot A->B material, and returns the
+    /// proof's own claim role names. Revalidates the authority once (which already
+    /// rehashes every held claim and the owned proof); on any mismatch throws the
+    /// original cross-slot refusal so slot-to-slot substitution stays refused.
+    /// Never exposes the authority.
+    /// </summary>
+    internal async Task<IReadOnlyList<string>> VerifyInitializedInactiveSourceAsync(
+        CurrentBootMenuSlot slot,
+        InternalBackupSet backup,
+        CancellationToken token)
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        ArgumentNullException.ThrowIfNull(slot);
+        ArgumentNullException.ThrowIfNull(backup);
+
+        InternalInstallPreparationContext.TfBootAuthority? authority = _tfAuthority;
+        CurrentBootInitializedInactiveProof? proof = authority?.InitializedInactiveProof;
+
+        if (authority is null
+            || proof is null
+            || authority.AfterEpochWitness is not null
+            || !string.Equals(CurrentSlot, "a", StringComparison.Ordinal)
+            || !string.Equals(slot.Slot, "b", StringComparison.Ordinal)
+            || !string.Equals(slot.SourceSlot, "a", StringComparison.Ordinal)
+            || slot.SourceKind != BootMaintenanceSourceKind.Project
+            || !string.Equals(proof.SourceSlot, "a", StringComparison.Ordinal)
+            || !string.Equals(proof.TargetSlot, "b", StringComparison.Ordinal)
+            || !string.Equals(authority.CurrentSlot, CurrentSlot, StringComparison.Ordinal)
+            || !string.Equals(authority.Model, backup.Model, StringComparison.Ordinal)
+            || !string.Equals(authority.ProfileId, backup.ProfileId, StringComparison.Ordinal)
+            || !string.Equals(authority.BackupManifestSha256, backup.ManifestSha256, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(proof.ProfileId, backup.ProfileId, StringComparison.Ordinal)
+            || !authority.SourceSlots.TryGetValue(slot.Slot, out string? mapped)
+            || !string.Equals(mapped, slot.SourceSlot, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The menu slot '" + slot.Slot + "' claims material from slot '" + slot.SourceSlot + "'.");
+        }
+
+        await authority.RevalidateAsync(token).ConfigureAwait(false);
+
+        return proof.Claims.Keys.ToArray();
+    }
+
+    /// <summary>
     /// Releases exactly this plan's own leases and deletes exactly its own
     /// generated child. The held authority (and the initialized-B proof it
     /// owns) is closed BEFORE the recursive child removal, even if one close
