@@ -67,41 +67,61 @@ public sealed partial class WindowsQualcommDriver
         var verified = evidence.Packages.Where(IsVerifiedPackage).ToList();
         var missing = RequiredAndroidIds(mode).Where(id =>
             !verified.Any(p => p.MatchingHardwareIds.Contains(id, StringComparer.OrdinalIgnoreCase))).ToArray();
+        var rejected = DescribeRejectedPackages(evidence);
+        var canUsePartialAdbCoverage = mode == AndroidUsbMode.Adb
+            && missing.Length < AdbIds.Length
+            && evidence.PackageQueryFailure is null;
 
-        WindowsDriverCheckResult Problem(string detail) => new(WindowsDriverCheckState.Problem, null, null, Bound(detail));
+        WindowsDriverCheckResult WithEvidence(WindowsDriverCheckResult result) => result with {
+            MissingHardwareIds = missing,
+            RejectedPackages = rejected };
+
+        WindowsDriverCheckResult Problem(string detail) => WithEvidence(new(WindowsDriverCheckState.Problem, null, null, Bound(detail)));
         foreach (var endpoint in evidence.Endpoints)
         {
             var prefix = HardwarePrefix(endpoint.DeviceInstanceId);
             if (!endpoint.StatusQuerySucceeded)
-                return UnknownResult($"Cannot read device state for {prefix}.");
+                return WithEvidence(UnknownResult($"Cannot read device state for {prefix}."));
             if (endpoint.Problem != 0 || (endpoint.Status & DnHasProblem) != 0 || (endpoint.Status & DnStarted) == 0)
                 return Problem($"{prefix}: Windows device problem {endpoint.Problem}, status 0x{endpoint.Status:X8}.");
             if (endpoint.FailureDetail is not null)
-                return UnknownResult($"Cannot read driver binding for {prefix}.");
+                return WithEvidence(UnknownResult($"Cannot read driver binding for {prefix}."));
             if (!string.Equals(endpoint.Service, WinUsbService, StringComparison.OrdinalIgnoreCase))
                 return Problem($"{prefix}: expected WinUSB; bound service is '{endpoint.Service ?? "<none>"}'.");
             var package = FindPackage(verified, endpoint.BoundInfName);
             if (package is null)
             {
-                if (evidence.PackageQueryFailure is not null) return UnknownResult(evidence.PackageQueryFailure);
+                if (evidence.PackageQueryFailure is not null) return WithEvidence(UnknownResult(evidence.PackageQueryFailure));
                 return Problem($"{prefix}: bound INF '{endpoint.BoundInfName}' has no verified Android driver signature.");
             }
             var id = CanonicalAndroidId(prefix, mode);
             if (id is null || !package.MatchingHardwareIds.Contains(id, StringComparer.OrdinalIgnoreCase))
                 return Problem($"{prefix}: bound INF '{package.InfName}' does not cover this hardware ID.");
         }
-        if (missing.Length != 0)
+        if (missing.Length != 0 && !canUsePartialAdbCoverage)
         {
-            if (evidence.PackageQueryFailure is not null) return UnknownResult(evidence.PackageQueryFailure);
+            if (evidence.PackageQueryFailure is not null) return WithEvidence(UnknownResult(evidence.PackageQueryFailure));
             if (evidence.Packages.Any(p => !IsVerifiedPackage(p)))
                 return Problem("An Android driver package failed signature verification.");
-            return new(WindowsDriverCheckState.Missing, null, null,
-                Bound($"{mode} driver coverage is missing: {string.Join(", ", missing)}."));
+            return WithEvidence(new(WindowsDriverCheckState.Missing, null, null,
+                Bound($"{mode} driver coverage is missing: {string.Join(", ", missing)}.")));
         }
-        var selected = evidence.Endpoints.Count == 0 ? verified[0] : FindPackage(verified, evidence.Endpoints[0].BoundInfName)!;
-        return new(evidence.Endpoints.Count == 0 ? WindowsDriverCheckState.Prepared : WindowsDriverCheckState.Connected,
-            selected.DriverVersion, selected.InfName,
-            $"{mode}: signed driver packages cover the supported USB IDs; {evidence.Endpoints.Count} present interface(s).");
+        DriverPackageEvidence? selected;
+        string detail;
+        if (evidence.Endpoints.Count == 0)
+        {
+            selected = verified.FirstOrDefault(p => RequiredAndroidIds(mode).Any(id =>
+                p.MatchingHardwareIds.Contains(id, StringComparer.OrdinalIgnoreCase))) ?? verified[0];
+        }
+        else selected = FindPackage(verified, evidence.Endpoints[0].BoundInfName)!;
+        if (canUsePartialAdbCoverage && missing.Length != 0)
+        {
+            var covered = AdbIds.Length - missing.Length;
+            detail = $"{mode}: partial verified coverage {covered}/{AdbIds.Length}; remaining IDs: {string.Join(", ", missing)}; {evidence.Endpoints.Count} present interface(s).";
+        }
+        else detail = $"{mode}: signed driver packages cover the supported USB IDs; {evidence.Endpoints.Count} present interface(s).";
+        return WithEvidence(new(evidence.Endpoints.Count == 0 ? WindowsDriverCheckState.Prepared : WindowsDriverCheckState.Connected,
+            selected.DriverVersion, selected.InfName, detail));
     }
 
     [SupportedOSPlatform("windows")]

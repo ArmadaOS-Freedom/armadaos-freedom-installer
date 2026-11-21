@@ -53,7 +53,45 @@ public sealed class WindowsAndroidDriverTests
     {
         Assert.False(Decide([Package("oem1.inf", [D00d, Ee0])], mode: AndroidUsbMode.Adb).IsReady);
         Assert.Equal(WindowsDriverCheckState.Prepared,
-            Decide([Package("oem1.inf", Adb)], mode: AndroidUsbMode.Adb).State);
+            Decide([Package("oem98.inf", Adb[..4], signed: true)], mode: AndroidUsbMode.Adb).State);
+    }
+
+    [Fact]
+    public void AdbEndpointRequiresBoundPackage()
+    {
+        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var endpoint = Create("DriverEndpointEvidence", Adb[0] + @"\PRIVATE-SERIAL", "oem98.inf", "WinUSB", 8u, 0u, true, null);
+        Assert.Equal(WindowsDriverCheckState.Connected, Decide([adb], [endpoint], mode: AndroidUsbMode.Adb).State);
+    }
+
+    [Fact]
+    public void AdbUntrustedBindingIsProblem()
+    {
+        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var google = Package("oem56.inf", Adb, signed: false);
+        var endpoint = Create("DriverEndpointEvidence", Adb[4] + @"\PRIVATE-SERIAL", "oem56.inf", "WinUSB", 8u, 0u, true, null);
+        Assert.Equal(WindowsDriverCheckState.Problem, Decide([adb, google], [endpoint], mode: AndroidUsbMode.Adb).State);
+    }
+
+    [Fact]
+    public void RejectedGooglePackageRemainsProblem()
+    {
+        Assert.Equal(WindowsDriverCheckState.Problem,
+            Decide([Package("oem56.inf", Adb, signed: false)], mode: AndroidUsbMode.Adb).State);
+    }
+
+    [Fact]
+    public void MissingAdbEndpointsReportRejectedGooglePackage()
+    {
+        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var google = Package("oem56.inf", Adb, signed: false);
+        google.GetType().GetProperty("SignatureErrorCode")!.SetValue(google, unchecked((int)0xE0000242));
+        var result = Decide([adb, google], mode: AndroidUsbMode.Adb);
+        Assert.Equal(WindowsDriverCheckState.Prepared, result.State);
+        Assert.Equal(Adb[4..], result.MissingHardwareIds.ToArray());
+        var rejection = Assert.Single(result.RejectedPackages);
+        Assert.Equal("oem56.inf", rejection.PublishedInf);
+        Assert.Equal<int?>(unchecked((int)0xE0000242), rejection.SignatureErrorCode);
     }
 
     [Fact]

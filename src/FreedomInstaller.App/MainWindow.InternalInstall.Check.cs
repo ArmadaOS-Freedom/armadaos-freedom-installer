@@ -195,6 +195,16 @@ public partial class MainWindow
                 try
                 {
                     SetInternalInstallCheckProgress(M("Dynamic.InternalInstall.Check.Listing"));
+                    if (IsInternalInstallMode)
+                    {
+                        var driver = new WindowsAndroidDriver();
+                        var driverResult = await Task.Run(() => driver.Inspect(AndroidUsbMode.Adb), token);
+                        _diagnosticLastConnectedAdb = driverResult;
+                        if (!driverResult.IsReady)
+                        {
+                            throw new InvalidOperationException(driverResult.Detail ?? UnknownValue);
+                        }
+                    }
                     var devices = await transport.ListDevicesAsync(token);
                     PopulateInternalInstallDeviceChoices(devices, previousSerial);
                     RefreshInternalInstallActions();
@@ -233,6 +243,20 @@ public partial class MainWindow
                             M("Dynamic.Diagnostics.Stage.Check"),
                             _uiText.Format(notAuthorizedMessage));
                         return;
+                    }
+
+                    // Partially prepared state (Prepared with MissingHardwareIds) found a real device to operate on:
+                    // an ADB device was selected and yet Windows reported no verified endpoint; refuse to proceed.
+                    // This does not change the authoritative outcome above, so maintenance / EDL / repair routes
+                    // are untouched.
+                    var lastConnectedAdb = _diagnosticLastConnectedAdb;
+                    if (IsInternalInstallMode
+                        && lastConnectedAdb is not null
+                        && lastConnectedAdb.State == WindowsDriverCheckState.Prepared
+                        && lastConnectedAdb.MissingHardwareIds is not null
+                        && lastConnectedAdb.MissingHardwareIds.Count > 0)
+                    {
+                        throw new InvalidOperationException(lastConnectedAdb.Detail ?? UnknownValue);
                     }
 
                     SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.Started", target.Serial));

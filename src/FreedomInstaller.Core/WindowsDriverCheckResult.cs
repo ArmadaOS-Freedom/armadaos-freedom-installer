@@ -43,6 +43,19 @@ public record WindowsDriverCheckResult(
     /// and <see cref="WindowsDriverCheckState.Missing"/> are never ready.
     /// </summary>
     public bool IsReady => State is WindowsDriverCheckState.Prepared or WindowsDriverCheckState.Connected;
+
+    /// <summary>
+    /// Supported USB hardware IDs that no accepted, verified package covers (or that a present endpoint
+    /// requires but is not covered for). Diagnostic evidence only; never used to relax readiness.
+    /// </summary>
+    public IReadOnlyList<string> MissingHardwareIds { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Published packages whose signature was inspected and not accepted. Diagnostic evidence only;
+    /// contains no device instance serial numbers or other device identifiers.
+    /// </summary>
+    public IReadOnlyList<WindowsRejectedDriverPackage> RejectedPackages { get; init; } =
+        Array.Empty<WindowsRejectedDriverPackage>();
 }
 
 /// <summary>
@@ -60,7 +73,22 @@ internal sealed record DriverPackageEvidence(
     string? SignatureDetail)
 {
     public IReadOnlyList<string> MatchingHardwareIds { get; init; } = Array.Empty<string>();
+
+    /// <summary>The raw native <c>SetupVerifyInfFile</c> error code, when a verdict was reached.</summary>
+    public int? SignatureErrorCode { get; init; }
 }
+
+/// <summary>
+/// A published driver package that was inspected but whose signature is not accepted. Exposed to callers as
+/// diagnostic evidence; contains no device instance identifiers.
+/// </summary>
+public sealed record WindowsRejectedDriverPackage(
+    string? PublishedInf,
+    string? DriverVersion,
+    string? Signer,
+    string? Catalog,
+    int? SignatureErrorCode,
+    string? SignatureDetail);
 
 /// <summary>
 /// Read-only state of one present 9008 device node: its bound service, its bound published INF, and the
