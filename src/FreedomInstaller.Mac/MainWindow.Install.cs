@@ -654,7 +654,7 @@ public partial class MainWindow
         AppendLog(M("Dynamic.RecoverySource.ReadingBoard"));
         try
         {
-            var board = await BoardRecoveryBackup.ReadAsync(client, current, parent, parent, token);
+            var board = await Task.Run(() => BoardRecoveryBackup.ReadAsync(client, current, parent, parent, token), token);
             if (board is not null)
             {
                 AppendLog(M("Dynamic.RecoverySource.BoardReady", board.DirectoryPath));
