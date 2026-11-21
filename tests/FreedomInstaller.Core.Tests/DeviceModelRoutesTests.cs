@@ -11,9 +11,9 @@ namespace FreedomInstaller.Core.Tests;
 
 /// <summary>
 /// The fail-closed write gate of a model that is registered only for identification, its 9008 tool profile and
-/// read-only validation. No shipped model is held back any more (TB710FU's locked chain now has a route on every
-/// write path), so the gate never throws for TB322FC / TB323FU / TB710FU; the refusal mechanism itself is still
-/// exercised through an explicit pending list.
+/// read-only validation (today exactly TB710FU). The gate must hold back every casing of TB710FU, must never
+/// throw for TB322FC / TB323FU, and the write entry points that can be reached without a device must refuse a
+/// TB710FU input with the stable route-pending code before any other work.
 /// </summary>
 public sealed class DeviceModelRoutesTests
 {
@@ -22,43 +22,16 @@ public sealed class DeviceModelRoutesTests
 
     // ---------------------------------------------------------------- predicate and throw matrix
 
-    private static readonly string[] SyntheticPending = { "TB999XX" };
-
     [Theory]
     [InlineData("TB710FU")]
     [InlineData("tb710fu")]
     [InlineData("Tb710Fu")]
-    public void Tb710fu_in_any_casing_has_every_write_route_open(string model)
+    public void Tb710fu_in_any_casing_is_route_pending_and_throws(string model)
     {
-        Assert.False(DeviceModelRoutes.IsWriteRoutePending(model));
-        DeviceModelRoutes.RequireWriteRoute(model);
-        Assert.False(DeviceModelRoutes.IsInstallRoutePending(model));
-    }
+        Assert.True(DeviceModelRoutes.IsWriteRoutePending(model));
 
-    [Theory]
-    [InlineData("TB999XX")]
-    [InlineData("tb999xx")]
-    [InlineData("Tb999Xx")]
-    public void A_pending_model_in_any_casing_is_held_back_and_throws(string model)
-    {
-        Assert.True(DeviceModelRoutes.IsWriteRoutePending(model, SyntheticPending));
-
-        var failure = Assert.Throws<InvalidOperationException>(
-            () => DeviceModelRoutes.RequireWriteRoute(model, SyntheticPending));
+        var failure = Assert.Throws<InvalidOperationException>(() => DeviceModelRoutes.RequireWriteRoute(model));
         Assert.StartsWith(DeviceModelRoutes.RoutePendingCode + ":", failure.Message, StringComparison.Ordinal);
-        Assert.Contains(model, failure.Message, StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData(" TB999XX")]
-    [InlineData("TB999XX ")]
-    [InlineData("TB999X")]
-    [InlineData("TB710FU")]
-    [InlineData(null)]
-    public void The_pending_list_matches_exact_names_only(string? model)
-    {
-        Assert.False(DeviceModelRoutes.IsWriteRoutePending(model, SyntheticPending));
-        DeviceModelRoutes.RequireWriteRoute(model, SyntheticPending);
     }
 
     [Theory]
@@ -77,8 +50,8 @@ public sealed class DeviceModelRoutesTests
     [InlineData("25091RP04C")]
     public void Every_other_value_is_left_to_the_existing_model_checks(string? model)
     {
-        // Nothing is trimmed or normalised here, and the gate never throws for a shipped model or for values the
-        // existing exact checks already refuse.
+        // Nothing is trimmed or normalised here: only an exact (case-insensitive) TB710FU is held back, and
+        // the gate never throws for G4 / G5 or for values the existing exact checks already refuse.
         Assert.False(DeviceModelRoutes.IsWriteRoutePending(model));
         DeviceModelRoutes.RequireWriteRoute(model);
     }
@@ -96,8 +69,7 @@ public sealed class DeviceModelRoutesTests
     [Fact]
     public void Route_refusal_is_recognised_only_by_its_exact_prefix()
     {
-        var refusal = Assert.Throws<InvalidOperationException>(
-            () => DeviceModelRoutes.RequireWriteRoute("TB999XX", SyntheticPending));
+        var refusal = Assert.Throws<InvalidOperationException>(() => DeviceModelRoutes.RequireWriteRoute("TB710FU"));
         Assert.True(DeviceModelRoutes.IsRouteRefusal(refusal));
         Assert.DoesNotContain("PR", refusal.Message, StringComparison.Ordinal);
 
@@ -117,9 +89,9 @@ public sealed class DeviceModelRoutesTests
 
         var failure = InvokeRequireDirectDeviceProfile(Check("TB710FU", "TB710FU_SYNTHETIC_ACTUAL_FIRMWARE"));
 
-        // The install route is open, and so are the remaining write routes.
+        // The install route is open; the remaining write routes stay pending.
         Assert.Null(failure);
-        Assert.False(DeviceModelRoutes.IsWriteRoutePending("TB710FU"));
+        Assert.True(DeviceModelRoutes.IsWriteRoutePending("TB710FU"));
     }
 
     [Fact]
@@ -141,17 +113,15 @@ public sealed class DeviceModelRoutesTests
     // ---------------------------------------------------------------- boot maintenance historical identity
 
     [Fact]
-    public async Task Historical_identity_of_a_tb710fu_backup_passes_the_gate_and_fails_later_on_the_partial_manifest()
+    public async Task Historical_identity_of_a_tb710fu_backup_is_refused_once_its_profile_is_resolved()
     {
-        // The TB710FU maintenance route is open: the same partial manifest is refused by the existing parser, not
-        // by the route gate.
         using var root = new TempDirectory();
         WriteBackupManifest(root.Path, "{\"profile\":{\"profileId\":\"tb710fu-9008-495\"}}");
 
-        var failure = await Assert.ThrowsAnyAsync<Exception>(
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
             () => BootMaintenanceBackend.ReadHistoricalIdentityAsync(root.Path));
 
-        Assert.DoesNotContain(DeviceModelRoutes.RoutePendingCode, failure.Message, StringComparison.Ordinal);
+        Assert.StartsWith(DeviceModelRoutes.RoutePendingCode + ":", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]

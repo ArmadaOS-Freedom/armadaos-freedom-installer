@@ -24,9 +24,9 @@ The app runs on **Windows x64** and **Apple silicon macOS**, with English and Si
 |---|---|---|
 | Lenovo Legion Y700 Gen 4 | TB322FC | Internal installation, maintenance, uninstall, offline upgrade, global backup and restore |
 | Lenovo Legion Y700 Gen 5 | TB323FU | Internal installation, maintenance, uninstall, offline upgrade, global backup and restore |
-| Lenovo Xiaoxin Pad Pro GT | TB710FU | Internal installation, maintenance, uninstall, offline upgrade, global backup and restore (only boot is re-signed; the device's AVB metadata is kept) |
+| Lenovo Xiaoxin Pad Pro GT | TB710FU | Internal installation, global backup and read-only checks; the maintenance, uninstall and global restore write routes are implemented (only boot is re-signed; the device's AVB metadata is kept) but **not yet verified on a device, so they stay closed** |
 
-**Windows** and **macOS** (Apple silicon) offer the same features. System installation to a TF / microSD card is not currently offered.
+**Windows** and **macOS** (Apple silicon) offer the same features. TB710FU maintenance, uninstall and global restore stay closed until they are verified on a device, and system installation to a TF / microSD card is not currently offered.
 
 Firmware and boot-chain requirements depend on the model. See the [device guides](https://github.com/ArmadaOS-Freedom/armadaos-freedom#device-support) and follow the installer's checks. Offline upgrades require a compatible Freedom system, update service, and package; global backup requires the original partition layout before Linux installation.
 

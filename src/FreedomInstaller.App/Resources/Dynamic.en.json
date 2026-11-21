@@ -734,7 +734,7 @@
   "Dynamic.BootRoute.Next.LockedEdlCandidate": "Planned flow: check firmware → back up A/B boot → install over 9008. The firmware trust chain, a compatible EDL loader, a signed boot and the A/B backups are all still unverified, so do not unlock or write now.",
   "Dynamic.BootRoute.Status.LockedRouteUnsupported": "Boot route: Lenovo Legion Y700 Gen 5 (TB323FU) is not covered by the provided no-unlock reference.",
   "Dynamic.BootRoute.Next.LockedRouteUnsupported": "Next: the currently supported route needs an independently confirmed unlocked state; no no-unlock method is provided for this model.",
-  "Dynamic.BootRoute.Status.ModelRoutePending": "Boot route: this model is identified, but its write route is not open yet.",
+  "Dynamic.BootRoute.Status.ModelRoutePending": "Boot route: Lenovo Xiaoxin Pad Pro GT (TB710FU) is identified, but its write route is not open yet.",
   "Dynamic.BootRoute.Next.ModelRoutePending": "Next: read-only checks or a global backup only; do not attempt install, maintenance, uninstall or restore.",
   "Dynamic.Firmware.ReleaseFormat": "Android {0}",
   "Dynamic.Firmware.PatchFormat": "Security patch {0}",

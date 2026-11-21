@@ -9,13 +9,13 @@ namespace FreedomInstaller.Core;
 /// and read-only validation, but whose install, boot maintenance, uninstall and global restore write routes
 /// are not open yet.
 /// <para>
-/// No shipped model is held back today. <c>TB710FU</c> (Lenovo Xiaoxin Pad Pro GT, SM8650) was, until its locked
-/// chain had a route on every write path: the install and the boot maintenance project candidates take the
-/// AOSP-preserving boot-only route (only boot is re-signed; the original root vbmeta and the RSA2048
-/// vbmeta_system stay untouched), the stock restore and the global restore replay the device's own original
-/// bytes, and the uninstall rewrites only the LUN0 GPT, misc and, for the Android default, the kShim boot. A
-/// model listed in <see cref="PendingWriteModels"/> is held back again by every caller below. The gate never
-/// throws for TB322FC or TB323FU.
+/// Today that is exactly <c>TB710FU</c> (Lenovo Xiaoxin Pad Pro GT, SM8650). Its locked chain has a route on every
+/// write path in Core: the install and the boot maintenance project candidates take the AOSP-preserving boot-only
+/// route (only boot is re-signed; the original root vbmeta and the RSA2048 vbmeta_system stay untouched), the
+/// stock restore and the global restore replay the device's own original bytes, and the uninstall rewrites only
+/// the LUN0 GPT, misc and, for the Android default, the kShim boot. Those routes stay held back here until each one
+/// has been verified on a real unit; removing the model from <see cref="PendingWriteModels"/> is that separate,
+/// evidence-backed change. The gate never throws for TB322FC or TB323FU.
 /// </para>
 /// <para>
 /// Two layers use it. The App entry points check <see cref="IsWriteRoutePending"/> on the identified model and
@@ -33,8 +33,8 @@ public static class DeviceModelRoutes
     /// <summary>Stable code carried at the start of the refusal message.</summary>
     public const string RoutePendingCode = "MODEL_ROUTE_PENDING";
 
-    /// <summary>Canonical models whose write routes are still pending; empty while every shipped model has a route.</summary>
-    private static readonly string[] PendingWriteModels = Array.Empty<string>();
+    /// <summary>Canonical models whose write routes are still pending device verification.</summary>
+    private static readonly string[] PendingWriteModels = { Tb710fuModel };
 
     /// <summary>
     /// True when <paramref name="model"/> names a model whose write routes are not open. The comparison
