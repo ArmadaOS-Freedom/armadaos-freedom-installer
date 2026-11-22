@@ -205,15 +205,22 @@ public partial class MainWindow
             return;
         }
 
-        // 离线升级页拥有自己的「返回」例程（含断开 / 清理确认），侧栏返回不在此页生效。
+        // 离线升级页复用同一条返回路径，先走它自己的断开 / 清理例程。
         if (_showingOfflineUpgrade)
+        {
+            await LeaveOfflineUpgradeAsync();
+            return;
+        }
+
+        // 全局救援页在受保护现场存在时不允许离开，避免丢掉仍在设备上的会话。
+        if (HasGlobalRecoveryProtectedState)
         {
             return;
         }
 
-        // 全局救援页受保护现场存在时不允许离开，避免丢掉仍在设备上的会话。
-        if (HasGlobalRecoveryProtectedState)
+        if (_showingGlobalRecovery)
         {
+            OnGlobalBackHome(sender, e);
             return;
         }
 
@@ -307,13 +314,18 @@ public partial class MainWindow
         var offline = !_showingEnvironment && !_showingHome && _showingOfflineUpgrade && !_showingSupport && !_showingGlobalRecovery && !_showingDiagnostics;
         var home = !_showingEnvironment && _showingHome && !_showingSupport && !_showingGlobalRecovery && !offline && !_showingDiagnostics;
         var workflow = !_showingEnvironment && !_showingHome && !_showingSupport && !_showingGlobalRecovery && !offline && !_showingDiagnostics;
+        var auxiliary = global || offline;
 
         // 首页占满主体三列；左侧步骤栏、向导正文与底栏的「上一步 / 下一步 / 执行」一起收起。
         EnvironmentPage.Visibility = environment ? Visibility.Visible : Visibility.Collapsed;
         HomePage.Visibility = home ? Visibility.Visible : Visibility.Collapsed;
-        WorkflowSidebar.Visibility = workflow ? Visibility.Visible : Visibility.Collapsed;
+        WorkflowSidebar.Visibility = (workflow || auxiliary) ? Visibility.Visible : Visibility.Collapsed;
         WorkflowScrollViewer.Visibility = workflow ? Visibility.Visible : Visibility.Collapsed;
         WorkflowButtons.Visibility = workflow ? Visibility.Visible : Visibility.Collapsed;
+        if (AuxiliaryWorkflowStepNav is not null)
+            AuxiliaryWorkflowStepNav.Visibility = auxiliary ? Visibility.Visible : Visibility.Collapsed;
+        if (AuxiliaryWorkflowButtons is not null)
+            AuxiliaryWorkflowButtons.Visibility = auxiliary ? Visibility.Visible : Visibility.Collapsed;
         HomeFooterHint.Visibility = home ? Visibility.Visible : Visibility.Collapsed;
 
         // 支持页同样占满三列，只在打开时显示；当前功能与选中操作始终不变。
@@ -327,14 +339,24 @@ public partial class MainWindow
                 ? Visibility.Visible
                 : Visibility.Collapsed;
 
-        // 全局救援页同样占满三列；只在它自己的标志下显示，不改选中操作。
         GlobalRecoveryPage.Visibility = global ? Visibility.Visible : Visibility.Collapsed;
 
-        // 离线升级页占满主体三列；支持页（About 返回）打开时一并收起，但不清离线页标志。
         OfflineUpgradePanel.Visibility = offline ? Visibility.Visible : Visibility.Collapsed;
 
         // 只在新旧向导内容与共享连接图示之间切换，不改首页 / 向导 / 支持页的父容器状态。
         ApplyInternalInstallView();
+
+        if (auxiliary)
+        {
+            LegacyStepNav.Visibility = Visibility.Collapsed;
+            InternalInstallStepNav.Visibility = Visibility.Collapsed;
+            RenderAuxiliaryWorkflow();
+        }
+        else if (workflow)
+        {
+            SetText(WorkflowNavigationTitle, "Static.NavTitle");
+            RerenderSelectedOperation();
+        }
     }
 
     /// <summary>

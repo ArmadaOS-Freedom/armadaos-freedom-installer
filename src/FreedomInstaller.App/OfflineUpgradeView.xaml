@@ -42,15 +42,18 @@
             </Setter>
         </Style>
     </UserControl.Resources>
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <Grid Margin="20">
+    <ScrollViewer x:Name="OfflineWorkflowScrollViewer"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="0,0,6,0"
+                  Margin="0,0,0,12">
+        <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <StackPanel>
-                <Button x:Name="BackButton" Style="{DynamicResource GhostButton}" Content="{DynamicResource Static.OfflineUpdate.Back}" HorizontalAlignment="Left" Margin="0,0,0,10"/>
                 <TextBlock Style="{DynamicResource H1Text}" Text="{DynamicResource Static.OfflineUpdate.Title}"/>
                 <TextBlock Style="{DynamicResource BodyInkText}" Text="{DynamicResource Static.OfflineUpdate.Desc}" TextWrapping="Wrap" Margin="0,4,0,14"/>
 
-                <Border Style="{DynamicResource CardBorder}" Background="{DynamicResource SurfaceBrush}" Padding="14" Margin="0,0,0,12">
+                <Border x:Name="OfflineConnectionStep" Style="{DynamicResource CardBorder}" Background="{DynamicResource SurfaceBrush}" Padding="14" Margin="0,0,0,12">
                     <StackPanel>
                         <TextBlock Style="{DynamicResource H2Text}" Text="{DynamicResource Static.OfflineUpdate.SectionConnection}"/>
                         <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.ConnectionHelper}" TextWrapping="Wrap" Margin="0,4,0,10"/>
@@ -135,7 +138,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{DynamicResource CardBorder}" Background="{DynamicResource SurfaceBrush}" Padding="14" Margin="0,0,0,12">
+                <Border x:Name="OfflinePackageStep" Style="{DynamicResource CardBorder}" Background="{DynamicResource SurfaceBrush}" Padding="14" Margin="0,0,0,12" Visibility="Collapsed">
                     <StackPanel>
                         <TextBlock Style="{DynamicResource H2Text}" Text="{DynamicResource Static.OfflineUpdate.SectionPackage}"/>
                         <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.PackageHelp}" TextWrapping="Wrap" Margin="0,4,0,8"/>
@@ -161,7 +164,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{DynamicResource CardBorder}" Background="{DynamicResource SurfaceBrush}" Padding="14" Margin="0,0,0,12">
+                <Border x:Name="OfflineConfirmationStep" Style="{DynamicResource CardBorder}" Background="{DynamicResource SurfaceBrush}" Padding="14" Margin="0,0,0,12" Visibility="Collapsed">
                     <StackPanel>
                         <TextBlock Style="{DynamicResource H2Text}" Text="{DynamicResource Static.OfflineUpdate.SectionConfirm}"/>
                         <TextBlock Style="{DynamicResource CaptionText}" Text="{DynamicResource Static.OfflineUpdate.PrepareHelp}" TextWrapping="Wrap" Margin="0,4,0,8"/>
