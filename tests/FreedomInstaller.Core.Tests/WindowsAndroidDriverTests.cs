@@ -254,6 +254,15 @@ public sealed class WindowsAndroidDriverTests
     }
 
     [Fact]
+    public void InboxPackageRecordsGenericAdbCompatibleId()
+    {
+        var package = Package("winusb.inf", [], signed: true);
+        var marked = Method("WithAdbCompatibleId").Invoke(null, [package])!;
+        var ids = (string[])marked.GetType().GetProperty("MatchingHardwareIds")!.GetValue(marked)!;
+        Assert.Equal(new[] { AdbCompatible }, ids);
+    }
+
+    [Fact]
     public async Task DiagnosticBundle_SelectedAdbVerifierDetail_RedactsSyntheticIdentityButKeepsCauseAndCode()
     {
         var ep = Create("DriverEndpointEvidence", @"USB\VID_17EF&PID_7FE2&MI_01\PRIVATE_USB.77", "winusb.inf", "WinUSB", 8u, 0u, true,

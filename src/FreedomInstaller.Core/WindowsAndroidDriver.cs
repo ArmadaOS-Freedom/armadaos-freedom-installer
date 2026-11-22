@@ -49,6 +49,9 @@ public sealed partial class WindowsQualcommDriver
     private static string? AndroidEndpointHardwareId(string? prefix, AndroidUsbMode mode) =>
         CanonicalAndroidId(prefix, mode);
 
+    private static DriverPackageEvidence WithAdbCompatibleId(DriverPackageEvidence package) =>
+        package with { MatchingHardwareIds = new[] { AdbCompatibleUsbId } };
+
     private static IReadOnlyList<string> RequiredAndroidIds(AndroidUsbMode mode) => mode switch {
         AndroidUsbMode.Adb => AdbIds,
         AndroidUsbMode.Fastboot => FastbootIds,
@@ -276,7 +279,8 @@ public sealed partial class WindowsQualcommDriver
                     {
                         var inboxPackage = InspectPublishedInf(InboxWinUsbInf, candidate =>
                             string.Equals(candidate, AdbCompatibleUsbId, StringComparison.OrdinalIgnoreCase));
-                        if (inboxPackage is not null) binding = binding with { InboxAdbPackage = inboxPackage };
+                        if (inboxPackage is not null)
+                            binding = binding with { InboxAdbPackage = WithAdbCompatibleId(inboxPackage) };
                     }
                     catch (Exception ex) when (IsOsQueryFailure(ex))
                     {
