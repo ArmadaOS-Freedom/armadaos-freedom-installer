@@ -1112,7 +1112,8 @@ public partial class MainWindow
         {
             _internalInstallAllocation = null;
             _internalInstallAndroidGiB = 0;
-            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Capacity.PlanFailed", exception.Message);
+            AppendLog(M("Dynamic.RawValue", exception.ToString()));
+            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Capacity.PlanFailed", exception);
         }
     }
 

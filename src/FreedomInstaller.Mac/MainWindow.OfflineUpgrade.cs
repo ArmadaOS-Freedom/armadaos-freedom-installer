@@ -532,7 +532,7 @@ public partial class MainWindow
             string hostsPath = (OfflineKnownHostsBox.Text ?? string.Empty).Trim();
 
             if (OfflineUpdateConnectionUiState.IsWifiAddressMissing(transport, OfflineHostBox.Text))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorWifiAddressRequired"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorWifiAddressRequired"), T("Dynamic.OfflineUpdate.ErrorWifiAddressRequired"));
 
             int port = OfflineUpdateConnectionUiState.UsbSshPort;
             string host = string.Empty;
@@ -542,20 +542,20 @@ public partial class MainWindow
             if (OfflineUpdateConnectionUiState.UsesWifiAddress(transport))
             {
                 if (!OfflineUpdateConnectionUiState.TryParsePort(OfflinePortBox.Text, out port))
-                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"), T("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"));
                 host = (OfflineHostBox.Text ?? string.Empty).Trim();
             }
 
             if (credential == OfflineUpdateCredentialMode.CustomAccount &&
                 OfflineUpdateConnectionUiState.IsCustomCredentialIncomplete(typedUser, typedPassword))
             {
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"), T("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"));
             }
 
             if (credential == OfflineUpdateCredentialMode.PublicKey &&
                 OfflineUpdateConnectionUiState.IsExplicitKeyIncomplete(transport, credential, typedUser, keyPath, hostsPath))
             {
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorKeyCredentialsRequired"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorKeyCredentialsRequired"), T("Dynamic.OfflineUpdate.ErrorKeyCredentialsRequired"));
             }
 
             if (credential == OfflineUpdateCredentialMode.PublicKey)
@@ -586,7 +586,7 @@ public partial class MainWindow
                     defaultCredential.UserName, defaultCredential.Password,
                     out string userName, out string password))
             {
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"), T("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"));
             }
 
             string? bindAddress = null;

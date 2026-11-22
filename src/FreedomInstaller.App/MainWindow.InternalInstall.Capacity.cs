@@ -568,13 +568,14 @@ public partial class MainWindow
         {
             _internalInstallAllocation = null;
             _internalInstallAndroidGiB = 0;
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Capacity"), exception.Message);
             if (_ready)
             {
                 SetText(InternalInstallCapacityTotalText, "Dynamic.RawValue", UnknownValue);
                 SetText(InternalInstallCapacityAndroidText, "Dynamic.RawValue", UnknownValue);
                 SetText(InternalInstallCapacityLinuxText, "Dynamic.RawValue", UnknownValue);
                 SetInternalInstallCapacityStatus(
-                    M("Dynamic.InternalInstall.Capacity.PlanFailed", exception.Message));
+                    M("Dynamic.InternalInstall.Capacity.PlanFailed", exception));
             }
 
             return false;

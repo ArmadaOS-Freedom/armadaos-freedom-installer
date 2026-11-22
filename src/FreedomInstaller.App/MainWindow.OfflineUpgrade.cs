@@ -541,7 +541,7 @@ namespace FreedomInstaller.App
                 string hostsPath = OfflineUpgradePanel.KnownHostsBox.Text.Trim();
 
                 if (OfflineUpdateConnectionUiState.IsWifiAddressMissing(transport, OfflineUpgradePanel.HostBox.Text))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorWifiAddressRequired"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorWifiAddressRequired"), T("Dynamic.OfflineUpdate.ErrorWifiAddressRequired"));
 
                 int port = OfflineUpdateConnectionUiState.UsbSshPort;
                 string host = string.Empty;
@@ -551,20 +551,20 @@ namespace FreedomInstaller.App
                 if (OfflineUpdateConnectionUiState.UsesWifiAddress(transport))
                 {
                     if (!OfflineUpdateConnectionUiState.TryParsePort(OfflineUpgradePanel.PortBox.Text, out port))
-                        throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"));
+                        throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"), T("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"));
                     host = OfflineUpgradePanel.HostBox.Text.Trim();
                 }
 
                 if (credential == OfflineUpdateCredentialMode.CustomAccount &&
                     OfflineUpdateConnectionUiState.IsCustomCredentialIncomplete(typedUser, typedPassword))
                 {
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"), T("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"));
                 }
 
                 if (credential == OfflineUpdateCredentialMode.PublicKey &&
                     OfflineUpdateConnectionUiState.IsExplicitKeyIncomplete(transport, credential, typedUser, keyPath, hostsPath))
                 {
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorKeyCredentialsRequired"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorKeyCredentialsRequired"), T("Dynamic.OfflineUpdate.ErrorKeyCredentialsRequired"));
                 }
 
                 if (credential == OfflineUpdateCredentialMode.PublicKey)
@@ -595,7 +595,7 @@ namespace FreedomInstaller.App
                         defaultCredential.UserName, defaultCredential.Password,
                         out string userName, out string password))
                 {
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"), T("Dynamic.OfflineUpdate.ErrorCustomCredentialsRequired"));
                 }
 
                 string? bindAddress = null;
