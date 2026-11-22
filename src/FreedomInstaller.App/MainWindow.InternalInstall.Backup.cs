@@ -1023,42 +1023,49 @@ public partial class MainWindow
             InternalBackupSet? recovery = null;
             try
             {
-                extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
-                    activeClient, parentPath, TemporaryWorkRoot, token, allowRetainedCopy: false);
-                if (extraction is null)
+                try
                 {
-                    if (!useBoardBackup)
+                    extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
+                        activeClient, parentPath, TemporaryWorkRoot, token, allowRetainedCopy: false);
+                    if (extraction is null)
                     {
-                        return (null, null);
+                        if (!useBoardBackup)
+                        {
+                            return (null, null);
+                        }
+                        AppendLocalizedLog(M("Dynamic.RecoverySource.BoardMissing"));
+                        _rejectedInternalBoardClient = activeClient;
                     }
-                    AppendLocalizedLog(M("Dynamic.RecoverySource.BoardMissing"));
+                    else
+                    {
+                        // 租约跨打开、绑定与准备快照存活；失败时先释放锁再执行租约清理。
+                        recovery = await InternalInstallBackup.OpenRecoveryAsync(
+                            activeClient, extraction.DirectoryPath, token: token);
+                    }
+                }
+                catch (Exception error) when (error is InvalidOperationException
+                    or IOException
+                    or TimeoutException
+                    or UnauthorizedAccessException
+                    or InvalidDataException
+                    or System.Text.Json.JsonException
+                    or FormatException)
+                {
+                    AppendLocalizedLog(M("Dynamic.RecoverySource.BoardInvalid", error.Message));
                     _rejectedInternalBoardClient = activeClient;
                 }
-                else
+
+                if (recovery is not null)
                 {
-                    // 租约跨打开、绑定与准备快照存活；失败时先释放锁再执行租约清理。
-                    recovery = await InternalInstallBackup.OpenRecoveryAsync(
-                        activeClient, extraction.DirectoryPath, token: token);
                     var set = await InternalInstallBackup.CreatePreparationSnapshotAsync(
-                        activeClient, recovery!, TemporaryWorkRoot, progress, token);
+                        activeClient, recovery, TemporaryWorkRoot, progress, token);
                     _internalInstallRecoverySource = recovery;
-                    _boardRecoveryDiscoveredDirectory = extraction.DirectoryPath;
+                    _boardRecoveryDiscoveredDirectory = extraction!.DirectoryPath;
                     _boardRecoveryAttemptManifest = set.ManifestSha256;
                     extraction.Retain();
                     recovery = null;
                     return (set, M("Dynamic.RecoverySource.BoardReady", _internalInstallRecoverySource.DirectoryPath));
                 }
-            }
-            catch (Exception error) when (error is InvalidOperationException
-                or IOException
-                or TimeoutException
-                or UnauthorizedAccessException
-                or InvalidDataException
-                or System.Text.Json.JsonException
-                or FormatException)
-            {
-                AppendLocalizedLog(M("Dynamic.RecoverySource.BoardInvalid", error.Message));
-                _rejectedInternalBoardClient = activeClient;
             }
             finally
             {
@@ -1080,6 +1087,10 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(selected))
         {
+            if (ReferenceEquals(_rejectedInternalBoardClient, activeClient))
+            {
+                _rejectedInternalBoardClient = null;
+            }
             throw new OperationCanceledException(token);
         }
         var resolved = UninstallBackupDirectorySelection.Resolve(selected!);
@@ -1091,12 +1102,19 @@ public partial class MainWindow
         }
 
         var directoryPath = resolved.DirectoryPath;
+        var workRoot = TemporaryWorkRoot;
+        if (!IsInternalInstallBackupParentOutsideExisting(workRoot, directoryPath))
+        {
+            throw new LocalizedInvalidOperationException(
+                M("Dynamic.InternalInstall.Backup.ExistingWorkRootConflict", directoryPath),
+                T("Dynamic.InternalInstall.Backup.ExistingWorkRootConflict", directoryPath));
+        }
         InternalBackupSet? recovery = null;
         try
         {
             recovery = await InternalInstallBackup.OpenRecoveryAsync(activeClient, directoryPath, token: token);
             var set = await InternalInstallBackup.CreatePreparationSnapshotAsync(
-                activeClient, recovery!, TemporaryWorkRoot, progress, token);
+                activeClient, recovery!, workRoot, progress, token);
             _internalInstallRecoverySource = recovery;
             _boardRecoveryDiscoveredDirectory = null;
             _boardRecoveryAttemptManifest = set.ManifestSha256;
