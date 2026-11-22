@@ -189,6 +189,8 @@ namespace FreedomInstaller.App
 
         public bool InternalInstallOperationActive => _internalInstallOperationActive;
 
+        public bool BoardBackupSelected => _userdataUninstallUseBoardBackup;
+
         public Task RunCheckBoardRecoveryEdlAsync(string parent)
         {
             _internalInstallBackupParent = parent;
@@ -200,6 +202,8 @@ namespace FreedomInstaller.App
             _internalInstallEdlClient = client;
             _boardRecoveryDiscoveredDirectory = cachedDirectory;
             _bootMaintenanceOriginalDirectory = selectedPcDirectory;
+            if (!string.IsNullOrWhiteSpace(selectedPcDirectory))
+                _userdataUninstallUseBoardBackup = false;
             TemporaryWorkRoot = tempRoot;
         }
 

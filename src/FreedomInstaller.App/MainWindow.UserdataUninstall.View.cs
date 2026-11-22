@@ -107,7 +107,7 @@ public partial class MainWindow
         var stockCheckVisibility = stockCheckVisible ? Visibility.Visible : Visibility.Collapsed;
         BootMaintenanceRestoreStockCheck.Visibility = stockCheckVisibility;
         UninstallReclaimBackupCheck.Visibility = stockCheckVisibility;
-        UninstallUseBoardBackupButton.Visibility = stockCheckVisibility;
+        UninstallUseBoardBackupCheck.Visibility = stockCheckVisibility;
         BootMaintenanceConfirmRestoreStockCheck.Visibility = stockCheckVisibility;
         if (stockCheckVisible)
         {
@@ -125,13 +125,12 @@ public partial class MainWindow
                 "Dynamic.UserdataUninstall.OriginalSource");
         }
 
-        BootMaintenanceEntryOriginalBox.Text = _bootMaintenanceOriginalDirectory ?? string.Empty;
-        BootMaintenanceOriginalBox.Text = _bootMaintenanceOriginalDirectory ?? string.Empty;
+        BootMaintenanceEntryOriginalBox.Text = SelectedUserdataUninstallPcBackup ?? string.Empty;
+        BootMaintenanceOriginalBox.Text = SelectedUserdataUninstallPcBackup ?? string.Empty;
 
         RenderModernUserdataUninstallConfirmPage();
         RenderBootMaintenanceCheckButton();
         RenderModernUserdataUninstallRuntimeStatus();
-        if (_internalInstallStep == 2) RenderUserdataUninstallPreparationError();
         RefreshModernUserdataUninstallActions();
     }
 
@@ -307,7 +306,10 @@ public partial class MainWindow
             && _internalInstallStep < 3
             && (_internalInstallStep < 2
                 ? CanEnterModernUserdataUninstallStep(NextModernUserdataUninstallStep(_internalInstallStep))
-                : HasBootMaintenanceBackupPrerequisite);
+                : (_internalInstallStep == 2
+                    ? HasBootMaintenanceBackupPrerequisite
+                        && (_userdataUninstallUseBoardBackup || !string.IsNullOrWhiteSpace(SelectedUserdataUninstallPcBackup))
+                    : HasBootMaintenanceBackupPrerequisite));
 
         UpdateUserdataUninstallRestoreStockCheckboxEnabled();
 

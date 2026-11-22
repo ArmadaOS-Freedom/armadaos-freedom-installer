@@ -2853,6 +2853,12 @@
 
                             <Border Style="{StaticResource CardBorder}" Margin="0,16,0,0">
                                 <StackPanel>
+                                    <CheckBox x:Name="UninstallUseBoardBackupCheck" Visibility="Collapsed"
+                                              HorizontalAlignment="Left" Margin="0,8,0,0"
+                                              Style="{StaticResource RiskCheckBox}" IsChecked="True"
+                                              Content="{DynamicResource Dynamic.UserdataUninstall.UseBoardBackup}"
+                                              Checked="OnUserdataUninstallUseBoardBackupChanged"
+                                              Unchecked="OnUserdataUninstallUseBoardBackupChanged" />
                                     <TextBlock x:Name="SharedEdlOriginalSourceLabel"
                                                Text="{DynamicResource Dynamic.BootMaintenance.OriginalSource}"
                                                Style="{StaticResource FieldLabelText}"
@@ -2879,11 +2885,7 @@
                                                Style="{StaticResource CaptionText}"
                                                Margin="0,6,0,0" />
 
-                                    <!-- 卸载专用：恢复原厂安卓引导（默认不勾选，其他模式隐藏）。 -->
-                                    <Button x:Name="UninstallUseBoardBackupButton" Visibility="Collapsed"
-                                            HorizontalAlignment="Left" Margin="0,8,0,0"
-                                            Content="{DynamicResource Dynamic.UserdataUninstall.UseBoardBackup}"
-                                            Click="OnUseBoardUninstallBackup" />
+                                    <!-- 卸载专用：恢复原厂安卓引导（默认勾选，其他模式隐藏）。 -->
                                     <CheckBox x:Name="UninstallReclaimBackupCheck" Visibility="Collapsed"
                                               Style="{StaticResource RiskCheckBox}" Margin="0,10,0,0" IsChecked="True"
                                               Content="{DynamicResource Dynamic.UserdataUninstall.ReclaimBackup}"
@@ -2893,6 +2895,7 @@
                                               Style="{StaticResource RiskCheckBox}"
                                               Visibility="Collapsed"
                                               Margin="0,10,0,0"
+                                              IsChecked="True"
                                               Checked="OnUserdataUninstallRestoreStockChanged"
                                               Unchecked="OnUserdataUninstallRestoreStockChanged">
                                         <TextBlock x:Name="BootMaintenanceRestoreStockText"
@@ -2999,6 +3002,7 @@
                                       Style="{StaticResource RiskCheckBox}"
                                       Visibility="Collapsed"
                                       Margin="0,14,0,0"
+                                      IsChecked="True"
                                       Checked="OnUserdataUninstallRestoreStockChanged"
                                       Unchecked="OnUserdataUninstallRestoreStockChanged">
                                 <TextBlock x:Name="BootMaintenanceConfirmRestoreStockText"

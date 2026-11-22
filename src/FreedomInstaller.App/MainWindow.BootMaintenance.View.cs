@@ -179,7 +179,7 @@ public partial class MainWindow
         // 原厂引导恢复复选框及其提示：仅在卸载模式显示，其他模式一律折叠复位。
         var stockVisibility = uninstall ? Visibility.Visible : Visibility.Collapsed;
         BootMaintenanceRestoreStockCheck.Visibility = stockVisibility;
-        UninstallUseBoardBackupButton.Visibility = stockVisibility;
+        UninstallUseBoardBackupCheck.Visibility = stockVisibility;
         UninstallReclaimBackupCheck.Visibility = stockVisibility;
         InternalInstallBoardBackupHint.Visibility = IsInternalInstallMode && _internalInstallBoardBackupDetected
             ? Visibility.Visible : Visibility.Collapsed;
@@ -628,11 +628,21 @@ public partial class MainWindow
                 RenderInternalInstallBackupDetail();
             }
 
+            var sourceChanged = _userdataUninstallUseBoardBackup
+                || !string.Equals(
+                    uninstallDirectory,
+                    _bootMaintenanceOriginalDirectory,
+                    StringComparison.OrdinalIgnoreCase);
+            _userdataUninstallUseBoardBackup = false;
+
             _bootMaintenanceOriginalDirectory = uninstallDirectory;
-            BootMaintenanceEntryOriginalBox.Text = uninstallDirectory;
-            BootMaintenanceOriginalBox.Text = uninstallDirectory;
+            if (sourceChanged)
+            {
+                ClearUserdataUninstallRecoverySource();
+            }
+
             InvalidateModernUserdataUninstallPreparation();
-            RefreshModernUserdataUninstallActions();
+            RenderModernUserdataUninstallPages();
             return;
         }
 

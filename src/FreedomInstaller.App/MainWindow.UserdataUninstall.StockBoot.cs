@@ -24,14 +24,24 @@ public partial class MainWindow
         RenderModernUserdataUninstallPages();
     }
 
-    private void OnUseBoardUninstallBackup(object sender, RoutedEventArgs e)
+    private void OnUserdataUninstallUseBoardBackupChanged(object sender, RoutedEventArgs e)
     {
-        if (!CanUserdataUninstallToggleRestoreStock()) return;
+        if (!_ready || _userdataUninstallStockCheckboxSuppress || sender is not CheckBox changed) return;
+        if (!CanUserdataUninstallToggleRestoreStock())
+        {
+            SyncUserdataUninstallRestoreStockCheckboxes();
+            return;
+        }
+        var desired = changed.IsChecked == true;
+        if (_userdataUninstallUseBoardBackup == desired)
+        {
+            SyncUserdataUninstallRestoreStockCheckboxes();
+            return;
+        }
+        _userdataUninstallUseBoardBackup = desired;
         InvalidateModernUserdataUninstallPreparation();
-        _bootMaintenanceOriginalDirectory = null;
-        _internalInstallRecoverySource?.Dispose();
-        _internalInstallRecoverySource = null;
-        _boardRecoveryAttemptManifest = null;
+        ClearUserdataUninstallRecoverySource();
+        if (_internalInstallStep >= 3) _internalInstallStep = 2;
         RenderModernUserdataUninstallPages();
     }
 
@@ -108,6 +118,7 @@ public partial class MainWindow
         {
             BootMaintenanceRestoreStockCheck.IsChecked = _userdataUninstallRestoreStockBoot;
             BootMaintenanceConfirmRestoreStockCheck.IsChecked = _userdataUninstallRestoreStockBoot;
+            UninstallUseBoardBackupCheck.IsChecked = _userdataUninstallUseBoardBackup;
             UninstallReclaimBackupCheck.IsChecked = _userdataUninstallReclaimBackup;
             var hintVisibility = _userdataUninstallRestoreStockBoot ? Visibility.Visible : Visibility.Collapsed;
             BootMaintenanceRestoreStockHint.Visibility = hintVisibility;
@@ -132,7 +143,7 @@ public partial class MainWindow
         BootMaintenanceRestoreStockCheck.IsEnabled = enabled;
         BootMaintenanceConfirmRestoreStockCheck.IsEnabled = enabled;
         UninstallReclaimBackupCheck.IsEnabled = enabled;
-        UninstallUseBoardBackupButton.IsEnabled = enabled;
+        UninstallUseBoardBackupCheck.IsEnabled = enabled;
     }
 
     private string UserdataUninstallSelectedBootBehaviorText()
