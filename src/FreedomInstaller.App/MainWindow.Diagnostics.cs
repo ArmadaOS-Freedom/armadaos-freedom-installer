@@ -319,9 +319,10 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
+            AppendLocalizedLog(M("Dynamic.RawValue", ex.ToString()));
             if (DiagnosticExportResultText is not null)
             {
-                SetText(DiagnosticExportResultText, "Dynamic.Diagnostics.Failed", FirstLine(ex.Message));
+                SetText(DiagnosticExportResultText, "Dynamic.Diagnostics.Failed", ex);
                 DiagnosticExportResultText.Visibility = Visibility.Visible;
             }
         }

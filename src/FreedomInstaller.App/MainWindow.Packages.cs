@@ -131,6 +131,7 @@ public partial class MainWindow
             var reasons = string.Join(T("Dynamic.Package.ReasonSeparator"), validation.Reasons);
             SetText(PackageStatusText, "Dynamic.Package.StatusRejectedForModel", UiText.ModelName(knownModel), reasons);
             AppendLocalizedLog(M("Dynamic.Log.PackageRejectedForModel", UiText.ModelName(knownModel)));
+            AppendLocalizedLog(M("Dynamic.RawValue", string.Join(" | ", validation.Reasons)));
             SetText(ProgressStatusText, "Dynamic.Package.StatusRejectedShort");
         }
         else if (validation.TestOnly)

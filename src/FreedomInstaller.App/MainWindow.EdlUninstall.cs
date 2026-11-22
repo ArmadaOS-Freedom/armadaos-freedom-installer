@@ -800,8 +800,8 @@ public partial class MainWindow
                 }
 
                 _uninstallPhase = UninstallUiPhase.AwaitingFactoryReset;
-                var detail = result.Accepted
-                    ? T("Dynamic.UninstallFlow.Verify.NoBytes")
+                object detail = result.Accepted
+                    ? M("Dynamic.UninstallFlow.Verify.NoBytes")
                     : result.Message;
                 var pending = M("Dynamic.UninstallFlow.EdlVerify.Pending", detail);
                 ApplyEdlUninstallOutcome(pending, true);
