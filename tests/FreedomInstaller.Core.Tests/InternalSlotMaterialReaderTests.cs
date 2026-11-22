@@ -550,6 +550,97 @@ public sealed class InternalSlotMaterialReaderTests
     }
 
     [Fact]
+    public async Task AnalyzeAndExportReinstallBaseAsyncWritesRestoredBaseWithAndroidBaseBeforeShim()
+    {
+        using var work = new WorkDir();
+        byte[] baseImage = MakeArm64(4096);
+        List<Spec> specs = DefaultSpecs(baseImage);
+        specs.Add(new Spec
+        {
+            Name = "tail",
+            Type = TypeBlob,
+            Flags = 0,
+            Payload = Repeat((byte)'T', 16),
+            Offset = 129 * 1024 * 1024,
+        });
+        (byte[] raw, _) = MakeKshim(specs);
+        byte[] gzipKernel = Gzip(raw);
+        byte[] currentBytes = MakeBoot(
+            kernel: gzipKernel, ramdisk: BootRamdisk, signature: Repeat((byte)'S', 21));
+        byte[] vendorBytes = MakeVendor(ramdisk: VendorRamdisk);
+        byte[] initBytes = MakeBoot(
+            kernel: Array.Empty<byte>(), ramdisk: Array.Empty<byte>(),
+            signature: Ascii("initsig"));
+        byte[] ablBytes = Ascii("abl-unknown-bytes");
+        byte[] xblBytes = Ascii("xbl-config-unknown-bytes");
+        string outputPath = Path.Combine(work.Dir, "reinstall-base.bin");
+        const string slot = "a";
+
+        VerifiedEdlFile currentClaim = work.Claim("current.img", currentBytes);
+        VerifiedEdlFile vendorClaim = work.Claim("vendor.img", vendorBytes);
+        VerifiedEdlFile initClaim = work.Claim("init.img", initBytes);
+        VerifiedEdlFile ablClaim = work.Claim("abl.bin", ablBytes);
+        VerifiedEdlFile xblClaim = work.Claim("xbl.bin", xblBytes);
+
+        MethodInfo? analyzer = typeof(InternalSlotMaterialReader).GetMethod(
+            "AnalyzeAndExportReinstallBaseAsync",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
+            binder: null,
+            types: new[]
+            {
+                typeof(string),
+                typeof(VerifiedEdlFile),
+                typeof(VerifiedEdlFile),
+                typeof(VerifiedEdlFile),
+                typeof(VerifiedEdlFile),
+                typeof(VerifiedEdlFile),
+                typeof(VerifiedEdlFile),
+                typeof(string),
+                typeof(CancellationToken),
+            },
+            modifiers: null);
+
+        async Task<InternalSlotMaterial> Analyze(VerifiedEdlFile recovery, string output)
+        {
+            if (analyzer is null)
+            {
+                return await InternalSlotMaterialReader.AnalyzeAndExportBaseAsync(
+                    slot, currentClaim, vendorClaim, initClaim, ablClaim, xblClaim, output);
+            }
+            return await (Task<InternalSlotMaterial>)analyzer.Invoke(
+                null,
+                new object?[]
+                {
+                    slot,
+                    currentClaim,
+                    vendorClaim,
+                    initClaim,
+                    ablClaim,
+                    xblClaim,
+                    recovery,
+                    output,
+                    CancellationToken.None,
+                })!;
+        }
+
+        VerifiedEdlFile recoveryClaim = work.Claim("recovery.img", MakeBoot(kernel: baseImage, ramdisk: BootRamdisk));
+        InternalSlotMaterial material = await Analyze(recoveryClaim, outputPath);
+
+        Assert.True(material.IsKshim);
+        Assert.Equal(baseImage, File.ReadAllBytes(outputPath));
+        Assert.Equal(ShaHex(currentBytes), material.SourceSha256["current_boot"]);
+
+        string mismatchPath = Path.Combine(work.Dir, "mismatch-base.bin");
+        byte[] differentBase = (byte[])baseImage.Clone();
+        differentBase[128] ^= 1;
+        VerifiedEdlFile badRecovery = work.Claim(
+            "recovery-bad.img", MakeBoot(kernel: differentBase, ramdisk: BootRamdisk));
+
+        await Assert.ThrowsAsync<InvalidDataException>(async () => await Analyze(badRecovery, mismatchPath));
+        Assert.False(File.Exists(mismatchPath));
+    }
+
+    [Fact]
     public async Task GzipKshimRestoresOriginalBase()
     {
         using var work = new WorkDir();
