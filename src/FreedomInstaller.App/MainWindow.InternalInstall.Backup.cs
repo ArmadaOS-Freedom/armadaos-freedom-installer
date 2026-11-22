@@ -626,6 +626,9 @@ public partial class MainWindow
             _internalInstallActiveBackupAttempt = _workSession?.BeginRecoveryBackup();
             InternalInstallAutomaticBackupPanel.Visibility = Visibility.Visible;
         }
+        // 新的真实备份尝试开始：作废旧失败尝试快照，只保留本次回调真正完成的 ABL 记录。
+        _diagnosticAttemptBootEvidence = null;
+        var diagnosticAblCaptures = new List<DiagnosticBootFile>();
         ClearInternalInstallRetainedBackupEvidence();
         RenderInternalInstallBackupDetail();
         SetInternalInstallBackupProgressIndeterminate(true);
@@ -861,7 +864,8 @@ public partial class MainWindow
                             parentPath,
                             checkedDevice,
                             progress,
-                            token)
+                            token,
+                            diagnosticAblCaptures.Add)
                         : await InternalInstallBackup.CreateAsync(
                             activeClient,
                             parentPath,
@@ -958,7 +962,13 @@ public partial class MainWindow
                             : M("Dynamic.InternalInstall.Backup.FailedNote"));
                     RenderInternalInstallBackupDetail();
                     AppendLocalizedLog(failure);
-                    RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Backup"), diagnostic);
+                    // 首次安装自动备份失败：把本次尝试已完成的 ABL 捕获快照发布到诊断状态；
+                    // 其余（含已有备份模式）传 null，按既有流程清除旧快照。
+                    RecordDiagnosticFailure(
+                        M("Dynamic.Diagnostics.Stage.Backup"),
+                        diagnostic,
+                        diagnostic,
+                        internalAutoBranch && !useExisting ? diagnosticAblCaptures : null);
                 }
                 finally
                 {
