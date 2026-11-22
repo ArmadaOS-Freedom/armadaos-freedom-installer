@@ -333,6 +333,12 @@ public static partial class InternalInstallBackup
                         locks,
                         token).ConfigureAwait(false);
                     sealedAbl.Add(role, earlyAbl);
+                    onAblCaptured?.Invoke(new DiagnosticBootFile(
+                        "captured",
+                        role,
+                        earlyAbl.Path,
+                        earlyAbl.Length,
+                        earlyAbl.Sha256));
                     state.Files.Add(ToFileEntry(
                         role,
                         ablTarget.Geometry,
@@ -344,12 +350,6 @@ public static partial class InternalInstallBackup
                     reporter.Completed(earlyAbl.Length);
                     reporter.Report(ReadingPartitionStage, role);
                     UpdatePartial(directory, state, profile, identity);
-                    onAblCaptured?.Invoke(new DiagnosticBootFile(
-                        "captured",
-                        role,
-                        earlyAbl.Path,
-                        earlyAbl.Length,
-                        earlyAbl.Sha256));
                 }
 
                 // Decode one sealed file at a time so both raw copies are never held at once.

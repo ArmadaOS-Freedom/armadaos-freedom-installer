@@ -426,6 +426,63 @@ public sealed class Gen5InternalInstallBackupTests : IClassFixture<Gen5EdlToolch
         Assert.Equal(2, captures.Count);
     }
 
+    [Fact]
+    public async Task G5_06_CreateForFirstInstall_keeps_sealed_Abl_when_progress_report_fails()
+    {
+        string parent = _fixture.NewCaseDirectory(
+            nameof(G5_06_CreateForFirstInstall_keeps_sealed_Abl_when_progress_report_fails));
+        IB001SyntheticDevice device = IB001SyntheticDevice.Create(gen5: true);
+        IB001FakeEdlRunner runner = new(device, hardwareId: Gen5HardwareId);
+        EdlClient client = NewClient(runner);
+        string? boundSerial = client.Binding.AndroidIdentity?.Identity?.Serial;
+        Assert.False(string.IsNullOrEmpty(boundSerial));
+
+        InternalDeviceCheckResult check = new(
+            android: client.Binding.AndroidIdentity,
+            fastbootSerial: boundSerial,
+            fastbootProduct: null,
+            fastbootLockState: BootloaderState.Locked,
+            otaState: default,
+            androidReturn: default,
+            cancelled: false,
+            failedStage: null,
+            error: null,
+            currentSlot: "a");
+
+        List<DiagnosticBootFile> captures = new();
+        ThrowingOnReadingPartitionProgress progress = new();
+
+        IOException error = await Assert.ThrowsAsync<IOException>(
+            () => InternalInstallBackup.CreateForFirstInstallAsync(client, parent, check, progress, CancellationToken.None, captures.Add));
+        Assert.Contains("injected", error.Message, StringComparison.Ordinal);
+
+        string[] ablRoles = { "abl_a", "abl_b" };
+        Assert.Equal(2, captures.Count);
+        for (int i = 0; i < ablRoles.Length; i++)
+        {
+            DiagnosticBootFile capture = captures[i];
+            string role = ablRoles[i];
+            Assert.Equal("captured", capture.Source);
+            Assert.Equal(role, capture.Role);
+            Assert.True(new FileInfo(capture.Path).Length > 0);
+            Assert.Equal(capture.ExpectedBytes, new FileInfo(capture.Path).Length);
+            Assert.Equal(capture.ExpectedSha256, HashFile(capture.Path), StringComparer.OrdinalIgnoreCase);
+        }
+
+        Assert.Equal(0, runner.WriteOrResetCount);
+    }
+
+    private sealed class ThrowingOnReadingPartitionProgress : IProgress<InternalBackupProgress>
+    {
+        public void Report(InternalBackupProgress value)
+        {
+            if (value.Stage == "reading-partition" && value.Role == "abl_b")
+            {
+                throw new IOException("injected");
+            }
+        }
+    }
+
 
     private EdlClient NewClient(IB001FakeEdlRunner runner) => new(
         _fixture.Toolchain,
