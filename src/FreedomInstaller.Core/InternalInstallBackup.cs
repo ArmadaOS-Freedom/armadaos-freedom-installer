@@ -87,6 +87,22 @@ public static partial class InternalInstallBackup
         CancellationToken token = default)
         => CreateCoreAsync(client, chosenParent, progress, token, null, deviceCheck);
 
+    /// <summary>
+    /// Starts one first-install backup and forwards a per-file explicit diagnostic record for every
+    /// hash-verified sealed ABL captured before the compatibility gate.
+    /// </summary>
+    public static Task<InternalBackupSet> CreateForFirstInstallAsync(
+        EdlClient client,
+        string chosenParent,
+        InternalDeviceCheckResult deviceCheck,
+        IProgress<InternalBackupProgress>? progress,
+        CancellationToken token,
+        Action<DiagnosticBootFile> onAblCaptured)
+    {
+        ArgumentNullException.ThrowIfNull(onAblCaptured);
+        return CreateCoreAsync(client, chosenParent, progress, token, null, deviceCheck, onAblCaptured);
+    }
+
     public static Task<InternalBackupSet> CreatePreparationSnapshotAsync(
         EdlClient client, InternalBackupSet recovery, string temporaryParent,
         IProgress<InternalBackupProgress>? progress = null, CancellationToken token = default)
@@ -100,7 +116,8 @@ public static partial class InternalInstallBackup
 
     private static async Task<InternalBackupSet> CreateCoreAsync(
         EdlClient client, string chosenParent, IProgress<InternalBackupProgress>? progress,
-        CancellationToken token, InternalBackupSet? recovery, InternalDeviceCheckResult? deviceCheck = null)
+        CancellationToken token, InternalBackupSet? recovery, InternalDeviceCheckResult? deviceCheck = null,
+        Action<DiagnosticBootFile>? onAblCaptured = null)
     {
         token.ThrowIfCancellationRequested();
 
@@ -285,51 +302,69 @@ public static partial class InternalInstallBackup
             reporter.Plan(roles.TotalFileCount, totalBytes);
             reporter.Report(ReadingPartitionStage, role: null);
 
-            string? earlyRole = null;
+            HashSet<string> earlyRoles = new(StringComparer.Ordinal);
             if (profile.Model == "TB323FU"
                 && deviceCheck?.FastbootLockState == BootloaderState.Locked
                 && deviceCheck.CurrentSlot is "a" or "b")
             {
-                string role = "abl_" + deviceCheck.CurrentSlot;
-                PartitionTarget ablTarget = targets[role];
-                if (ablTarget.Partition.SectorCount > InternalInstallPreparationContext.GblRuntimeMaxDataBytes / ablTarget.Geometry.SectorSize)
+                string activeSlot = deviceCheck.CurrentSlot;
+                string[] ablRoles = { "abl_a", "abl_b" };
+                Dictionary<string, SealedFile> sealedAbl = new(StringComparer.Ordinal);
+
+                // Capture and seal both ABL copies, then record each sealed result, before any
+                // compatibility check and before the bulk partition reads.
+                foreach (string role in ablRoles)
                 {
-                    throw new InvalidOperationException(
-                        "requires-compatible-bootloader: model=" + profile.Model + ", firmware=" + profile.AndroidBuild + ", lock=" + deviceCheck.FastbootLockState + ", slot=" + deviceCheck.CurrentSlot + ": read limit");
+                    PartitionTarget ablTarget = targets[role];
+                    if (ablTarget.Partition.SectorCount > InternalInstallPreparationContext.GblRuntimeMaxDataBytes / ablTarget.Geometry.SectorSize)
+                    {
+                        throw new InvalidOperationException(
+                            "requires-compatible-bootloader: model=" + profile.Model + ", firmware=" + profile.AndroidBuild + ", lock=" + deviceCheck.FastbootLockState + ", slot=" + activeSlot
+                            + " (role=" + role + "): read limit");
+                    }
+
+                    earlyRoles.Add(role);
+                    SealedFile earlyAbl = await ReadSealedAsync(
+                        client,
+                        ablTarget.Geometry,
+                        ablTarget.Partition.StartSector,
+                        ablTarget.Partition.SectorCount,
+                        Path.Combine(directory, role + ".bin"),
+                        locks,
+                        token).ConfigureAwait(false);
+                    sealedAbl.Add(role, earlyAbl);
+                    onAblCaptured?.Invoke(new DiagnosticBootFile(
+                        "captured",
+                        role,
+                        earlyAbl.Path,
+                        earlyAbl.Length,
+                        earlyAbl.Sha256));
+                    state.Files.Add(ToFileEntry(
+                        role,
+                        ablTarget.Geometry,
+                        ablTarget.Partition.StartSector,
+                        ablTarget.Partition.SectorCount,
+                        ablTarget.Partition.PartUuid,
+                        role + ".bin",
+                        earlyAbl));
+                    reporter.Completed(earlyAbl.Length);
+                    reporter.Report(ReadingPartitionStage, role);
+                    UpdatePartial(directory, state, profile, identity);
                 }
-                earlyRole = role;
-                SealedFile earlyAbl = await ReadSealedAsync(
-                    client,
-                    ablTarget.Geometry,
-                    ablTarget.Partition.StartSector,
-                    ablTarget.Partition.SectorCount,
-                    Path.Combine(directory, role + ".bin"),
-                    locks,
-                    token).ConfigureAwait(false);
-                state.Files.Add(ToFileEntry(
-                    role,
-                    ablTarget.Geometry,
-                    ablTarget.Partition.StartSector,
-                    ablTarget.Partition.SectorCount,
-                    ablTarget.Partition.PartUuid,
-                    role + ".bin",
-                    earlyAbl));
-                reporter.Completed(earlyAbl.Length);
-                reporter.Report(ReadingPartitionStage, role);
-                UpdatePartial(directory, state, profile, identity);
-                byte[] raw = await ReadHeldAsync(earlyAbl.Stream, earlyAbl.Length, token).ConfigureAwait(false);
-                RequireFirstInstallAblCompatibility(
-                    raw,
+
+                // Decode one sealed file at a time so both raw copies are never held at once.
+                await RequireFirstInstallAblPairCompatibility(
+                    sealedAbl,
                     profile.Model,
                     profile.AndroidBuild,
                     deviceCheck.FastbootLockState,
-                    deviceCheck.CurrentSlot,
-                    token);
+                    activeSlot,
+                    token).ConfigureAwait(false);
             }
 
             foreach (string name in roles.PartitionNames)
             {
-                if (earlyRole is not null && name == earlyRole)
+                if (earlyRoles.Contains(name))
                 {
                     continue;
                 }
@@ -668,19 +703,112 @@ public static partial class InternalInstallBackup
         token.ThrowIfCancellationRequested();
         string where =
             "model=" + model + ", firmware=" + firmware + ", lock=" + lockState + ", slot=" + slot;
+        if (GetFirstInstallAblIncompatibility(raw, token) is { } reason)
+        {
+            throw new InvalidOperationException(
+                "requires-compatible-bootloader: " + where + ": " + reason);
+        }
+    }
+
+    /// <summary>
+    /// Returns null when the raw ABL is a compatible GBL input, or the reason suffix
+    /// (<c>decode failure</c> or <c>Status: Reason</c>) when it is not.
+    /// </summary>
+    private static string? GetFirstInstallAblIncompatibility(byte[] raw, CancellationToken token)
+    {
         bool decoded = InternalSlotLoaderStructure.TryDecodeAblForGbl(raw, token, out byte[] pe);
         token.ThrowIfCancellationRequested();
         if (!decoded)
         {
-            throw new InvalidOperationException(
-                "requires-compatible-bootloader: " + where + ": decode failure");
+            return "decode failure";
         }
+
         var entry = Gbl.EfispLoadDetector.Detect(pe);
         token.ThrowIfCancellationRequested();
         if (entry.Status != Gbl.EfispLoad.Yes)
         {
+            return entry.Status + ": " + entry.Reason;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Classifies the two sealed ABL copies for the first-install gate. The active copy is decoded and
+    /// checked with the existing rules; the inactive copy is an observation only, so a zero-filled
+    /// inactive ABL is recorded as such and never treated as proof that the whole inactive slot is blank.
+    /// The active copy is read and decoded once, one at a time, and is never re-read.
+    /// </summary>
+    private static async Task RequireFirstInstallAblPairCompatibility(
+        IReadOnlyDictionary<string, SealedFile> sealedAbl,
+        string model,
+        string firmware,
+        BootloaderState lockState,
+        string activeSlot,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        string activeRole = "abl_" + activeSlot;
+        string inactiveRole = activeSlot == "a" ? "abl_b" : "abl_a";
+
+        bool haveActive = sealedAbl.TryGetValue(activeRole, out SealedFile? activeSealed);
+        SealedFile? inactiveSealed = sealedAbl.TryGetValue(inactiveRole, out SealedFile? found)
+            ? found
+            : null;
+        string[] roles = { activeRole, inactiveRole };
+        SealedFile?[] sealedFiles = { haveActive ? activeSealed : null, inactiveSealed };
+        string[] observations = new string[roles.Length];
+        string? activeReason = null;
+
+        // Inspect both sealed ABL copies, each read exactly once from its held stream.
+        for (int i = 0; i < roles.Length; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            SealedFile? sealedFile = sealedFiles[i];
+            if (sealedFile is null)
+            {
+                observations[i] = roles[i] + "=not-captured";
+                if (i == 0)
+                {
+                    activeReason = "active ABL not captured";
+                }
+                continue;
+            }
+
+            byte[] raw = await ReadHeldAsync(sealedFile.Stream, sealedFile.Length, token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+
+            if (raw.AsSpan().IndexOfAnyExcept((byte)0) < 0)
+            {
+                observations[i] = roles[i] + "=zero-filled";
+                if (i == 0)
+                {
+                    activeReason = "decode failure";
+                }
+                continue;
+            }
+
+            string? reason = GetFirstInstallAblIncompatibility(raw, token);
+            if (reason is not null)
+            {
+                observations[i] = roles[i] + "=incompatible";
+                if (i == 0)
+                {
+                    activeReason = reason;
+                }
+                continue;
+            }
+
+            observations[i] = roles[i] + "=compatible";
+        }
+
+        if (!haveActive || activeReason is not null)
+        {
+            string activeDetail = activeReason ?? "active ABL not captured";
             throw new InvalidOperationException(
-                "requires-compatible-bootloader: " + where + ": " + entry.Status + ": " + entry.Reason);
+                "requires-compatible-bootloader: model=" + model + ", firmware=" + firmware
+                + ", lock=" + lockState + ", slot=" + activeSlot + ": " + activeDetail
+                + "; observations: " + string.Join(", ", observations));
         }
     }
 
