@@ -175,8 +175,8 @@ public partial class MainWindow
                             expectedProfile = EdlDeviceProfiles.FindById(verifiedIdentity.ProfileId);
                             if (expectedProfile is null || !expectedProfile.IsComplete)
                             {
-                                throw new InvalidOperationException(
-                                    T("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(verifiedIdentity.Model)));
+                                throw BuildGlobalRecoveryError(
+                                    M("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(verifiedIdentity.Model)));
                             }
 
                             expectedBus = verifiedIdentity.BusSerialHex;
@@ -229,14 +229,14 @@ public partial class MainWindow
 
         if (!string.Equals(_globalProfile?.ProfileId, profile.ProfileId, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.ConnectionProfileMismatch"));
+            throw BuildGlobalRecoveryError(M("Dynamic.Global.Error.ConnectionProfileMismatch"));
         }
 
         if (expectedBusSerialHex is not null
             && !string.Equals(_globalEdlEntry?.BusSerialHex, expectedBusSerialHex, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException(
-                T("Dynamic.Global.Error.ConnectionBusMismatch", _globalEdlEntry?.BusSerialHex ?? UnknownValue));
+            throw BuildGlobalRecoveryError(
+                M("Dynamic.Global.Error.ConnectionBusMismatch", _globalEdlEntry?.BusSerialHex ?? UnknownValue));
         }
 
         // 客户端证明缺失时，只允许一次显式探针，不重新执行入口；复探沿用当前会话目录。
@@ -261,7 +261,7 @@ public partial class MainWindow
         // 入口未知且没有客户端时，工具链残留不得被新连接静默复用。
         if (_globalEdlTools is not null && _globalEdlClient is null)
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Status.BlockedBySession"));
+            throw BuildGlobalRecoveryError(M("Dynamic.Global.Status.BlockedBySession"));
         }
 
         token.ThrowIfCancellationRequested();
@@ -296,7 +296,7 @@ public partial class MainWindow
             if (expectedProfile is not null
                 && !string.Equals(expectedProfile.ProfileId, detectedProfile.ProfileId, StringComparison.Ordinal))
             {
-                throw new InvalidOperationException(T("Dynamic.Global.Error.RestoreProfileMismatch"));
+                throw BuildGlobalRecoveryError(M("Dynamic.Global.Error.RestoreProfileMismatch"));
             }
 
             EdlEntryResult entry = GlobalEdlBinding.Attach(detectedProfile, discovery, expectedBusSerialHex);
@@ -324,7 +324,7 @@ public partial class MainWindow
         }
 
         DeviceTransport transport = _transport
-            ?? throw new InvalidOperationException(T("Dynamic.Global.Error.TransportUnavailable"));
+            ?? throw BuildGlobalRecoveryError(M("Dynamic.Global.Error.TransportUnavailable"));
 
         SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ReadingAndroid");
         var devices = await transport.ListDevicesAsync(token);
@@ -350,15 +350,15 @@ public partial class MainWindow
         EdlDeviceProfile? resolved = EdlDeviceProfiles.FindByModel(identity.Model);
         if (resolved is null || !resolved.IsComplete)
         {
-            throw new InvalidOperationException(
-                T("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(identity.Model)));
+            throw BuildGlobalRecoveryError(
+                M("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(identity.Model)));
         }
 
         EdlDeviceProfile profile = resolved;
         if (expectedProfile is not null
             && !string.Equals(expectedProfile.ProfileId, profile.ProfileId, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.RestoreProfileMismatch"));
+            throw BuildGlobalRecoveryError(M("Dynamic.Global.Error.RestoreProfileMismatch"));
         }
 
         AndroidMaintenanceIdentity android = await new MaintenanceEntry(
@@ -371,8 +371,8 @@ public partial class MainWindow
         if (expectedBusSerialHex is not null
             && !AndroidSocMatchesBus(android.SocSerial, expectedBusSerialHex))
         {
-            throw new InvalidOperationException(
-                T("Dynamic.Global.Error.SocSerialMismatch", android.SocSerial, expectedBusSerialHex));
+            throw BuildGlobalRecoveryError(
+                M("Dynamic.Global.Error.SocSerialMismatch", android.SocSerial, expectedBusSerialHex));
         }
 
         _globalPower = await CaptureInternalInstallPowerAsync(transport.AdbPath, identity.Serial, token);
@@ -393,8 +393,8 @@ public partial class MainWindow
         if (expectedBusSerialHex is not null
             && !string.Equals(entered.BusSerialHex, expectedBusSerialHex, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException(
-                T("Dynamic.Global.Error.EntryBusMismatch", entered.BusSerialHex, expectedBusSerialHex));
+            throw BuildGlobalRecoveryError(
+                M("Dynamic.Global.Error.EntryBusMismatch", entered.BusSerialHex, expectedBusSerialHex));
         }
 
         _globalEdlEntry = entered;
@@ -450,14 +450,14 @@ public partial class MainWindow
     {
         if (!profile.IsComplete || string.IsNullOrWhiteSpace(profile.ArchiveLogicalName))
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.ProfileIncomplete"));
+            throw BuildGlobalRecoveryError(M("Dynamic.Global.Error.ProfileIncomplete"));
         }
 
         using Stream? archive = Assembly.GetExecutingAssembly()
             .GetManifestResourceStream(profile.ArchiveLogicalName!);
         if (archive is null)
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.ToolsMissing"));
+            throw BuildGlobalRecoveryError(M("Dynamic.Global.Error.ToolsMissing"));
         }
 
         string workRoot = Path.Combine(TemporaryWorkRoot, GlobalToolchainFolder);
@@ -465,11 +465,14 @@ public partial class MainWindow
         if (!ReferenceEquals(tools.Profile, profile))
         {
             tools.Dispose();
-            throw new InvalidOperationException(T("Dynamic.Global.Error.ToolsProfileMismatch"));
+            throw BuildGlobalRecoveryError(M("Dynamic.Global.Error.ToolsProfileMismatch"));
         }
 
         return tools;
     }
+
+    private LocalizedInvalidOperationException BuildGlobalRecoveryError(UiMessage message) =>
+        new(message, _uiText.Format(message));
 
     // ---------- 只读备份 ----------
 
@@ -642,8 +645,8 @@ public partial class MainWindow
                     string recordsParent = Path.Combine(_workDirectory!.RootPath, "records");
                     if (!IsInternalInstallBackupParentOutsideExisting(recordsParent, _globalRestoreSource!))
                     {
-                        throw new InvalidOperationException(
-                            T("Dynamic.Global.Error.RestoreRecordsInsideSource"));
+                        throw BuildGlobalRecoveryError(
+                            M("Dynamic.Global.Error.RestoreRecordsInsideSource"));
                     }
 
                     if (!Directory.Exists(recordsParent))
@@ -663,8 +666,8 @@ public partial class MainWindow
                     // 只开放全局备份（只读）的型号：恢复写入路线尚未开放，在连接或准备之前停下。
                     if (DeviceModelRoutes.IsWriteRoutePending(identity.Model))
                     {
-                        throw new InvalidOperationException(
-                            T("Dynamic.Global.Error.RestoreRoutePending", UiText.ModelName(identity.Model)));
+                        throw BuildGlobalRecoveryError(
+                            M("Dynamic.Global.Error.RestoreRoutePending", UiText.ModelName(identity.Model)));
                     }
 
                     EdlDeviceProfile? profile = _globalEdlClient is not null
@@ -673,14 +676,14 @@ public partial class MainWindow
 
                     if (profile is null || !profile.IsComplete)
                     {
-                        throw new InvalidOperationException(
-                            T("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(identity.Model)));
+                        throw BuildGlobalRecoveryError(
+                            M("Dynamic.Global.Error.RestoreProfileUnsupported", UiText.ModelName(identity.Model)));
                     }
 
                     if (!string.Equals(profile.ProfileId, identity.ProfileId, StringComparison.Ordinal))
                     {
-                        throw new InvalidOperationException(
-                            T("Dynamic.Global.Error.RestoreProfileMismatch"));
+                        throw BuildGlobalRecoveryError(
+                            M("Dynamic.Global.Error.RestoreProfileMismatch"));
                     }
 
                     if (_globalEdlClient is null)
@@ -694,8 +697,8 @@ public partial class MainWindow
                     if (!await EnsureGlobalConnectionAsync(profile, identity.BusSerialHex, token))
                     {
                         // 没有初始 Sahara 证明时绝不允许进入准备阶段。
-                        throw new InvalidOperationException(
-                            T("Dynamic.Global.Status.NeedVerifiedConnection"));
+                        throw BuildGlobalRecoveryError(
+                            M("Dynamic.Global.Status.NeedVerifiedConnection"));
                     }
 
                     if (!string.Equals(_globalProfile?.ProfileId, identity.ProfileId, StringComparison.Ordinal)
@@ -704,8 +707,8 @@ public partial class MainWindow
                             identity.BusSerialHex,
                             StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new InvalidOperationException(
-                            T("Dynamic.Global.Error.ConnectionBusMismatch",
+                        throw BuildGlobalRecoveryError(
+                            M("Dynamic.Global.Error.ConnectionBusMismatch",
                                 _globalEdlEntry?.BusSerialHex ?? UnknownValue));
                     }
 
@@ -874,6 +877,10 @@ public partial class MainWindow
                     // 明确没有开始写入：清掉本次尝试，允许用户重新准备。
                     _globalRestoreWriteAttempted = false;
                     DisposeGlobalRestorePlanOnly();
+                    if (!string.IsNullOrEmpty(result.Error))
+                    {
+                        AppendLocalizedLog(M("Dynamic.RawValue", result.Error));
+                    }
                     SetText(GlobalRestoreSummaryText, "Dynamic.Global.Restore.NotPrepared");
                     SetText(
                         GlobalProgressStatusText,

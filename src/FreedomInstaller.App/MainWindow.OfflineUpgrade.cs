@@ -551,7 +551,7 @@ namespace FreedomInstaller.App
                 if (OfflineUpdateConnectionUiState.UsesWifiAddress(transport))
                 {
                     if (!OfflineUpdateConnectionUiState.TryParsePort(OfflineUpgradePanel.PortBox.Text, out port))
-                        throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"));
+                        throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"));
                     host = OfflineUpgradePanel.HostBox.Text.Trim();
                 }
 

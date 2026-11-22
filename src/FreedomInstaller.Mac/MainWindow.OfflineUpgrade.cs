@@ -542,7 +542,7 @@ public partial class MainWindow
             if (OfflineUpdateConnectionUiState.UsesWifiAddress(transport))
             {
                 if (!OfflineUpdateConnectionUiState.TryParsePort(OfflinePortBox.Text, out port))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorWifiPortInvalid"));
                 host = (OfflineHostBox.Text ?? string.Empty).Trim();
             }
 

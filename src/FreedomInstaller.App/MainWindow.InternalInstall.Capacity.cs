@@ -277,8 +277,9 @@ public partial class MainWindow
                 or NotSupportedException
                 or ArgumentException)
             {
+                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
                 SetInternalInstallCapacityPackageStatus(
-                    M("Dynamic.InternalInstall.Capacity.StatusWorkRootFailed", exception.Message));
+                    M("Dynamic.InternalInstall.Capacity.StatusWorkRootFailed", exception));
                 return;
             }
 
