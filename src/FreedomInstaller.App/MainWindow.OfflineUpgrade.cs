@@ -78,7 +78,6 @@ namespace FreedomInstaller.App
 
             _offlineUpgradeInitialized = true;
             OfflineUpgradePanel.SessionCombo.DisplayMemberPath = nameof(OfflineUpdateSession.SessionId);
-            OfflineUpgradePanel.BackButton.Click += OnOfflineUpgradeBackAsync;
             OfflineUpgradePanel.TransportCombo.SelectionChanged += OnOfflineConnectionSelectionChanged;
             OfflineUpgradePanel.CredentialCombo.SelectionChanged += OnOfflineConnectionSelectionChanged;
             OfflineUpgradePanel.BrowseKeyButton.Click += OnBrowseOfflineKey;
@@ -109,6 +108,7 @@ namespace FreedomInstaller.App
 
             _showingHome = false;
             _showingOfflineUpgrade = true;
+            ResetAuxiliaryWorkflowStep();
             ApplyFunctionView();
             RefreshActions();
         }
@@ -134,7 +134,6 @@ namespace FreedomInstaller.App
             bool preparedReady = bootPolicySupported &&
                 OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null, _offlinePreflightPassed);
 
-            OfflineUpgradePanel.BackButton.IsEnabled = !busy;
             var transport = SelectedOfflineTransport;
             var credential = SelectedOfflineCredential;
             var fields = OfflineUpdateConnectionUiState.Fields(transport, credential);
@@ -234,6 +233,8 @@ namespace FreedomInstaller.App
             OfflineUpgradePanel.RestartToVerifyButton.IsEnabled = !busy && connected && bootPolicySupported &&
                 _offlineReceiptLive && _offlineSelectedSession != null &&
                 OfflineUpdateUiState.CanRestartToVerify(_offlineLastReceipt);
+
+            RefreshAuxiliaryWorkflowNavigation();
         }
 
         private void RerenderOfflineUpgradeLog()
@@ -679,7 +680,7 @@ namespace FreedomInstaller.App
             });
         }
 
-        private async void OnOfflineUpgradeBackAsync(object? sender, RoutedEventArgs e)
+        private async Task LeaveOfflineUpgradeAsync()
         {
             if (_busy)
                 return;
