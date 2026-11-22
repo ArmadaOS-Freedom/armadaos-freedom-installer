@@ -194,6 +194,13 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
 
                 primaryKeySha256[slot] = primary.KeySha256;
             }
+            catch (InvalidDataException ex) when (EdlRawBootBuilder.IsAmbiguousAblAvbKey(ex))
+            {
+                throw new InvalidDataException(
+                    "tb322fc-abl-key-ambiguous: the selected source ABL has tied primary AVB keys; "
+                    + "refusing install, slot " + slot + ".",
+                    ex);
+            }
             catch (InvalidDataException)
             {
                 // A missing, unreadable or unsupported ABL is not AOSP evidence: the existing gates decide.

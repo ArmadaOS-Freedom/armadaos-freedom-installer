@@ -71,18 +71,7 @@ public sealed class AblAospAcceptanceTests
     [Fact]
     public void Reviewed188LoaderIsAccepted()
     {
-        string? directory = Environment.GetEnvironmentVariable("TB322FC_188_IMAGES_DIR");
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            return;
-        }
-
-        string[] matches = Directory.GetFiles(
-            Path.GetFullPath(directory),
-            "abl.img",
-            SearchOption.AllDirectories);
-        string path = Assert.Single(matches);
-        byte[] abl = File.ReadAllBytes(path);
+        byte[] abl = File.ReadAllBytes(ResolveReviewed188Abl());
 
         Assert.Equal(Reviewed188AblSha256, Convert.ToHexString(SHA256.HashData(abl)));
         Assert.True(BootMaintenanceAblRecovery.AblAcceptsAosp(abl, CancellationToken.None));
@@ -91,5 +80,36 @@ public sealed class AblAospAcceptanceTests
             EdlRawBootBuilder.InspectAblAvbKeys(abl, CancellationToken.None)
                 .Select(key => key.KeySha256)
                 .ToArray());
+    }
+
+    private static string ResolveReviewed188Abl()
+    {
+        string? directory = Environment.GetEnvironmentVariable("TB322FC_188_IMAGES_DIR");
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            string[] matches = Directory.GetFiles(
+                Path.GetFullPath(directory),
+                "abl.img",
+                SearchOption.AllDirectories);
+            return Assert.Single(matches);
+        }
+
+        foreach (string start in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+        {
+            for (DirectoryInfo? current = new(start); current is not null; current = current.Parent)
+            {
+                string candidate = Path.Combine(
+                    current.FullName,
+                    "vendor",
+                    "qualcomm",
+                    "g4",
+                    "abl_aosp_capable.img");
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+
+        throw new FileNotFoundException(
+            "The checked-in reviewed 188 ABL fixture is missing.",
+            "vendor/qualcomm/g4/abl_aosp_capable.img");
     }
 }

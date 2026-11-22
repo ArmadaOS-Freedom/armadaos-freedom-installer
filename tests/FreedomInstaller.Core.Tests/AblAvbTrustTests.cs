@@ -83,7 +83,17 @@ public sealed class AblAvbTrustTests
     {
         var pe = Image(); Aosp.CopyTo(pe, 0x1803); Other.CopyTo(pe, 0x2803);
         Adr(pe, 0x240, 0x1803); Adr(pe, 0x244, 0x2803);
-        Assert.Throws<InvalidDataException>(() => Inspect(pe));
+        var error = Assert.Throws<InvalidDataException>(() => Inspect(pe));
+        Assert.True(EdlRawBootBuilder.IsAmbiguousAblAvbKey(error));
+        Assert.Contains("ambiguous", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void MissingKeyIsNotReportedAsAmbiguous()
+    {
+        var error = Assert.Throws<InvalidDataException>(() => Inspect(Image()));
+        Assert.False(EdlRawBootBuilder.IsAmbiguousAblAvbKey(error));
+        Assert.DoesNotContain("ambiguous", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
