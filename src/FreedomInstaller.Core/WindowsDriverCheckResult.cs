@@ -116,6 +116,13 @@ internal sealed record DriverEndpointEvidence(
     /// exposes the generic ADB-compatible USB class ID. Null otherwise.
     /// </summary>
     public DriverPackageEvidence? InboxAdbPackage { get; init; }
+
+    /// <summary>
+    /// True when the endpoint exposes the generic Android ADB compatible USB class ID
+    /// <c>USB\Class_FF&amp;SubClass_42&amp;Prot_01</c>. This is the authoritative interface marker for
+    /// selected-device ADB checks; the USB VID/PID is not used as a whitelist.
+    /// </summary>
+    public bool AdbCompatible { get; init; }
 }
 
 /// <summary>
