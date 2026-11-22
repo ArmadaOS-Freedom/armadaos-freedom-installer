@@ -1259,6 +1259,7 @@
   "Dynamic.RecoverySource.BoardReady": "已采用平板恢复备份；电脑副本保存在：{0}",
   "Dynamic.RecoverySource.BoardMissing": "未找到板内恢复备份，请选择首次安装前的电脑备份。",
   "Dynamic.RecoverySource.BoardInvalid": "板内恢复备份暂不可用：{0}。请使用首次安装前的电脑备份。",
+  "Dynamic.RecoverySource.BoardRetryWithPc": "板内恢复备份不可用，将改用首次安装前的电脑备份重试。",
   "Dynamic.RecoverySource.PickOriginal": "选择首次安装前的原厂恢复备份",
   "Dynamic.RecoverySource.PickOutput": "选择保存恢复资料和回滚备份的位置",
   "Dynamic.RecoverySource.NeedOriginal": "需要可用的原厂恢复备份；请选择首次安装前保存的电脑备份。",
