@@ -73,6 +73,16 @@
                       WithCulture="false" />
   </ItemGroup>
 
+  <!-- TB322FC compatibility loader from the reviewed 188 firmware package. This optional
+       external build input is embedded byte-for-byte under a fixed logical name only for test
+       builds that select the 188-ABL route. It is never downloaded, generated or committed. -->
+  <ItemGroup Condition="'$(BundledTb322fcAbl188)' != '' and Exists('$(BundledTb322fcAbl188)')">
+    <EmbeddedResource Include="$(BundledTb322fcAbl188)"
+                      LogicalName="FreedomInstaller.Tb322fc.Abl188.img"
+                      Link="tb322fc-abl-188.img"
+                      WithCulture="false" />
+  </ItemGroup>
+
   <!-- Upstream GBL attribution and the verbatim GNU GPL version 3 text shipped with those assets. -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\docs\GblRuntime-NOTICE.txt"
@@ -96,6 +106,11 @@
            Text="BundledAvbSigningKey is required. Pass -p:BundledAvbSigningKey=&lt;path-to-avb-test-key.pem&gt; with the AOSP AVB public test RSA4096 PEM located outside the source tree." />
     <Error Condition="'$(BundledAvbSigningKey)' != '' and !Exists('$(BundledAvbSigningKey)')"
            Text="BundledAvbSigningKey does not exist: $(BundledAvbSigningKey)" />
+  </Target>
+
+  <Target Name="RequireBundledTb322fcAbl188" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(BundledTb322fcAbl188)' != '' and !Exists('$(BundledTb322fcAbl188)')"
+           Text="BundledTb322fcAbl188 does not exist: $(BundledTb322fcAbl188)" />
   </Target>
 
 </Project>

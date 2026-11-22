@@ -286,7 +286,15 @@ public sealed partial class WindowsQualcommDriver
 
         try
         {
-            return Decide(InspectWindows());
+            var evidence = InspectWindows();
+            return Decide(evidence) with
+            {
+                RejectedPackages = DescribeRejectedPackages(evidence),
+                MissingHardwareIds = evidence.PackageQueryFailure is null
+                    && !evidence.Packages.Any(IsVerifiedPackage)
+                        ? new[] { @"USB\VID_05C6&PID_9008" }
+                        : Array.Empty<string>()
+            };
         }
         catch (Exception exception) when (IsOsQueryFailure(exception))
         {
@@ -746,6 +754,18 @@ public sealed partial class WindowsQualcommDriver
         && !string.IsNullOrWhiteSpace(package.CatalogFile)
         && IsPublishedOemInfName(package.InfName);
 
+    private static WindowsRejectedDriverPackage[] DescribeRejectedPackages(DriverEvidenceSnapshot evidence) =>
+        evidence.Packages
+            .Where(p => !IsVerifiedPackage(p))
+            .Select(p => new WindowsRejectedDriverPackage(
+                p.InfName,
+                p.DriverVersion,
+                p.DigitalSigner,
+                Path.GetFileName(p.CatalogFile),
+                p.SignatureErrorCode,
+                p.SignatureDetail))
+            .ToArray();
+
     private static DriverPackageEvidence? FindPackage(
         List<DriverPackageEvidence> packages,
         string? infName)
@@ -978,6 +998,7 @@ public sealed partial class WindowsQualcommDriver
 
             bool verified = SetupVerifyInfFile(storeInfPath, IntPtr.Zero, ref signerInfo);
             int verificationError = verified ? 0 : Marshal.GetLastWin32Error();
+            int? signatureErrorCode = verified ? (int?)null : verificationError;
 
             // A plain Win32 failure (access denied, invalid parameter, zero) is a query failure, not proof
             // that the signature is untrusted; it must reach the Unknown path instead of becoming Problem.
@@ -1005,7 +1026,10 @@ public sealed partial class WindowsQualcommDriver
                 DigitalSigner: digitalSigner,
                 CatalogFile: catalogFile,
                 SignatureAccepted: accepted,
-                SignatureDetail: signatureDetail);
+                SignatureDetail: signatureDetail)
+            {
+                SignatureErrorCode = signatureErrorCode,
+            };
         }
         finally
         {

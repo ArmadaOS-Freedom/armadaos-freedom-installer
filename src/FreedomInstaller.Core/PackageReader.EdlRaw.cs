@@ -926,7 +926,42 @@ public static partial class PackageReader
 
         CheckEdlRawBootArgs(normal, diagnostic, bootUuid, rootUuid, deployment.BootChecksum, deviceModel);
 
-        return new EdlRawBootRecipe(bootUuid, rootUuid, normal, diagnostic, defaultEntry);
+        // Wire-optional: bootRecipe.linuxBootSource
+        // - absent => legacy embedded boot (UsesArmadaBoot = false), no hash/canonical change
+        // - present => must be JSON string, exactly "armada-boot-v1", and board must be TB322FC or TB323FU
+        var usesArmadaBoot = false;
+        if (recipe.TryGetProperty("linuxBootSource", out var bootSource))
+        {
+            if (bootSource.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidDataException(
+                    $"bootRecipe.linuxBootSource 必须是字符串，实际为 {bootSource.ValueKind}。");
+            }
+
+            var bootSourceValue = bootSource.GetString();
+            if (!string.Equals(bootSourceValue, "armada-boot-v1", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"bootRecipe.linuxBootSource 只允许为 \"armada-boot-v1\"，实际为 {bootSourceValue}。");
+            }
+
+            if (!string.Equals(deviceModel, "TB322FC", StringComparison.Ordinal)
+                && !string.Equals(deviceModel, "TB323FU", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"bootRecipe.linuxBootSource 仅允许用于 TB322FC 或 TB323FU，实际为 {deviceModel}。");
+            }
+
+            if (!string.Equals(deployment.Kind, EdlRawDeploymentKindName, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"bootRecipe.linuxBootSource 要求 deployment.kind 为 {EdlRawDeploymentKindName}，实际为 {deployment.Kind}。");
+            }
+
+            usesArmadaBoot = true;
+        }
+
+        return new EdlRawBootRecipe(bootUuid, rootUuid, normal, diagnostic, defaultEntry, usesArmadaBoot);
     }
 
     /// <summary>

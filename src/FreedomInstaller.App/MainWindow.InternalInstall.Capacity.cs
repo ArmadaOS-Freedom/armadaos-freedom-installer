@@ -712,7 +712,8 @@ public partial class MainWindow
                         try
                         {
                             preparedArtifacts = await InternalInstallArtifacts.PrepareAsync(
-                                backup, androidGiB, storage, attemptRoot, token, recoverySource);
+                                backup, androidGiB, storage, attemptRoot, token, recoverySource,
+                                initializeDiskLauncherSettings: package.Validation.UsesArmadaBoot);
                         }
                         catch
                         {
@@ -944,6 +945,15 @@ public partial class MainWindow
                 "Dynamic.InternalInstall.Execution.WithFailureDetails",
                 preparedSummaryMessage,
                 M("Dynamic.InternalInstall.Prepared.AospPreservedInstallMode"));
+        }
+        else if (prepared.Abl188ReplacementSlots.Count != 0)
+        {
+            preparedSummaryMessage = M(
+                "Dynamic.InternalInstall.Execution.WithFailureDetails",
+                preparedSummaryMessage,
+                M(
+                    "Dynamic.InternalInstall.Prepared.Abl188InstallMode",
+                    string.Join(", ", prepared.Abl188ReplacementSlots)));
         }
 
         // 主摘要的 18 个参数保持原样，事实告警只作为第二段追加在它后面。

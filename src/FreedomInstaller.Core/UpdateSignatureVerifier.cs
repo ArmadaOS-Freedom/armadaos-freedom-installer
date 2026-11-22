@@ -45,6 +45,22 @@ public static class UpdateSignatureVerifier
         return ParseDocument(snapshot);
     }
 
+    internal static void VerifyDetachedDer(byte[] document, byte[] signature)
+    {
+        if (document is null || document.Length == 0 || document.Length > 160)
+        {
+            throw new ArgumentOutOfRangeException(nameof(document));
+        }
+
+        if (signature is null || signature.Length == 0 || signature.Length > 72)
+        {
+            throw new ArgumentOutOfRangeException(nameof(signature));
+        }
+
+        string publicKeyPem = LoadTrustedPublicKeyPem();
+        VerifySignature(document, signature, publicKeyPem);
+    }
+
     private static string LoadTrustedPublicKeyPem()
     {
         Assembly assembly = typeof(UpdateSignatureVerifier).Assembly;

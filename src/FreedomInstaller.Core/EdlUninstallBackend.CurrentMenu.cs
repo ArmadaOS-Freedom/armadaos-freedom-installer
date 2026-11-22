@@ -308,6 +308,7 @@ public sealed partial class EdlUninstallBackend
             throw new InvalidOperationException("The menu plan must hold exactly one slot 'a' and one slot 'b'.");
         }
 
+        IReadOnlyList<string> initializedProofRoles = Array.Empty<string>();
         var slotFacts = new List<CurrentMenuSlotFacts>();
         var candidatesBySlot = new Dictionary<string, VerifiedEdlFile?>(StringComparer.Ordinal);
         long totalCandidateBytes = 0;
@@ -318,8 +319,9 @@ public sealed partial class EdlUninstallBackend
 
             if (!string.Equals(slot.SourceSlot, slot.Slot, StringComparison.Ordinal))
             {
-                throw new InvalidOperationException(
-                    "The menu slot '" + slot.Slot + "' claims material from slot '" + slot.SourceSlot + "'.");
+                initializedProofRoles = await menuPlan
+                    .VerifyInitializedInactiveSourceAsync(slot, currentBackup, token)
+                    .ConfigureAwait(false);
             }
 
             bool isActive = string.Equals(slot.Slot, actualCurrentSlot, StringComparison.Ordinal);
@@ -668,7 +670,8 @@ public sealed partial class EdlUninstallBackend
             original.ManifestSha256,
             totalCandidateBytes,
             new ReadOnlyDictionary<int, EdlGeometry>(new Dictionary<int, EdlGeometry>(currentBackup.Geometries)),
-            new ReadOnlyDictionary<string, EdlCapturedRegion>(new Dictionary<string, EdlCapturedRegion>(currentBackup.Files, StringComparer.Ordinal)));
+            new ReadOnlyDictionary<string, EdlCapturedRegion>(new Dictionary<string, EdlCapturedRegion>(currentBackup.Files, StringComparer.Ordinal)),
+            initializedProofRoles);
     }
 
     // -----------------------------------------------------------------
@@ -1012,7 +1015,8 @@ public sealed partial class EdlUninstallBackend
             string sourceManifestSha256,
             long totalCandidateBytes,
             IReadOnlyDictionary<int, EdlGeometry> geometries,
-            IReadOnlyDictionary<string, EdlCapturedRegion> sourceRegions)
+            IReadOnlyDictionary<string, EdlCapturedRegion> sourceRegions,
+            IReadOnlyList<string>? initializedProofRoles = null)
         {
             Manifest = manifest;
             CurrentSlot = currentSlot;
@@ -1027,6 +1031,9 @@ public sealed partial class EdlUninstallBackend
                 new Dictionary<int, EdlGeometry>(geometries));
             SourceRegions = new ReadOnlyDictionary<string, EdlCapturedRegion>(
                 new Dictionary<string, EdlCapturedRegion>(sourceRegions, StringComparer.Ordinal));
+            InitializedProofRoles = initializedProofRoles is null || initializedProofRoles.Count == 0
+                ? (IReadOnlyList<string>)Array.Empty<string>()
+                : new ReadOnlyCollection<string>(new List<string>(initializedProofRoles));
         }
 
         internal PinnedFile Manifest { get; }
@@ -1050,5 +1057,7 @@ public sealed partial class EdlUninstallBackend
         internal IReadOnlyDictionary<int, EdlGeometry> Geometries { get; }
 
         internal IReadOnlyDictionary<string, EdlCapturedRegion> SourceRegions { get; }
+
+        internal IReadOnlyList<string> InitializedProofRoles { get; }
     }
 }

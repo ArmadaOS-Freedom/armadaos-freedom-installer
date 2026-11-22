@@ -63,6 +63,7 @@ _PROPERTY_NAMES = (
     "BundledAvbSigningKey",
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
+    "BundledTb322fcAbl188",
 )
 
 # Optional paired legacy inputs: embedded only when supplied.  A single-file
@@ -1052,6 +1053,9 @@ def prepare(repo_root, work_dir, manifest_path=None,
         ),
         "BundledGblPrcEfi": str(Path(fetched["gblPrc"]).resolve()),
         "BundledGblRowEfi": str(Path(fetched["gblRow"]).resolve()),
+        "BundledTb322fcAbl188": str(
+            (repo_root / "vendor" / "qualcomm" / "g4" / "abl_aosp_capable.img").resolve()
+        ),
     }
     inputs.update(offline_inputs)
     for prop, path_str in inputs.items():

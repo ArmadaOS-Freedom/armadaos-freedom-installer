@@ -147,6 +147,7 @@ def _build_fixture_repo(root):
         "vendor/qualcomm/driver/qcser.cat": DRIVER_CAT,
         "vendor/qualcomm/driver/serial/amd64/qcusbser.sys": DRIVER_SYS,
         "vendor/qualcomm/g4/firehose.melf": G4_MELF,
+        "vendor/qualcomm/g4/abl_aosp_capable.img": b"fixture-aosp-capable-abl\n",
         "vendor/qualcomm/tb710fu/firehose.melf": TB710FU_MELF,
     }
     for package in ("google", "oplus"):
@@ -428,10 +429,19 @@ class PrepareTests(unittest.TestCase):
             self.assertEqual((self.work_dir / "build-record.json").stat().st_mode & 0o777, 0o644)
         props_xml = props_path.read_text(encoding="utf-8")
 
-        # all eleven properties present, absolute-injected
+        # all required properties present, absolute-injected
         for prop in build_installer._PROPERTY_NAMES:
             self.assertIn(f"<{prop}>", props_xml)
         self.assertIn("<BundledToolPinsSource>", props_xml)
+        abl = Path(record["inputs"]["BundledTb322fcAbl188"])
+        self.assertEqual(
+            (self.repo_root / "vendor" / "qualcomm" / "g4" / "abl_aosp_capable.img").resolve(),
+            abl.resolve(),
+        )
+        self.assertIn(
+            f"<BundledTb322fcAbl188>{build_installer._xml_escape(str(abl.resolve()))}</BundledTb322fcAbl188>",
+            props_xml,
+        )
         # no offline inputs supplied: the optional pair stays out of props
         for prop in build_installer._OFFLINE_PROPERTY_NAMES:
             self.assertNotIn(f"<{prop}>", props_xml)

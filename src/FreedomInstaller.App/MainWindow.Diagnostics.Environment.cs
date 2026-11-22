@@ -9,6 +9,24 @@ namespace FreedomInstaller.App;
 
 public partial class MainWindow
 {
+    // Latest real-run results for the ADB device-check probe and the last driver install. Written only by the
+    // actual execution entry points; read here for diagnostics export. Never populated by any probe in this file.
+    private DriverInstallResult? _diagnosticLastDriverInstall;
+    private WindowsDriverCheckResult? _diagnosticLastConnectedAdb;
+
+    /// <summary>
+    /// Snapshot of the driver recheck that immediately followed an explicit repair (install) run. Captured only
+    /// when the repair produced a fresh environment check; later manual rechecks do not overwrite it.
+    /// </summary>
+    private sealed record DriverRepairProbe(
+        DateTime? StartedUtc,
+        DateTime? FinishedUtc,
+        WindowsDriverCheckResult? Qualcomm,
+        WindowsDriverCheckResult? Adb,
+        WindowsDriverCheckResult? Fastboot);
+
+    private DriverRepairProbe? _diagnosticLastDriverRepairProbe;
+
     /// <summary>
     /// Stable, flat, already-sanitized-or-safe host/readiness snapshot for diagnostics. Values are strings or
     /// null; missing/unknown is expressed as null, never as a fabricated value. No probe runs here: every
@@ -51,7 +69,7 @@ public partial class MainWindow
         map["environment.pendingReboot"] = Bool(_environmentPendingReboot);
         map["environment.stateUnknown"] = Bool(_environmentStateUnknown);
 
-        // Driver details, one helper used for all three probes.
+        // Driver details, one helper used for all three probes. The exporter sanitizes every string value.
         void AddDriver(string prefix, WindowsDriverCheckResult? result)
         {
             map[prefix + ".state"] = result?.State.ToString();
@@ -59,10 +77,74 @@ public partial class MainWindow
             map[prefix + ".publishedInf"] = result?.PublishedInf;
             map[prefix + ".detail"] = result?.Detail;
             map[prefix + ".ready"] = Bool(result?.IsReady);
+
+            if (result?.MissingHardwareIds is { Count: > 0 } missing)
+            {
+                for (var i = 0; i < missing.Count; i++)
+                {
+                    map[prefix + ".missingHardwareId." + i.ToString(CultureInfo.InvariantCulture)] = missing[i];
+                }
+            }
+
+            if (result?.RejectedPackages is { Count: > 0 } rejected)
+            {
+                for (var i = 0; i < rejected.Count; i++)
+                {
+                    var entry = rejected[i];
+                    var p = prefix + ".rejectedPackage." + i.ToString(CultureInfo.InvariantCulture) + ".";
+                    map[p + "publishedInf"] = entry.PublishedInf;
+                    map[p + "driverVersion"] = entry.DriverVersion;
+                    map[p + "signer"] = entry.Signer;
+                    map[p + "catalog"] = entry.Catalog;
+                    map[p + "signatureErrorCode"] = entry.SignatureErrorCode is int code
+                        ? "0x" + code.ToString("X8", CultureInfo.InvariantCulture)
+                        : null;
+                    map[p + "signatureDetail"] = entry.SignatureDetail;
+                }
+            }
         }
         AddDriver("driver.qualcomm", _environmentDriverResult);
         AddDriver("driver.adb", _environmentAdbResult);
         AddDriver("driver.fastboot", _environmentFastbootResult);
+        AddDriver("driver.adb.deviceCheck", _diagnosticLastConnectedAdb);
+
+        // Driver recheck that immediately followed the last explicit repair. Independent of later manual
+        // rechecks: these entries only change when a repair actually produces a fresh environment check.
+        if (_diagnosticLastDriverRepairProbe is { } repair)
+        {
+            map["driver.install.recheck.startUtc"] =
+                repair.StartedUtc?.ToString("O", CultureInfo.InvariantCulture);
+            map["driver.install.recheck.finishUtc"] =
+                repair.FinishedUtc?.ToString("O", CultureInfo.InvariantCulture);
+            AddDriver("driver.install.recheck.qualcomm", repair.Qualcomm);
+            AddDriver("driver.install.recheck.adb", repair.Adb);
+            AddDriver("driver.install.recheck.fastboot", repair.Fastboot);
+        }
+
+        // Last real driver-install run, read from _diagnosticLastDriverInstall (written by the run entry point).
+        if (_diagnosticLastDriverInstall is { } install)
+        {
+            map["driver.install.outcome"] = install.Outcome.ToString();
+            map["driver.install.exitCode"] = install.ExitCode?.ToString(CultureInfo.InvariantCulture);
+            map["driver.install.error"] = install.Error;
+
+            if (install.Attempts is { Count: > 0 } attempts)
+            {
+                for (var i = 0; i < attempts.Count; i++)
+                {
+                    var attempt = attempts[i];
+                    var p = "driver.install.attempt." + i.ToString(CultureInfo.InvariantCulture) + ".";
+                    map[p + "package"] = attempt.Package;
+                    map[p + "started"] = attempt.Started.ToString("O", CultureInfo.InvariantCulture);
+                    map[p + "finished"] = attempt.Finished.ToString("O", CultureInfo.InvariantCulture);
+                    map[p + "outcome"] = attempt.Outcome.ToString();
+                    map[p + "exitCode"] = attempt.ExitCode?.ToString(CultureInfo.InvariantCulture);
+                    map[p + "error"] = attempt.Error;
+                    // SetupApiExcerpt is already sanitized by the parser; explicit null is preserved.
+                    map[p + "setupApiExcerpt"] = attempt.SetupApiExcerpt;
+                }
+            }
+        }
 
         // Work directory: reflects the last completed check result, not a fresh probe.
         // availableFreeBytes is annotated as the last successful check; it is not re-measured here.

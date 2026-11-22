@@ -69,6 +69,7 @@ public sealed partial class InternalInstallBackend
         _context.EnsureDirectExecutionSpace();
         await _context.RevalidateLocalAsync(ct).ConfigureAwait(false);
         await _context.VerifyOriginalDeviceAsync(_initialEdl, "execute-direct", ct).ConfigureAwait(false);
+        await _context.VerifyLauncherDefaultsAsync(_initialEdl, after: false, ct).ConfigureAwait(false);
         _context.EnsureDirectExecutionSpace(includeOriginalCapture: false);
 
         if (!_context.AndroidDataErase)
@@ -104,6 +105,7 @@ public sealed partial class InternalInstallBackend
         InternalArtifactRegion? gblRuntime = null;
 
         var metadataRegions = new List<InternalArtifactRegion>();
+        var ablRegions = new List<InternalArtifactRegion>();
 
         if (_context.DirectBootTrustMode == InternalInstallBootTrustMode.GblPreserveOem)
         {
@@ -119,6 +121,13 @@ public sealed partial class InternalInstallBackend
                 throw new InvalidOperationException(
                     DirectExecutionAvbMetadataMismatchCode + ": the GBL-preserving direct route requires no AVB "
                     + "metadata, but " + _context.DirectAvbNodes.Count + " nodes were prepared.");
+            }
+
+            if (_context.DirectAblReplacements.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    DirectExecutionAvbMetadataMismatchCode + ": the GBL-preserving direct route requires no "
+                    + "ABL replacement, but " + _context.DirectAblReplacements.Count + " targets were prepared.");
             }
 
             gblRuntime = MakeExecutionRegion(gblEfispTarget, gblEfispCandidate, "efisp");
@@ -147,6 +156,12 @@ public sealed partial class InternalInstallBackend
 
             // The AOSP-preserving route keeps every original AVB metadata partition: no node is expected.
             bool preserved = _context.DirectBootTrustMode == InternalInstallBootTrustMode.AospPreserved;
+            if (preserved && _context.DirectAblReplacements.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    DirectExecutionAvbMetadataMismatchCode + ": the AOSP-preserving direct route requires no "
+                    + "ABL replacement, but " + _context.DirectAblReplacements.Count + " targets were prepared.");
+            }
 
             foreach (string slot in avbSlotOrder)
             {
@@ -189,6 +204,26 @@ public sealed partial class InternalInstallBackend
 
                 metadataRegions.Add(
                     MakeExecutionRegion(RequireCapturedRegion(expectedRole), node.Node.Candidate, expectedRole));
+            }
+
+            // The AOSP-capable 188 loader is planned in the same fixed slot order as the boot writes.
+            // Only roles the proof actually carries are ever emitted; no caller can add an ABL write.
+            foreach (string slot in avbSlotOrder)
+            {
+                string role = "abl_" + slot;
+                if (_context.DirectAblReplacements.TryGetValue(role, out VerifiedEdlFile? candidate))
+                {
+                    ablRegions.Add(
+                        MakeExecutionRegion(RequireCapturedRegion(role), candidate, role));
+                }
+            }
+
+            if (ablRegions.Count != _context.DirectAblReplacements.Count)
+            {
+                throw new InvalidOperationException(
+                    DirectExecutionAvbMetadataMismatchCode + ": the prepared ABL replacement map has "
+                    + _context.DirectAblReplacements.Count + " targets but only " + ablRegions.Count
+                    + " fixed-slot regions were built.");
             }
         }
 
@@ -317,10 +352,62 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
-        // Only the fresh misc bytes are read and overlaid; the old backup SHA is never restored.
-        await WriteFreshMiscAsync(
-                _initialEdl, run, progress, ct, androidDataErase: _context.AndroidDataErase)
-            .ConfigureAwait(false);
+        // The test-only 188 loader is the last trust-material write: after every AVB metadata node and
+        // before the fresh misc overlay, launcher settings and reset. Every region is a full-partition
+        // write and readback.
+        foreach (InternalArtifactRegion region in ablRegions)
+        {
+            string? slot = region.Role.EndsWith("_a", StringComparison.Ordinal)
+                ? "a"
+                : region.Role.EndsWith("_b", StringComparison.Ordinal)
+                    ? "b"
+                    : null;
+
+            await WriteExecutionRegionAsync(
+                    _initialEdl,
+                    run,
+                    InternalInstallStage.WritingAbl,
+                    slot,
+                    region,
+                    true,
+                    progress,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        // A preserved ARMADA_BOOT layout skips misc entirely; a preserved legacy layout may still clear
+        // an existing installer BCB. The explicit AndroidDataErase decision must accompany every call.
+        if (_context.AndroidDataErase || !_context.Package.EdlRawContract.BootRecipe.UsesArmadaBoot)
+        {
+            await WriteFreshMiscAsync(_initialEdl, run, progress, ct, androidDataErase: _context.AndroidDataErase).ConfigureAwait(false);
+        }
+
+        if (_context.LauncherDefaults is { } plan)
+        {
+            foreach (InternalArtifactRegion region in plan.Writes)
+            {
+                await WriteExecutionRegionAsync(
+                        _initialEdl,
+                        run,
+                        InternalInstallStage.WritingLauncherSettings,
+                        null,
+                        region,
+                        true,
+                        progress,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        try
+        {
+            await _context.VerifyLauncherDefaultsAsync(_initialEdl, after: true, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            run.MarkVerificationUnproven();
+            throw;
+        }
 
         // The one reset of this run, and only after every write and readback above.
         await ResetExecutionAsync(

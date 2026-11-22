@@ -110,6 +110,7 @@ public static partial class PackageReader
                     Version = contract.Version,
                     ManifestFingerprint = contract.ManifestFingerprint,
                     DeploymentKind = contract.DeploymentKind,
+                    UsesArmadaBoot = contract.UsesArmadaBoot,
                 };
             }
 
@@ -328,7 +329,8 @@ public static partial class PackageReader
                 contract.TestOnly,
                 contract.Storage,
                 contract.ManifestFingerprint,
-                contract.Deployment.Kind);
+                contract.Deployment.Kind,
+                contract.BootRecipe.UsesArmadaBoot);
         }
         catch (InvalidDataException exception)
         {
@@ -1141,5 +1143,6 @@ public static partial class PackageReader
         bool TestOnly,
         PackageStorage Storage,
         string ManifestFingerprint,
-        string? DeploymentKind = null);
+        string? DeploymentKind = null,
+        bool UsesArmadaBoot = false);
 }

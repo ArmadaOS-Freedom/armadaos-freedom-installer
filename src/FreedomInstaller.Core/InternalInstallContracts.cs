@@ -102,6 +102,16 @@ public enum InternalInstallStage
     /// verification outcome.
     /// </summary>
     WritingGblRuntime,
+
+    WritingLauncherSettings,
+
+    /// <summary>
+    /// The pinned TB322FC 188 ABL, used as an AOSP-capable loader independent of firmware version, is
+    /// written whole to each planned slot and read back over the initial EDL session. This test-only
+    /// route covers only that write and its readback; it does not itself prove that the following boot
+    /// was accepted by the bootloader.
+    /// </summary>
+    WritingAbl,
 }
 
 /// <summary>
@@ -396,6 +406,8 @@ public sealed class InternalInstallPrepared
 
         internal InternalInstallBootTrustMode BootTrustMode = InternalInstallBootTrustMode.AospResigned;
 
+        internal IReadOnlyList<string> Abl188ReplacementSlots = Array.Empty<string>();
+
         internal string PackageFingerprint = string.Empty;
 
         internal string PackageBindingSha256 = string.Empty;
@@ -453,6 +465,7 @@ public sealed class InternalInstallPrepared
         Firmware = state.Firmware;
         FastbootLockState = state.FastbootLockState;
         BootTrustMode = state.BootTrustMode;
+        Abl188ReplacementSlots = new List<string>(state.Abl188ReplacementSlots).AsReadOnly();
 
         PackageFingerprint = state.PackageFingerprint;
         PackageBindingSha256 = state.PackageBindingSha256;
@@ -518,6 +531,12 @@ public sealed class InternalInstallPrepared
     /// acceptance is implied.
     /// </summary>
     public InternalInstallBootTrustMode BootTrustMode { get; }
+
+    /// <summary>
+    /// The a/b slots whose ABL is replaced by the pinned TB322FC AOSP-capable 188 loader. Empty
+    /// for every route that writes no ABL.
+    /// </summary>
+    public IReadOnlyList<string> Abl188ReplacementSlots { get; }
 
     /// <summary>Fingerprint of the selected package.</summary>
     public string PackageFingerprint { get; }

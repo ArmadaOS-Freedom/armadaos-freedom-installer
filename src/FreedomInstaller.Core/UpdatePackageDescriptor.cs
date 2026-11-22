@@ -155,13 +155,26 @@ public sealed partial class UpdatePackageDescriptor
         return ParseVerifiedRoot(jsonDocument.RootElement);
     }
 
+    private static readonly HashSet<string> TopKeysWithBootCapsules = new(TopKeysSet, StringComparer.Ordinal)
+    {
+        "armadaBootCapsules",
+    };
+
+    private static readonly HashSet<string> BootCapsuleKeys = new(StringComparer.Ordinal)
+    {
+        "board.dtb",
+        "manifest.bin",
+        "manifest.sig",
+    };
+
     internal static UpdatePackageDescriptor ParseVerifiedRoot(JsonElement root)
     {
         EnsureNoDuplicatePropertiesRecursive(root);
 
         Dictionary<string, JsonElement> data = RequireExactObject(
             root,
-            TopKeysSet,
+            root.ValueKind == JsonValueKind.Object && root.TryGetProperty("armadaBootCapsules", out _)
+                ? TopKeysWithBootCapsules : TopKeysSet,
             "package must contain exactly the schema 1 top-level keys");
 
         if (!TryGetExactInt64(data["schemaVersion"], out long schemaVersion) || schemaVersion != 1)
@@ -338,6 +351,11 @@ public sealed partial class UpdatePackageDescriptor
             }
         }
 
+        if (data.TryGetValue("armadaBootCapsules", out JsonElement bootCapsules))
+        {
+            ValidateArmadaBootCapsules(bootCapsules, supportedModels);
+        }
+
         ValidateDeckySnapshot(data["deckySnapshot"]);
         if (operations.Contains("decky-repair") && data["deckySnapshot"].ValueKind == JsonValueKind.Null)
         {
@@ -380,6 +398,55 @@ public sealed partial class UpdatePackageDescriptor
         if (callerVersion.CompareTo(_minimumInstallerVersion) < 0)
         {
             throw new InvalidDataException("version is older than minimumInstallerVersion");
+        }
+    }
+
+    private static void ValidateArmadaBootCapsules(JsonElement element, HashSet<string> supportedModels)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.EnumerateObject().Any())
+        {
+            throw new InvalidDataException("armadaBootCapsules must be a nonempty object");
+        }
+
+        foreach (JsonProperty property in element.EnumerateObject())
+        {
+            if ((property.Name is not "TB322FC" and not "TB323FU") || !supportedModels.Contains(property.Name))
+            {
+                throw new InvalidDataException($"invalid boot capsule model {property.Name}");
+            }
+
+            string field = $"armadaBootCapsules.{property.Name}";
+            Dictionary<string, JsonElement> capsule = RequireExactObject(
+                property.Value, BootCapsuleKeys,
+                $"{field} must contain exactly board.dtb, manifest.bin, and manifest.sig");
+            ValidateCapsuleBase64(capsule["board.dtb"], $"{field}.board.dtb", 1, 256 * 1024);
+            ValidateCapsuleBase64(capsule["manifest.bin"], $"{field}.manifest.bin", 160, 160);
+            ValidateCapsuleBase64(capsule["manifest.sig"], $"{field}.manifest.sig", 8, 72);
+        }
+    }
+
+    private static void ValidateCapsuleBase64(JsonElement element, string field, int minimum, int maximum)
+    {
+        string error = $"{field} must be canonical base64 encoding {minimum} to {maximum} bytes";
+        if (element.ValueKind != JsonValueKind.String || element.GetString() is not string value
+            || value.Length > ((maximum + 2) / 3) * 4)
+        {
+            throw new InvalidDataException(error);
+        }
+
+        byte[] decoded;
+        try
+        {
+            decoded = Convert.FromBase64String(value);
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidDataException(error, ex);
+        }
+
+        if (decoded.Length < minimum || decoded.Length > maximum || Convert.ToBase64String(decoded) != value)
+        {
+            throw new InvalidDataException(error);
         }
     }
 

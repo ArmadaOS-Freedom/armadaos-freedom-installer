@@ -151,10 +151,12 @@ internal static class BootMaintenanceInstalledLinux
     private const uint Ext4IncompatExtents = 0x40u;
     private const uint Ext4Incompat64Bit = 0x80u;
     private const uint Ext4IncompatFlexBg = 0x200u;
+    private const uint Ext4IncompatMetadataCsumSeed = 0x2000u;
 
     /// <summary>The only incompatible features this bounded reader accepts.</summary>
     private const uint Ext4IncompatAccepted =
-        Ext4IncompatFileType | Ext4IncompatExtents | Ext4Incompat64Bit | Ext4IncompatFlexBg;
+        Ext4IncompatFileType | Ext4IncompatExtents | Ext4Incompat64Bit | Ext4IncompatFlexBg |
+        Ext4IncompatMetadataCsumSeed;
 
     private const uint Ext4MaxLogBlockSize = 6;
     private const int Ext4DescriptorBytes32 = 32;
@@ -400,6 +402,196 @@ internal static class BootMaintenanceInstalledLinux
     /// is empty here: the pure path owns no files.
     /// </para>
     /// </summary>
+    private const string DiskBindingPath = "/armada/boot/binding.bin";
+    private const string DiskKernelPath = "/armada/boot/kernel.img";
+    private const string DiskInitramfsPath = "/armada/boot/initramfs.img";
+
+    internal static (string BootChecksum, string KernelSha256, string InitramfsSha256) VerifyArmadaBootImage(
+        Stream bootFilesystem,
+        EdlRawPackageContract package,
+        CancellationToken ct)
+    {
+        Ext4Volume volume = Ext4Volume.Open(bootFilesystem, package.BootRecipe.BootUuid);
+
+        string boardRoot = package.DeviceModel switch
+        {
+            "TB322FC" => "/armada/boot/TB322FC",
+            "TB323FU" => "/armada/boot/TB323FU",
+            _ => throw Mismatch("unsupported Armada board '" + package.DeviceModel + "'"),
+        };
+
+        (uint manifestIno, _) = volume.ResolvePath(
+            boardRoot + "/manifest.bin", "the Armada manifest", ct);
+        byte[] manifest = volume.ReadFileBytes(
+            manifestIno, 160, "the Armada manifest.bin", ct);
+        if (manifest.Length != 160)
+        {
+            throw Mismatch("the Armada manifest.bin is not exactly 160 bytes");
+        }
+
+        (uint sigIno, _) = volume.ResolvePath(
+            boardRoot + "/manifest.sig", "the Armada manifest signature", ct);
+        byte[] signature = volume.ReadFileBytes(
+            sigIno, 72, "the Armada manifest.sig", ct);
+        if (signature.Length == 0 || signature.Length > 72)
+        {
+            throw Mismatch("the Armada manifest.sig is empty or beyond 72 bytes");
+        }
+
+        if (manifest[0] != (byte)'A' || manifest[1] != (byte)'R' ||
+            manifest[2] != (byte)'M' || manifest[3] != (byte)'B' ||
+            manifest[4] != (byte)'T' || manifest[5] != (byte)'V' ||
+            manifest[6] != (byte)'1' || manifest[7] != 0)
+        {
+            throw Mismatch("the Armada manifest magic is not 'ARMBTV1'");
+        }
+
+        uint version = BinaryPrimitives.ReadUInt32LittleEndian(manifest.AsSpan(8, 4));
+        uint board = BinaryPrimitives.ReadUInt32LittleEndian(manifest.AsSpan(12, 4));
+        if (version != 1)
+        {
+            throw Mismatch("the Armada manifest version is not 1");
+        }
+
+        if (board != (package.DeviceModel == "TB322FC" ? 1u : 2u))
+        {
+            throw Mismatch("the Armada manifest board id does not match the package");
+        }
+
+        for (int i = 136; i < 160; i++)
+        {
+            if (manifest[i] != 0)
+            {
+                throw Mismatch("the Armada manifest reserved bytes are not zero");
+            }
+        }
+
+        UpdateSignatureVerifier.VerifyDetachedDer(manifest, signature);
+
+        (ulong kernelSize, string kernelSha) = HashImage(
+            volume, DiskKernelPath, 128UL * 1024 * 1024, "kernel", ct);
+        (ulong initramfsSize, string initramfsSha) = HashImage(
+            volume, DiskInitramfsPath, 128UL * 1024 * 1024, "initramfs", ct);
+        (ulong dtbSize, string dtbSha) = HashImage(
+            volume, boardRoot + "/board.dtb", 256UL * 1024, "board.dtb", ct);
+
+        VerifyManifestEntry(manifest, 0, kernelSize, kernelSha, "kernel");
+        VerifyManifestEntry(manifest, 1, initramfsSize, initramfsSha, "initramfs");
+        VerifyManifestEntry(manifest, 2, dtbSize, dtbSha, "board.dtb");
+
+        VerifyArtifact(package, "kernel", kernelSize, kernelSha, "/armada/boot/kernel.img");
+        VerifyArtifact(package, "initramfs", initramfsSize, initramfsSha, "/armada/boot/initramfs.img");
+
+        (uint bindingIno, _) = volume.ResolvePath(
+            DiskBindingPath, "the Armada binding.bin", ct);
+        byte[] binding = volume.ReadFileBytes(
+            bindingIno, 152, "the Armada binding.bin", ct);
+        if (binding.Length != 152)
+        {
+            throw Mismatch("the Armada binding.bin is not exactly 152 bytes");
+        }
+
+        if (binding[0] != (byte)'A' || binding[1] != (byte)'R' ||
+            binding[2] != (byte)'M' || binding[3] != (byte)'D' ||
+            binding[4] != (byte)'E' || binding[5] != (byte)'P' ||
+            binding[6] != (byte)'1' || binding[7] != 0)
+        {
+            throw Mismatch("the Armada binding magic is not 'ARMDEP1'");
+        }
+
+        if (binding[8] != 0 && binding[8] != 1)
+        {
+            throw Mismatch("the Armada binding version is not 0 or 1");
+        }
+
+        for (int i = 9; i < 16; i++)
+        {
+            if (binding[i] != 0)
+            {
+                throw Mismatch("the Armada binding reserved bytes 9..15 are not zero");
+            }
+        }
+
+        string bootChecksum = Encoding.ASCII.GetString(binding, 16, 64);
+        string commit = Encoding.ASCII.GetString(binding, 80, 64);
+
+        if (!string.Equals(bootChecksum, package.Deployment.BootChecksum, StringComparison.Ordinal))
+        {
+            throw Mismatch("the Armada binding boot checksum does not match the deployment");
+        }
+
+        if (!string.Equals(commit, package.Deployment.Commit, StringComparison.Ordinal))
+        {
+            throw Mismatch("the Armada binding commit does not match the deployment");
+        }
+
+        uint serial = BinaryPrimitives.ReadUInt32LittleEndian(binding.AsSpan(144, 4));
+        uint index = BinaryPrimitives.ReadUInt32LittleEndian(binding.AsSpan(148, 4));
+        if (serial > int.MaxValue || index > int.MaxValue)
+        {
+            throw Mismatch("the Armada binding serial or index exceeds int.MaxValue");
+        }
+
+        string expectedToken = FormattableString.Invariant($"ostree=/ostree/boot.{binding[8]}/default/{bootChecksum}/{index}");
+        string expectedDeployment = FormattableString.Invariant($"armada.deployment=default/{commit}.{serial}");
+
+        string[] args = (package.BootRecipe.NormalBootArgs ?? string.Empty)
+            .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+
+        int tokenMatches = 0;
+        int deploymentMatches = 0;
+        foreach (string arg in args)
+        {
+            if (string.Equals(arg, expectedToken, StringComparison.Ordinal))
+            {
+                tokenMatches++;
+            }
+            else if (string.Equals(arg, expectedDeployment, StringComparison.Ordinal))
+            {
+                deploymentMatches++;
+            }
+        }
+
+        if (tokenMatches != 1 || deploymentMatches != 1)
+        {
+            throw Mismatch(
+                "the boot args do not contain exactly one matching ostree and armada.deployment token");
+        }
+
+        return (bootChecksum, kernelSha, initramfsSha);
+    }
+
+    private static (ulong Size, string Sha256) HashImage(
+        Ext4Volume volume, string path, ulong cap, string what, CancellationToken ct)
+    {
+        uint ino = volume.ResolvePath(path, "the Armada " + what + " image", ct).Ino;
+        (ulong size, string sha) = volume.HashRegularFile(
+            ino, "the Armada " + what + " image '" + path + "'", ct, allowSparse: true, maxBytes: cap);
+        if (size == 0 || size > cap)
+        {
+            throw Mismatch("the Armada " + what + " image is empty or beyond its cap");
+        }
+
+        return (size, sha);
+    }
+
+    private static void VerifyManifestEntry(
+        byte[] manifest, int slot, ulong size, string sha256, string what)
+    {
+        ulong signedLength = BinaryPrimitives.ReadUInt64LittleEndian(
+            manifest.AsSpan(16 + 8 * slot, 8));
+        if (signedLength != size)
+        {
+            throw Mismatch("the Armada manifest " + what + " length does not match");
+        }
+
+        string signedSha = Convert.ToHexString(manifest.AsSpan(40 + 32 * slot, 32));
+        if (!string.Equals(signedSha, sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw Mismatch("the Armada manifest " + what + " hash does not match");
+        }
+    }
+
     internal static InstalledLinuxBootFacts VerifyCaptured(
         Stream bootFilesystem,
         ReadOnlySpan<byte> rootSuperblock,
@@ -441,9 +633,24 @@ internal static class BootMaintenanceInstalledLinux
             throw Mismatch("the package root image FS UUID and boot recipe root UUID disagree");
         }
 
-        Ext4Volume volume = Ext4Volume.Open(bootFilesystem, package.BootRecipe.BootUuid);
         Guid rootUuid = VerifyBtrfsRoot(rootSuperblock, package);
+        if (package.BootRecipe.UsesArmadaBoot)
+        {
+            var disk = VerifyArmadaBootImage(bootFilesystem, package, ct);
+            return new InstalledLinuxBootFacts(
+                package.BootRecipe.BootUuid,
+                rootUuid,
+                DiskBindingPath,
+                disk.BootChecksum,
+                disk.KernelSha256,
+                disk.InitramfsSha256,
+                DiskKernelPath,
+                DiskInitramfsPath,
+                Array.Empty<VerifiedEdlFile>(),
+                "Verified the active ARMADA_BOOT binding, signed Linux files, and ARMADA_ROOT filesystem UUID.");
+        }
 
+        Ext4Volume volume = Ext4Volume.Open(bootFilesystem, package.BootRecipe.BootUuid);
         (uint loaderIno, ushort loaderMode) = volume.ResolvePath("/loader", "/loader", ct);
         RequireDirectory(loaderMode, "/loader");
 
@@ -1129,7 +1336,7 @@ internal static class BootMaintenanceInstalledLinux
     /// One bounded, strictly read-only view of the captured boot ext4 filesystem. Only what the
     /// verification needs is implemented: group descriptors, inode lookup, extent-mapped
     /// directory/regular/symlink content and whole-file hashing. Block-mapped files,
-    /// uninitialized extents, holes and out-of-range mappings always reject; nothing here
+    /// out-of-range mappings reject, and only signed image hashing accepts extent holes; nothing here
     /// writes, repairs or interprets the filesystem beyond path resolution and hashing.
     /// </summary>
     private sealed class Ext4Volume
@@ -1395,7 +1602,8 @@ internal static class BootMaintenanceInstalledLinux
             return ResolveComponent(RootInodeNumber, comps, 0, MaxSymlinkFollows, ct);
         }
 
-        internal (ulong Length, string Sha256) HashRegularFile(uint ino, string what, CancellationToken ct)
+        internal (ulong Length, string Sha256) HashRegularFile(
+            uint ino, string what, CancellationToken ct, bool allowSparse = false, ulong? maxBytes = null)
         {
             byte[] inode = ReadInode(ino, what);
             if ((ModeOf(inode) & InodeModeTypeMask) != InodeModeRegular)
@@ -1410,14 +1618,27 @@ internal static class BootMaintenanceInstalledLinux
                 throw Mismatch("'" + what + "' is " + size + " bytes, beyond the verified file bound");
             }
 
+            if (maxBytes is ulong cap && size > cap)
+            {
+                throw Mismatch("'" + what + "' is " + size + " bytes, beyond its cap");
+            }
+
             using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             byte[] buffer = new byte[CopyBufferBytes];
             ulong total = 0;
 
-            foreach ((long offset, int count) in FileChunks(inode, size, what))
+            foreach ((long offset, int count) in FileChunks(inode, size, what, allowSparse))
             {
                 ct.ThrowIfCancellationRequested();
-                ReadExactAt(Stream, offset, buffer, 0, count);
+                if (offset < 0)
+                {
+                    Array.Clear(buffer, 0, count);
+                }
+                else
+                {
+                    ReadExactAt(Stream, offset, buffer, 0, count);
+                }
+
                 hash.AppendData(buffer, 0, count);
                 total += (ulong)count;
             }
@@ -1525,11 +1746,12 @@ internal static class BootMaintenanceInstalledLinux
                 }
 
                 string target = ReadSymlinkTarget(entry.Ino, "the symlink '" + comps[index] + "'", ct);
-                List<string> targetComps = SplitPath(target, "the symlink target of '" + comps[index] + "'");
+                List<string> targetComps = SplitPath(target, "the symlink target of '" + comps[index] + "'", allowRelative: true);
                 uint baseDir = target.StartsWith("/", StringComparison.Ordinal) ? RootInodeNumber : dirIno;
 
-                (uint linkedIno, ushort linkedMode) =
-                    ResolveComponent(baseDir, targetComps, 0, followsLeft - 1, ct);
+                (uint linkedIno, ushort linkedMode) = targetComps.Count == 0
+                    ? (baseDir, ModeOfInode(baseDir, "the symlink base of '" + comps[index] + "'"))
+                    : ResolveComponent(baseDir, targetComps, 0, followsLeft - 1, ct);
 
                 if (index + 1 == comps.Count)
                 {
@@ -1572,73 +1794,90 @@ internal static class BootMaintenanceInstalledLinux
             return content;
         }
 
-        /// <summary>
-        /// Validates the extent mapping of one file against its declared size - exact
-        /// contiguous coverage of every logical block, initialized extents only, in-range
-        /// physical blocks only - and yields the bounded byte chunks to read from the stream.
-        /// All validation happens before the first chunk is produced.
-        /// </summary>
-        private IEnumerable<(long Offset, int Count)> FileChunks(byte[] inode, ulong size, string what)
+        /// <summary>Validate all mappings, then yield bounded reads or sparse zero runs.</summary>
+        private IEnumerable<(long Offset, int Count)> FileChunks(
+            byte[] inode, ulong size, string what, bool allowSparse = false)
         {
-            List<(ulong Logical, ulong Physical, ulong Blocks)> extents = CollectExtents(inode, what);
+            var extents = CollectExtents(inode, what, allowSparse);
             ulong logicalBlocks = DivCeil(size, (ulong)BlockSize);
             ulong expected = 0;
-
-            foreach ((ulong logical, ulong physical, ulong blocks) in extents)
+            foreach ((ulong logical, ulong physical, ulong blocks, bool _) in extents)
             {
-                if (logical != expected)
+                if (logical < expected)
+                {
+                    throw Mismatch("'" + what + "' carries overlapping extents");
+                }
+                if (!allowSparse && logical != expected)
                 {
                     throw Mismatch(
                         "'" + what + "' extents are not contiguous from block zero (hole at block " + expected + ")");
                 }
-
                 if (physical >= BlocksCount || blocks > BlocksCount - physical)
                 {
                     throw Mismatch("'" + what + "' carries an extent mapping outside the filesystem");
                 }
-
                 expected = CheckedAddU(logical, blocks, "'" + what + "' extent end overflows");
                 if (expected > logicalBlocks)
                 {
                     throw Mismatch("'" + what + "' carries an extent beyond its own end");
                 }
             }
-
-            if (expected != logicalBlocks)
+            if (!allowSparse && expected != logicalBlocks)
             {
                 throw Mismatch("'" + what + "' does not cover all of its " + logicalBlocks + " logical blocks");
             }
 
-            foreach ((ulong logical, ulong physical, ulong blocks) in extents)
+            expected = 0;
+            foreach ((ulong logical, ulong physical, ulong blocks, bool unwritten) in extents)
             {
-                ulong extentBytes = CheckedMulU(blocks, (ulong)BlockSize, "'" + what + "' extent byte length overflows");
-                ulong take = Math.Min(extentBytes, size - CheckedMulU(logical, (ulong)BlockSize, "'" + what + "' extent offset overflows"));
-                long source = (long)(physical * (ulong)BlockSize);
-                ulong done = 0;
-
-                while (done < take)
+                foreach (var chunk in FileRange(expected, logical, size, offset: -1))
                 {
-                    int chunk = (int)Math.Min(take - done, (ulong)CopyBufferBytes);
-                    yield return (source + (long)done, chunk);
-                    done += (ulong)chunk;
+                    yield return chunk;
                 }
+                long source = unwritten ? -1 : (long)(physical * (ulong)BlockSize);
+                foreach (var chunk in FileRange(logical, logical + blocks, size, source))
+                {
+                    yield return chunk;
+                }
+                expected = logical + blocks;
+            }
+            foreach (var chunk in FileRange(expected, logicalBlocks, size, offset: -1))
+            {
+                yield return chunk;
             }
         }
 
-        private List<(ulong Logical, ulong Physical, ulong Blocks)> CollectExtents(byte[] inode, string what)
+        private IEnumerable<(long Offset, int Count)> FileRange(ulong from, ulong to, ulong size, long offset)
         {
-            var extents = new List<(ulong Logical, ulong Physical, ulong Blocks)>();
+            ulong position = from * (ulong)BlockSize;
+            ulong end = Math.Min(to * (ulong)BlockSize, size);
+            while (position < end)
+            {
+                int count = (int)Math.Min(end - position, (ulong)CopyBufferBytes);
+                yield return (offset, count);
+                if (offset >= 0)
+                {
+                    offset += count;
+                }
+                position += (ulong)count;
+            }
+        }
+
+        private List<(ulong Logical, ulong Physical, ulong Blocks, bool Unwritten)> CollectExtents(byte[] inode, string what, bool allowSparse)
+        {
+            var extents = new List<(ulong Logical, ulong Physical, ulong Blocks, bool Unwritten)>();
             byte[] inline = new byte[InodeBlockAreaBytes];
             Array.Copy(inode, InodeBlockAreaOffset, inline, 0, InodeBlockAreaBytes);
-            CollectExtentsNode(inline, what, extents, MaxExtentDepth);
+            CollectExtentsNode(inline, what, extents, MaxExtentDepth, allowSparse);
             return extents;
         }
 
         private void CollectExtentsNode(
             byte[] node,
             string what,
-            List<(ulong Logical, ulong Physical, ulong Blocks)> extents,
-            int depthLeft)
+            List<(ulong Logical, ulong Physical, ulong Blocks, bool Unwritten)> extents,
+            int depthLeft,
+            bool allowSparse)
         {
             if (node.Length < ExtentHeaderBytes)
             {
@@ -1675,7 +1914,8 @@ internal static class BootMaintenanceInstalledLinux
                     ushort eeStartHigh = BinaryPrimitives.ReadUInt16LittleEndian(node.AsSpan(o + 6));
                     uint eeStartLow = BinaryPrimitives.ReadUInt32LittleEndian(node.AsSpan(o + 8));
 
-                    if (eeLen >= ExtentUnwrittenMarker)
+                    bool unwritten = eeLen > ExtentUnwrittenMarker;
+                    if (unwritten && !allowSparse)
                     {
                         throw Mismatch(
                             "'" + what + "' carries an uninitialized extent; uninitialized storage is never "
@@ -1688,7 +1928,8 @@ internal static class BootMaintenanceInstalledLinux
                     }
 
                     ulong physical = ((ulong)eeStartHigh << 32) | eeStartLow;
-                    extents.Add((eeBlock, physical, eeLen));
+                    ulong blocks = unwritten ? (ulong)(eeLen - ExtentUnwrittenMarker) : eeLen;
+                    extents.Add((eeBlock, physical, blocks, unwritten));
                 }
 
                 return;
@@ -1706,7 +1947,7 @@ internal static class BootMaintenanceInstalledLinux
                 }
 
                 byte[] childNode = ReadExactAt(Stream, (long)(child * (ulong)BlockSize), BlockSize);
-                CollectExtentsNode(childNode, what, extents, depthLeft - 1);
+                CollectExtentsNode(childNode, what, extents, depthLeft - 1, allowSparse);
             }
         }
 
@@ -1774,9 +2015,9 @@ internal static class BootMaintenanceInstalledLinux
             return entries;
         }
 
-        private static List<string> SplitPath(string path, string what)
+        private static List<string> SplitPath(string path, string what, bool allowRelative = false)
         {
-            if (string.IsNullOrEmpty(path) || path[0] != '/')
+            if (string.IsNullOrEmpty(path) || (!allowRelative && path[0] != '/'))
             {
                 throw Mismatch("'" + what + "' is not an absolute path");
             }

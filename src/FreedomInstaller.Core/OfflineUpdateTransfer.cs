@@ -708,7 +708,10 @@ public sealed class OfflineUpdateTransfer
     /// 0.8 reports a proven actual/inactive pair. 0.7 reports
     /// actualSlot=null, inactiveSlot=null, selectedSlot=a|b and
     /// bootContext=legacy-controller. Only that exact legacy shape is accepted;
-    /// a half-populated pair is still rejected.
+    /// a half-populated pair is still rejected. On the native armada_boot path,
+    /// actualSlot/inactiveSlot must be explicit JSON null and selectedSlot must
+    /// be absent (any present-typed value, including null or non-string, is
+    /// rejected).
     /// </summary>
     private static SlotInfo ReadSlots(JsonElement value, string label)
     {
@@ -716,6 +719,24 @@ public sealed class OfflineUpdateTransfer
         var actual = OptionalString(value, "actualSlot");
         var inactive = OptionalString(value, "inactiveSlot");
         var selected = OptionalString(value, "selectedSlot");
+
+        // Disk-native system: exact bootSource="armada_boot" with explicit JSON
+        // null actualSlot/inactiveSlot and selectedSlot omitted.
+        if (value.TryGetProperty("bootSource", out var bootSourceProp)
+            && bootSourceProp.ValueKind == JsonValueKind.String
+            && string.Equals(bootSourceProp.GetString(), "armada_boot", StringComparison.Ordinal))
+        {
+            if (string.Equals(bootContext, "legacy-controller", StringComparison.Ordinal))
+                throw new InvalidDataException($"{label} 磁盘设备字段非法。");
+            if (!value.TryGetProperty("actualSlot", out var actualProp)
+                || actualProp.ValueKind != JsonValueKind.Null
+                || !value.TryGetProperty("inactiveSlot", out var inactiveProp)
+                || inactiveProp.ValueKind != JsonValueKind.Null)
+                throw new InvalidDataException($"{label} 磁盘设备槽位字段非法。");
+            if (value.TryGetProperty("selectedSlot", out _))
+                throw new InvalidDataException($"{label} 磁盘设备 selectedSlot 非法。");
+            return new SlotInfo(null, null, null, LegacyController: false);
+        }
 
         if (string.Equals(bootContext, "legacy-controller", StringComparison.Ordinal))
         {

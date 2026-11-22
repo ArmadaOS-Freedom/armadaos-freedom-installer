@@ -43,6 +43,19 @@ public record WindowsDriverCheckResult(
     /// and <see cref="WindowsDriverCheckState.Missing"/> are never ready.
     /// </summary>
     public bool IsReady => State is WindowsDriverCheckState.Prepared or WindowsDriverCheckState.Connected;
+
+    /// <summary>
+    /// Supported USB hardware IDs that no accepted, verified package covers (or that a present endpoint
+    /// requires but is not covered for). Diagnostic evidence only; never used to relax readiness.
+    /// </summary>
+    public IReadOnlyList<string> MissingHardwareIds { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Published packages whose signature was inspected and not accepted. Diagnostic evidence only;
+    /// contains no device instance serial numbers or other device identifiers.
+    /// </summary>
+    public IReadOnlyList<WindowsRejectedDriverPackage> RejectedPackages { get; init; } =
+        Array.Empty<WindowsRejectedDriverPackage>();
 }
 
 /// <summary>
@@ -60,7 +73,22 @@ internal sealed record DriverPackageEvidence(
     string? SignatureDetail)
 {
     public IReadOnlyList<string> MatchingHardwareIds { get; init; } = Array.Empty<string>();
+
+    /// <summary>The raw native <c>SetupVerifyInfFile</c> error code, when a verdict was reached.</summary>
+    public int? SignatureErrorCode { get; init; }
 }
+
+/// <summary>
+/// A published driver package that was inspected but whose signature is not accepted. Exposed to callers as
+/// diagnostic evidence; contains no device instance identifiers.
+/// </summary>
+public sealed record WindowsRejectedDriverPackage(
+    string? PublishedInf,
+    string? DriverVersion,
+    string? Signer,
+    string? Catalog,
+    int? SignatureErrorCode,
+    string? SignatureDetail);
 
 /// <summary>
 /// Read-only state of one present 9008 device node: its bound service, its bound published INF, and the
@@ -74,7 +102,28 @@ internal sealed record DriverEndpointEvidence(
     uint Status,
     uint Problem,
     bool StatusQuerySucceeded,
-    string? FailureDetail);
+    string? FailureDetail)
+{
+    /// <summary>
+    /// Authoritative USB serial reported by the physical (composite parent) USB devnode when
+    /// <c>CM_DEVCAP_UNIQUEID</c> is set and the instance suffix is a stable, non-generated value.
+    /// Null when the endpoint has no verifiable physical USB serial.
+    /// </summary>
+    public string? UsbSerial { get; init; }
+
+    /// <summary>
+    /// Signed package captured for the inbox WinUSB INF when a selected ADB endpoint is bound to it and
+    /// exposes the generic ADB-compatible USB class ID. Null otherwise.
+    /// </summary>
+    public DriverPackageEvidence? InboxAdbPackage { get; init; }
+
+    /// <summary>
+    /// True when the endpoint exposes the generic Android ADB compatible USB class ID
+    /// <c>USB\Class_FF&amp;SubClass_42&amp;Prot_01</c>. This is the authoritative interface marker for
+    /// selected-device ADB checks; the USB VID/PID is not used as a whitelist.
+    /// </summary>
+    public bool AdbCompatible { get; init; }
+}
 
 /// <summary>
 /// Everything the pure decision needs, and nothing that requires a live OS. Tests construct this shape

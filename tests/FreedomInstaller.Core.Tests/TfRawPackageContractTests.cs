@@ -331,6 +331,22 @@ public sealed class TfRawPackageContractTests
 
     // -------------------------------------------------------------- TF-only recipe requirements
 
+    [Fact]
+    public void ReadTfRawContract_RejectsArmadaBootSourceForTfRawV1()
+    {
+        using var fixture = CreateTfFixture();
+        var metadata = fixture.ReadMetadata();
+        Recipe(metadata)["linuxBootSource"] = "armada-boot-v1";
+        fixture.WriteMetadata(metadata);
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => PackageReader.ReadTfRawContract(fixture.Path, EdlRawFixture.Model));
+
+        Assert.Contains("linuxBootSource", exception.Message, StringComparison.Ordinal);
+        Assert.False(PackageReader.Validate(fixture.Path, EdlRawFixture.Model, InstallationTarget.TfCard).IsValid);
+    }
+
+
     [Theory]
     [InlineData("root-medium-missing")]
     [InlineData("root-medium-internal")]

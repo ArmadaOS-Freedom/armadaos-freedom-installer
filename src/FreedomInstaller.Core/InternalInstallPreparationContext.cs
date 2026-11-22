@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -164,6 +165,12 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
     // backup can never receive AOSP metadata. They never join the write plan.
     private readonly IReadOnlyList<string> _directAblGuardRoles = Array.Empty<string>();
 
+    // The fixed AOSP-capable 188 ABLs of a direct test-build preparation, keyed by the actual
+    // abl_{slot} role. Each entry is a full-partition write, performed last before misc/reset.
+    private readonly IReadOnlyDictionary<string, VerifiedEdlFile> _directAblReplacements =
+        new ReadOnlyDictionary<string, VerifiedEdlFile>(
+            new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal));
+
     private readonly List<HeldClaim> _claims;
     private readonly List<EdlReadEvidence> _deviceEvidence = new();
     private IReadOnlyDictionary<string, string> _currentBootSha256 =
@@ -193,7 +200,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         IReadOnlyList<DirectAvbMetadataNode>? directAvbNodes = null,
         VerifiedGblPlan? directGblPlan = null,
         IReadOnlyList<string>? directPreservedAvbRoles = null,
-        IReadOnlyList<string>? directAblGuardRoles = null)
+        IReadOnlyList<string>? directAblGuardRoles = null,
+        IReadOnlyDictionary<string, VerifiedEdlFile>? directAblReplacements = null)
     {
         _package = package;
         _assets = assets;
@@ -232,6 +240,18 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         _directGblPlan = directGblPlan;
         _directPreservedAvbRoles = directPreservedAvbRoles;
         _directAblGuardRoles = Array.AsReadOnly((directAblGuardRoles ?? Array.Empty<string>()).ToArray());
+        _directAblReplacements = new ReadOnlyDictionary<string, VerifiedEdlFile>(
+            directAblReplacements is null
+                ? new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal)
+                : new Dictionary<string, VerifiedEdlFile>(directAblReplacements, StringComparer.Ordinal));
+
+        if (_directAblReplacements.Count != 0
+            && (!_isDirect || directGblPlan is not null || directPreservedAvbRoles is not null))
+        {
+            throw new InvalidOperationException(
+                "An ABL replacement preparation is direct only and cannot carry a GBL plan or an "
+                + "AOSP-preserving route.");
+        }
 
         if (directPreservedAvbRoles is not null
             && (!_isDirect || directGblPlan is not null || _directAvbRoots.Count > 0 || _directAvbNodes.Count > 0
@@ -332,6 +352,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     internal IReadOnlyDictionary<string, EdlRawBuiltBoot> DirectBoots => _directBoots;
 
+    internal IReadOnlyDictionary<string, VerifiedEdlFile> DirectAblReplacements => _directAblReplacements;
+
     internal string ActualCurrentSlot => _actualCurrentSlot;
 
     internal IReadOnlyDictionary<string, EdlCapturedRegion> BackupFiles => _backupFiles;
@@ -354,10 +376,17 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     internal InternalArtifactRegion? BoardSummary => _boardSummary;
 
-    internal bool AndroidDataErase =>
-        !(_isDirect &&
-          _boardSummary is null &&
-          string.Equals(_originalTables[0].SourceFingerprint, _postGpt.SourceFingerprint, StringComparison.Ordinal));
+    internal bool AndroidDataErase => !(_isDirect && PreservesAndroidLayout(_boardSummary, _originalTables[0], _postGpt, _allocation));
+
+    private static bool PreservesAndroidLayout(
+        InternalArtifactRegion? boardSummary,
+        GptTable originalTable,
+        GptTable postTable,
+        InternalAllocationPlan allocation) =>
+        boardSummary is null &&
+        InternalPartitionPlanner.FindInstalledLinuxLayout(originalTable) is not null &&
+        allocation.AndroidSectorCount == allocation.OriginalUserdata.SectorCount &&
+        string.Equals(originalTable.SourceFingerprint, postTable.SourceFingerprint, StringComparison.Ordinal);
 
     internal IReadOnlyDictionary<string, InternalSlotMaterial> SlotMaterials => _slotMaterials;
 
@@ -554,6 +583,14 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         FirmwareSnapshot firmware,
         string? currentSlot = null)
     {
+        // A build that embeds the AOSP-capable 188 ABL does not use a firmware-version allowlist here.
+        // The direct proof classifies each selected source from the AVB keys its live ABL references and
+        // only replaces the slots that do not already accept the AOSP signing key.
+        if (Tb322fcAbl188Assets.IsBundled)
+        {
+            return;
+        }
+
         if (string.Equals(model, "TB322FC", StringComparison.Ordinal)
             && lockState == BootloaderState.Locked
             && (ContainsToken(firmware.DisplayId, "ZUXOS_1.5.10.358_")
@@ -645,6 +682,33 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
             string evidenceDirectory = CreateEvidenceDirectory(evidenceParent, identity.Serial);
 
+            if (string.Equals(profile.Model, "TB323FU", StringComparison.Ordinal)
+                && string.Equals(deviceCheck.CurrentSlot, "a", StringComparison.Ordinal)
+                && deviceCheck.FastbootLockState == BootloaderState.Locked
+                && PreservesAndroidLayout(artifactSet.BoardSummary, backupFacts.Tables[0], artifactSet.PostGpt, artifactSet.Allocation)
+                && artifactSet.RecoveryBackup is not null
+                && !IsBootHeaderZero(Claim(backupFacts.Files, "boot_b"), cancellationToken)
+                && await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(Claim(backupFacts.Files, "vbmeta_b"), cancellationToken).ConfigureAwait(false))
+            {
+                packageSnapshot = await InternalInstallPackageSnapshot
+                    .CaptureEdlRawAsync(package, identity, evidenceParent, cancellationToken)
+                    .ConfigureAwait(false);
+
+                RequireDirectContract(packageSnapshot.EdlRawContract, packageSnapshot, identity, firmware, profile);
+
+                if (packageSnapshot.EdlRawContract.BootRecipe?.UsesArmadaBoot == true)
+                {
+                    EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
+                        profile.ProfileId,
+                        backupFacts.Files,
+                        installAssets.Tools,
+                        services.CommandRunner,
+                        evidenceDirectory,
+                        cancellationToken).ConfigureAwait(false);
+                    inactiveTargets["b"] = proof;
+                }
+            }
+
             Dictionary<string, string> sourceSlots = await DetermineDirectSourceSlotsAsync(
                 profile.ProfileId,
                 deviceCheck.CurrentSlot,
@@ -658,14 +722,36 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             // failures in that gate are diagnosable. Direct installs only; nothing else changed.
             services.DiagnosticBootSourcesVerified?.Invoke();
 
-            // A locked TB322FC whose current ABL already references the AOSP key beside the OEM key gets a
-            // direct proof from this backup alone. It is decided before the GBL gate, so a first install
-            // without efisp is not refused as unavailable GBL. A null proof leaves every existing path as is,
-            // and the boot-only route never reads ABL evidence it would not use.
+            // A locked TB322FC is classified from the effective (primary) AVB key of its live ABL. Slots
+            // whose primary key is AOSP keep their ABL; only slots whose primary key is not AOSP use the
+            // pinned 188 loader. A secondary AOSP blob alone is not acceptance.
+            // The asset is staged lazily, so an all-AOSP source never needs the optional build input. A null
+            // proof leaves every existing path as is, and the boot-only route never reads ABL evidence it
+            // would not use.
             if (!UsesPreservedAospChain(profile.Model))
             {
+                Func<CancellationToken, Task<VerifiedEdlFile?>>? tb322fcAbl188Provider = null;
+                if (profile.Model == "TB322FC"
+                    && deviceCheck.FastbootLockState == BootloaderState.Locked
+                    && Tb322fcAbl188Assets.IsBundled)
+                {
+                    tb322fcAbl188Provider = async token =>
+                    {
+                        VerifiedEdlFile staged = await Tb322fcAbl188Assets
+                            .StageAsync(evidenceDirectory, token)
+                            .ConfigureAwait(false);
+                        HoldStagedAsset("tb322fc-abl-188", staged, claims, token);
+                        return staged;
+                    };
+                }
+
                 directAblProof = await BootMaintenanceAblRecovery
-                    .CreateDirectAsync(backup, deviceCheck.FastbootLockState, sourceSlots, cancellationToken)
+                    .CreateDirectAsync(
+                        backup,
+                        deviceCheck.FastbootLockState,
+                        sourceSlots,
+                        tb322fcAbl188Provider,
+                        cancellationToken)
                     .ConfigureAwait(false);
 
                 if (directAblProof is not null)
@@ -723,7 +809,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                     new Dictionary<string, EdlRawResignedAvbNode>(StringComparer.Ordinal));
             }
 
-            packageSnapshot = await InternalInstallPackageSnapshot
+            packageSnapshot ??= await InternalInstallPackageSnapshot
                 .CaptureEdlRawAsync(package, identity, evidenceParent, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -779,7 +865,9 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 backupFacts.Files,
                 includeOriginalCapture: true,
                 avbNodes: avbNodes,
-                gblInputs: gblInputs);
+                gblInputs: gblInputs,
+                directAblGuardRoles: directAblProof?.AblGuardRoles,
+                directAblReplacements: directAblProof?.Replacements);
 
             // A GBL run also creates one whole wrapper partition per slot beside the execution work, so the
             // pre-native check reserves those two actual backup partition lengths as real disk bytes. The
@@ -944,7 +1032,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 avbNodes,
                 gblPlan,
                 preservedAvbRoles,
-                directAblProof?.AblGuardRoles);
+                directAblProof?.AblGuardRoles,
+                directAblProof?.Replacements);
 
             // The context owns the plan's wrappers and its staged input files from here on, so the local
             // hand-off is cleared before the remaining factory work can fail and dispose something the
@@ -958,6 +1047,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             context._deviceEvidence.AddRange(original.Evidence);
             context._originalDeviceVerified = true;
 
+            await context.PrepareLauncherDefaultsAsync(initialEdl, cancellationToken).ConfigureAwait(false);
             context.SealConfirmation(cancellationToken);
 
             // Ready is only reached after every builder output, this factory's own original capture and the
@@ -1244,7 +1334,9 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         IReadOnlyDictionary<string, EdlCapturedRegion> files,
         bool includeOriginalCapture,
         IReadOnlyList<DirectAvbMetadataNode>? avbNodes = null,
-        GblPreparationInputs? gblInputs = null)
+        GblPreparationInputs? gblInputs = null,
+        IReadOnlyList<string>? directAblGuardRoles = null,
+        IReadOnlyDictionary<string, VerifiedEdlFile>? directAblReplacements = null)
     {
         long gptCapture = 0;
         for (int lun = 0; lun < 6; lun++)
@@ -1348,6 +1440,36 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             }
         }
 
+        // The direct AOSP route reads each guarded ABL once in the future original capture and reads
+        // back every full replacement write. Both are real evidence bytes of the same fixed asset.
+        if (includeOriginalCapture && directAblGuardRoles is not null)
+        {
+            foreach (string role in directAblGuardRoles)
+            {
+                planned = CheckedAdd(
+                    planned,
+                    RequireBudgetRegion(files, role).Length,
+                    "The direct ABL guard capture budget overflows.");
+            }
+        }
+
+        if (directAblReplacements is not null)
+        {
+            if (gblInputs is not null)
+            {
+                throw new InvalidOperationException(
+                    "A GBL-preserving execution budget cannot be mixed with ABL replacements.");
+            }
+
+            foreach (VerifiedEdlFile candidate in directAblReplacements.Values)
+            {
+                planned = CheckedAdd(
+                    planned,
+                    candidate.Length,
+                    "The direct ABL replacement readback budget overflows.");
+            }
+        }
+
         return planned;
     }
 
@@ -1359,6 +1481,18 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         {
             throw new InvalidDataException(
                 "The direct execution budget requires the actual '" + role + "' capture.");
+        }
+
+        return region;
+    }
+
+    private static EdlCapturedRegion RequireBackupRegion(
+        IReadOnlyDictionary<string, EdlCapturedRegion> files,
+        string role)
+    {
+        if (!files.TryGetValue(role, out EdlCapturedRegion? region) || region is null)
+        {
+            throw new InvalidDataException("The backup set carries no '" + role + "' capture.");
         }
 
         return region;
@@ -1415,7 +1549,9 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             _backupFiles,
             includeOriginalCapture,
             _directAvbNodes,
-            _directGblPlan?.Inputs);
+            _directGblPlan?.Inputs,
+            _directAblGuardRoles.Count == 0 ? null : _directAblGuardRoles,
+            _directAblReplacements.Count == 0 ? null : _directAblReplacements);
 
         RequireDirectExecutionSpaceAvailable(
             requiredBytes,
@@ -1587,13 +1723,53 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         EdlRawDtbEvidence diagnosticDtb,
         EdlRawPackageContract contract)
     {
-        string[] required = { "base", "linux-padded", "runtime", "dtb-normal", "dtb-diagnostic", "initramfs" };
-        if (payloads.Count != required.Length)
+        if (contract.BootRecipe.UsesArmadaBoot)
+        {
+            string[] diskRoles = { "base", "runtime", "normal.disk", "diagnostic.disk" };
+            if (payloads.Count != diskRoles.Length)
+            {
+                throw new InvalidDataException(
+                    "The unpacked payload map does not carry exactly the four fixed disk roles.");
+            }
+
+            foreach (string role in diskRoles)
+            {
+                if (!payloads.TryGetValue(role, out string? sha256) || sha256 is null)
+                {
+                    throw new InvalidDataException("The unpacked payload map is missing the '" + role + "' role.");
+                }
+
+                RequireSha256(sha256, "the unpacked '" + role + "' digest");
+            }
+
+            string expectedNormalDisk = Sha256Text.Hex(DiskLinuxEntry.Encode(
+                contract.BootRecipe.BootUuid,
+                contract.BootRecipe.RootUuid,
+                diagnostic: false));
+            string expectedDiagnosticDisk = Sha256Text.Hex(DiskLinuxEntry.Encode(
+                contract.BootRecipe.BootUuid,
+                contract.BootRecipe.RootUuid,
+                diagnostic: true));
+
+            if (!SameSha(payloads["base"], material.BaseImageSha256)
+                || !SameSha(payloads["runtime"], RequireContractArtifact(contract, "runtime").Sha256)
+                || !SameSha(payloads["normal.disk"], expectedNormalDisk)
+                || !SameSha(payloads["diagnostic.disk"], expectedDiagnosticDisk))
+            {
+                throw new InvalidDataException(
+                    "The unpacked payload map does not carry the actual base, runtime and disk descriptor facts.");
+            }
+
+            return;
+        }
+
+        string[] legacyRoles = { "base", "linux-padded", "runtime", "dtb-normal", "dtb-diagnostic", "initramfs" };
+        if (payloads.Count != legacyRoles.Length)
         {
             throw new InvalidDataException("The unpacked payload map does not carry exactly the six fixed roles.");
         }
 
-        foreach (string role in required)
+        foreach (string role in legacyRoles)
         {
             if (!payloads.TryGetValue(role, out string? sha256) || sha256 is null)
             {
@@ -1713,6 +1889,44 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // The refusal that triggered this cleanup stays the observable outcome.
+        }
+    }
+
+    /// <summary>
+    /// Opens a read lease over one already-staged, fixed build asset and adds it to the preparation's
+    /// held claims. The length and SHA-256 must still match the staged fact exactly.
+    /// </summary>
+    private static HeldClaim HoldStagedAsset(
+        string subject,
+        VerifiedEdlFile staged,
+        List<HeldClaim> claims,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(staged);
+        ArgumentNullException.ThrowIfNull(claims);
+
+        FileStream? held = OpenRead(staged.Path);
+        try
+        {
+            if (held.Length != staged.Length)
+            {
+                throw new InvalidDataException("The staged '" + subject + "' asset changed length.");
+            }
+
+            string sha256 = HashHeld(held, cancellationToken);
+            if (!SameSha(sha256, staged.Sha256))
+            {
+                throw new InvalidDataException("The staged '" + subject + "' asset changed after verification.");
+            }
+
+            var claim = new HeldClaim(subject, staged.Path, held.Length, sha256, held);
+            held = null;
+            claims.Add(claim);
+            return claim;
+        }
+        finally
+        {
+            held?.Dispose();
         }
     }
 
@@ -1898,6 +2112,11 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         state.Firmware = _binding.AndroidIdentity.Identity.Firmware!;
         state.FastbootLockState = _fastbootLockState;
         state.BootTrustMode = DirectBootTrustMode;
+        state.Abl188ReplacementSlots = new List<string>(
+            _directAblReplacements.Keys
+                .Select(role => role.StartsWith("abl_", StringComparison.Ordinal) ? role[4..] : role)
+                .OrderBy(slot => slot, StringComparer.Ordinal))
+            .AsReadOnly();
         state.PackageFingerprint = _package.ManifestFingerprint;
         state.PackageBindingSha256 = _package.BindingSha256;
         state.BackupManifestSha256 = _backupManifestSha256;
@@ -4280,6 +4499,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         json.WriteString("sourceCommit", contract.SourceCommit);
         json.WriteString("manifestFingerprint", contract.ManifestFingerprint);
         json.WriteBoolean("testOnly", contract.TestOnly);
+        WriteLauncherDefaultsConfirmation(json);
 
         json.WriteStartObject("storage");
         json.WriteNumber("linuxBootBytes", contract.Storage.LinuxBootBytes);
@@ -4356,6 +4576,36 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             WriteDirectAvbConfirmation(json);
         }
 
+        if (_directAblReplacements.Count != 0)
+        {
+            WriteDirectAbl188Confirmation(json);
+        }
+
+        json.WriteEndObject();
+    }
+
+    private void WriteDirectAbl188Confirmation(Utf8JsonWriter json)
+    {
+        json.WriteStartObject("ablCompatibility");
+        json.WriteString("kind", "tb322fc-188");
+        json.WriteString("reason", "locked-oem-root-aosp-resign-requires-aosp-capable-abl");
+        json.WriteString("sourceFirmware", Tb322fcAbl188Assets.SourceFirmware);
+        json.WriteNumber("imageLength", Tb322fcAbl188Assets.ImageLength);
+        json.WriteString("imageSha256", Tb322fcAbl188Assets.ImageSha256);
+
+        json.WriteStartArray("replacements");
+        foreach (string role in _directAblReplacements.Keys.OrderBy(role => role, StringComparer.Ordinal))
+        {
+            VerifiedEdlFile candidate = _directAblReplacements[role];
+            json.WriteStartObject();
+            json.WriteString("role", role);
+            json.WriteNumber("length", candidate.Length);
+            json.WriteString("candidateSha256", candidate.Sha256.ToUpperInvariant());
+            json.WriteString("currentSha256", RequireBackupRegion(_backupFiles, role).Sha256.ToUpperInvariant());
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
         json.WriteEndObject();
     }
 

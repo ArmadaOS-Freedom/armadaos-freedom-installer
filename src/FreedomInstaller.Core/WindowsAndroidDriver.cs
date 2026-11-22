@@ -11,11 +11,20 @@ public sealed class WindowsAndroidDriver
 {
     public WindowsDriverCheckResult Inspect(AndroidUsbMode mode) =>
         WindowsQualcommDriver.InspectAndroid(mode);
+
+    public WindowsDriverCheckResult InspectSelectedAdb(string serial)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serial);
+        return WindowsQualcommDriver.InspectAndroid(AndroidUsbMode.Adb, serial);
+    }
 }
 
 // Shares signature verification and native SetupAPI bindings with the 9008 probe.
 public sealed partial class WindowsQualcommDriver
 {
+    internal const string InboxWinUsbInf = "winusb.inf";
+    internal const string AdbCompatibleUsbId = @"USB\Class_FF&SubClass_42&Prot_01";
+
     private static readonly string[] FastbootIds = {
         @"USB\VID_18D1&PID_D00D", @"USB\VID_18D1&PID_4EE0"
     };
@@ -37,6 +46,12 @@ public sealed partial class WindowsQualcommDriver
         return RequiredAndroidIds(mode).Contains(canonical, StringComparer.OrdinalIgnoreCase) ? canonical : null;
     }
 
+    private static string? AndroidEndpointHardwareId(string? prefix, AndroidUsbMode mode) =>
+        CanonicalAndroidId(prefix, mode);
+
+    private static DriverPackageEvidence WithAdbCompatibleId(DriverPackageEvidence package) =>
+        package with { MatchingHardwareIds = new[] { AdbCompatibleUsbId } };
+
     private static IReadOnlyList<string> RequiredAndroidIds(AndroidUsbMode mode) => mode switch {
         AndroidUsbMode.Adb => AdbIds,
         AndroidUsbMode.Fastboot => FastbootIds,
@@ -49,64 +64,150 @@ public sealed partial class WindowsQualcommDriver
         return index > 3 ? instanceId[..index] : instanceId;
     }
 
-    internal static WindowsDriverCheckResult InspectAndroid(AndroidUsbMode mode)
+    internal static WindowsDriverCheckResult InspectAndroid(AndroidUsbMode mode, string? selectedAdbSerial = null)
     {
         _ = RequiredAndroidIds(mode);
         var unsupported = DescribeUnsupportedPlatform(
             OperatingSystem.IsWindows(), RuntimeInformation.OSArchitecture, Environment.OSVersion.Version);
         if (unsupported is not null) return UnsupportedResult(unsupported.Replace("Qualcomm 9008", "Android USB"));
         if (!OperatingSystem.IsWindows()) return UnsupportedResult("Windows is required.");
-        try { return DecideAndroid(CollectAndroidEvidence(mode), mode); }
+        try
+        {
+            var snapshot = CollectAndroidEvidence(mode, selectedAdbSerial);
+            return selectedAdbSerial is null
+                ? DecideAndroid(snapshot, mode)
+                : DecideSelectedAdb(snapshot, selectedAdbSerial);
+        }
         catch (Exception ex) when (IsOsQueryFailure(ex)) { return UnknownResult(ex.Message); }
+    }
+
+    internal static WindowsDriverCheckResult DecideSelectedAdb(DriverEvidenceSnapshot evidence, string serial)
+    {
+        var matches = evidence.Endpoints
+            .Where(e => e.UsbSerial is not null && string.Equals(e.UsbSerial, serial, StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+        var decision = DecideAndroid(
+            evidence with { Endpoints = matches.Count == 1 ? matches : Array.Empty<DriverEndpointEvidence>() },
+            AndroidUsbMode.Adb);
+        if (evidence.EndpointQueryFailure is not null
+            || decision.State == WindowsDriverCheckState.Unsupported
+            || matches.Count == 1)
+            return decision;
+        return decision with {
+            State = matches.Count == 0 ? WindowsDriverCheckState.Missing : WindowsDriverCheckState.Problem,
+            DriverVersion = null,
+            PublishedInf = null,
+            Detail = Bound(matches.Count == 0
+                ? "No present ADB USB interface matches the selected device."
+                : "More than one present ADB USB interface matches the selected device.") };
     }
 
     internal static WindowsDriverCheckResult DecideAndroid(DriverEvidenceSnapshot evidence, AndroidUsbMode mode)
     {
         if (!evidence.WindowsSupported) return UnsupportedResult(evidence.UnsupportedReason ?? "Unsupported platform.");
-        if (evidence.EndpointQueryFailure is not null) return UnknownResult(evidence.EndpointQueryFailure);
         var verified = evidence.Packages.Where(IsVerifiedPackage).ToList();
         var missing = RequiredAndroidIds(mode).Where(id =>
             !verified.Any(p => p.MatchingHardwareIds.Contains(id, StringComparer.OrdinalIgnoreCase))).ToArray();
+        var rejected = DescribeRejectedPackages(evidence).ToList();
+        var canUsePartialAdbCoverage = mode == AndroidUsbMode.Adb
+            && missing.Length < AdbIds.Length
+            && evidence.PackageQueryFailure is null;
 
-        WindowsDriverCheckResult Problem(string detail) => new(WindowsDriverCheckState.Problem, null, null, Bound(detail));
+        WindowsDriverCheckResult WithEvidence(WindowsDriverCheckResult result) => result with {
+            MissingHardwareIds = missing,
+            RejectedPackages = rejected };
+
+        WindowsDriverCheckResult Problem(string detail) => WithEvidence(new(WindowsDriverCheckState.Problem, null, null, Bound(detail)));
+        if (evidence.EndpointQueryFailure is not null) return WithEvidence(UnknownResult(evidence.EndpointQueryFailure));
         foreach (var endpoint in evidence.Endpoints)
         {
             var prefix = HardwarePrefix(endpoint.DeviceInstanceId);
+            if (mode == AndroidUsbMode.Adb && endpoint.UsbSerial is not null && !endpoint.AdbCompatible)
+                continue;
             if (!endpoint.StatusQuerySucceeded)
-                return UnknownResult($"Cannot read device state for {prefix}.");
+                return WithEvidence(UnknownResult($"Cannot read device state for {prefix}."));
             if (endpoint.Problem != 0 || (endpoint.Status & DnHasProblem) != 0 || (endpoint.Status & DnStarted) == 0)
                 return Problem($"{prefix}: Windows device problem {endpoint.Problem}, status 0x{endpoint.Status:X8}.");
+            bool selectedAdb = mode == AndroidUsbMode.Adb
+                && evidence.Endpoints.Count == 1
+                && endpoint.UsbSerial is not null
+                && endpoint.AdbCompatible;
+            var selectedInbox = selectedAdb
+                && endpoint.BoundInfName is not null
+                && string.Equals(endpoint.BoundInfName, InboxWinUsbInf, StringComparison.OrdinalIgnoreCase);
             if (endpoint.FailureDetail is not null)
-                return UnknownResult($"Cannot read driver binding for {prefix}.");
+                return WithEvidence(UnknownResult(selectedInbox
+                    ? endpoint.FailureDetail
+                    : $"Cannot read driver binding for {prefix}."));
             if (!string.Equals(endpoint.Service, WinUsbService, StringComparison.OrdinalIgnoreCase))
                 return Problem($"{prefix}: expected WinUSB; bound service is '{endpoint.Service ?? "<none>"}'.");
+            if (selectedInbox)
+            {
+                var inbox = endpoint.InboxAdbPackage;
+                if (inbox is null || !inbox.SignatureAccepted
+                    || !string.Equals(inbox.InfName, InboxWinUsbInf, StringComparison.OrdinalIgnoreCase)
+                    || string.IsNullOrWhiteSpace(inbox.StoreInfPath)
+                    || string.IsNullOrWhiteSpace(inbox.DigitalSigner)
+                    || string.IsNullOrWhiteSpace(inbox.CatalogFile)
+                    || !inbox.MatchingHardwareIds.Contains(AdbCompatibleUsbId, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (inbox is not null)
+                        rejected.Add(new WindowsRejectedDriverPackage(inbox.InfName, inbox.DriverVersion,
+                            inbox.DigitalSigner, Path.GetFileName(inbox.CatalogFile),
+                            inbox.SignatureErrorCode, inbox.SignatureDetail));
+                    return Problem($"{prefix}: inbox {InboxWinUsbInf} does not satisfy the selected ADB binding requirements.");
+                }
+                return WithEvidence(new WindowsDriverCheckResult(WindowsDriverCheckState.Connected, inbox.DriverVersion, inbox.InfName,
+                    $"{mode}: selected ADB interface bound to signed inbox {InboxWinUsbInf}; {prefix}."));
+            }
             var package = FindPackage(verified, endpoint.BoundInfName);
             if (package is null)
             {
-                if (evidence.PackageQueryFailure is not null) return UnknownResult(evidence.PackageQueryFailure);
+                if (evidence.PackageQueryFailure is not null) return WithEvidence(UnknownResult(evidence.PackageQueryFailure));
                 return Problem($"{prefix}: bound INF '{endpoint.BoundInfName}' has no verified Android driver signature.");
             }
-            var id = CanonicalAndroidId(prefix, mode);
+            if (selectedAdb)
+            {
+                if (!package.MatchingHardwareIds.Contains(AdbCompatibleUsbId, StringComparer.OrdinalIgnoreCase))
+                    return Problem($"{prefix}: bound INF '{package.InfName}' does not declare the generic ADB compatible ID.");
+                return WithEvidence(new WindowsDriverCheckResult(WindowsDriverCheckState.Connected, package.DriverVersion, package.InfName,
+                    $"{mode}: selected ADB interface bound to signed OEM {package.InfName}; {prefix}."));
+            }
+            var id = AndroidEndpointHardwareId(prefix, mode);
             if (id is null || !package.MatchingHardwareIds.Contains(id, StringComparer.OrdinalIgnoreCase))
                 return Problem($"{prefix}: bound INF '{package.InfName}' does not cover this hardware ID.");
         }
-        if (missing.Length != 0)
+        if (missing.Length != 0 && !canUsePartialAdbCoverage)
         {
-            if (evidence.PackageQueryFailure is not null) return UnknownResult(evidence.PackageQueryFailure);
+            if (evidence.PackageQueryFailure is not null) return WithEvidence(UnknownResult(evidence.PackageQueryFailure));
             if (evidence.Packages.Any(p => !IsVerifiedPackage(p)))
                 return Problem("An Android driver package failed signature verification.");
-            return new(WindowsDriverCheckState.Missing, null, null,
-                Bound($"{mode} driver coverage is missing: {string.Join(", ", missing)}."));
+            return WithEvidence(new(WindowsDriverCheckState.Missing, null, null,
+                Bound($"{mode} driver coverage is missing: {string.Join(", ", missing)}.")));
         }
-        var selected = evidence.Endpoints.Count == 0 ? verified[0] : FindPackage(verified, evidence.Endpoints[0].BoundInfName)!;
-        return new(evidence.Endpoints.Count == 0 ? WindowsDriverCheckState.Prepared : WindowsDriverCheckState.Connected,
-            selected.DriverVersion, selected.InfName,
-            $"{mode}: signed driver packages cover the supported USB IDs; {evidence.Endpoints.Count} present interface(s).");
+        DriverPackageEvidence? selected;
+        string detail;
+        if (evidence.Endpoints.Count == 0)
+        {
+            selected = verified.FirstOrDefault(p => RequiredAndroidIds(mode).Any(id =>
+                p.MatchingHardwareIds.Contains(id, StringComparer.OrdinalIgnoreCase))) ?? verified[0];
+        }
+        else selected = FindPackage(verified, evidence.Endpoints[0].BoundInfName)!;
+        if (canUsePartialAdbCoverage && missing.Length != 0)
+        {
+            var covered = AdbIds.Length - missing.Length;
+            detail = $"{mode}: partial verified coverage {covered}/{AdbIds.Length}; remaining IDs: {string.Join(", ", missing)}; {evidence.Endpoints.Count} present interface(s).";
+        }
+        else detail = $"{mode}: signed driver packages cover the supported USB IDs; {evidence.Endpoints.Count} present interface(s).";
+        return WithEvidence(new(evidence.Endpoints.Count == 0 ? WindowsDriverCheckState.Prepared : WindowsDriverCheckState.Connected,
+            selected.DriverVersion, selected.InfName, detail));
     }
 
     [SupportedOSPlatform("windows")]
-    private static DriverEvidenceSnapshot CollectAndroidEvidence(AndroidUsbMode mode)
+    private static DriverEvidenceSnapshot CollectAndroidEvidence(AndroidUsbMode mode, string? selectedAdbSerial = null)
     {
+        var selected = selectedAdbSerial is not null;
         var packages = new List<DriverPackageEvidence>();
         string? packageError = null;
         foreach (var inf in ListPublishedOemInfs())
@@ -118,7 +219,13 @@ public sealed partial class WindowsQualcommDriver
                 {
                     // A revision-specific INF line cannot prove support for all device revisions.
                     if (raw?.Contains("&REV_", StringComparison.OrdinalIgnoreCase) == true) return false;
-                    var id = CanonicalAndroidId(raw, mode);
+                    if (selected)
+                    {
+                        if (!string.Equals(raw, AdbCompatibleUsbId, StringComparison.OrdinalIgnoreCase)) return false;
+                        ids.Add(AdbCompatibleUsbId);
+                        return true;
+                    }
+                    var id = AndroidEndpointHardwareId(raw, mode);
                     if (id is null) return false;
                     ids.Add(id);
                     return true;
@@ -129,14 +236,15 @@ public sealed partial class WindowsQualcommDriver
         }
         var endpoints = new List<DriverEndpointEvidence>();
         string? endpointError = null;
-        try { CollectAndroidBindings(mode, endpoints); }
+        try { CollectAndroidBindings(mode, endpoints, selectedAdbSerial); }
         catch (Exception ex) when (IsOsQueryFailure(ex)) { endpointError = Bound(ex.Message); }
         return new(true, null, packageError, endpointError, packages, endpoints);
     }
 
     [SupportedOSPlatform("windows")]
-    private static void CollectAndroidBindings(AndroidUsbMode mode, List<DriverEndpointEvidence> results)
+    private static void CollectAndroidBindings(AndroidUsbMode mode, List<DriverEndpointEvidence> results, string? selectedAdbSerial)
     {
+        var selected = selectedAdbSerial is not null;
         var set = SetupDiGetClassDevs(IntPtr.Zero, UsbEnumerator, IntPtr.Zero, DigcfPresent | DigcfAllClasses);
         if (set == InvalidHandleValue || set == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
         try
@@ -151,8 +259,38 @@ public sealed partial class WindowsQualcommDriver
                     throw new Win32Exception(error);
                 }
                 var instanceId = ReadDeviceInstanceId(set, ref data);
-                if (CanonicalAndroidId(HardwarePrefix(instanceId), mode) is not null)
+                if (!selected)
+                {
+                    if (AndroidEndpointHardwareId(HardwarePrefix(instanceId), mode) is null) continue;
                     results.Add(InspectEndpointBinding(set, instanceId, ref data));
+                    continue;
+                }
+                if (!HasAdbCompatibleId(set, ref data)) continue;
+                var usbSerial = ReadAdbUsbSerial(data.DevInst, instanceId);
+                if (!string.Equals(usbSerial, selectedAdbSerial, StringComparison.OrdinalIgnoreCase)) continue;
+                var binding = InspectEndpointBinding(set, instanceId, ref data) with {
+                    UsbSerial = usbSerial,
+                    AdbCompatible = true
+                };
+                if (binding.BoundInfName is not null
+                    && string.Equals(binding.BoundInfName, InboxWinUsbInf, StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var inboxPackage = InspectPublishedInf(InboxWinUsbInf, candidate =>
+                            string.Equals(candidate, AdbCompatibleUsbId, StringComparison.OrdinalIgnoreCase));
+                        if (inboxPackage is not null)
+                            binding = binding with { InboxAdbPackage = WithAdbCompatibleId(inboxPackage) };
+                    }
+                    catch (Exception ex) when (IsOsQueryFailure(ex))
+                    {
+                        var prefix = ex is Win32Exception win32
+                            ? $"Windows could not verify the bound inbox ADB driver (0x{win32.NativeErrorCode:X8}): "
+                            : "Windows could not verify the bound inbox ADB driver: ";
+                        binding = binding with { FailureDetail = Bound(prefix + ex.Message) };
+                    }
+                }
+                results.Add(binding);
             }
         }
         finally { SetupDiDestroyDeviceInfoList(set); }

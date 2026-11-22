@@ -647,6 +647,52 @@ public partial class MainWindow
 
     // ================================================================ 02 备份
 
+    private async Task<InternalBackupSet?> SelectInternalInstallRecoveryAsync(
+        EdlClient client, InternalBackupSet current, string parent, CancellationToken token)
+    {
+        if (!current.Tables[0].Partitions.Any(p => p.Name == "ARMADA_BACKUP"))
+        {
+            return null;
+        }
+
+        AppendLog(M("Dynamic.RecoverySource.ReadingBoard"));
+        try
+        {
+            var board = await Task.Run(() => BoardRecoveryBackup.ReadAsync(client, current, parent, parent, token), token);
+            if (board is not null)
+            {
+                AppendLog(M("Dynamic.RecoverySource.BoardReady", board.DirectoryPath));
+                return board;
+            }
+            AppendLog(M("Dynamic.RecoverySource.BoardMissing"));
+        }
+        catch (Exception error) when (error is InvalidDataException or IOException or InvalidOperationException or ArgumentException or System.Text.Json.JsonException or FormatException)
+        {
+            AppendLog(M("Dynamic.RecoverySource.BoardInvalid", error.Message));
+        }
+
+        var selected = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = T("Dynamic.RecoverySource.PickOriginal"),
+            AllowMultiple = false,
+        });
+        var path = selected.Count == 1 ? selected[0].TryGetLocalPath() : null;
+        token.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+        }
+        var resolved = UninstallBackupDirectorySelection.Resolve(path);
+        if (resolved.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || resolved.DirectoryPath is null)
+        {
+            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+        }
+        var recovery = await InternalInstallBackup.OpenRecoveryAsync(client, resolved.DirectoryPath, token: token);
+        try { BoardRecoveryBackup.ValidateSourceForReuse(current, recovery); }
+        catch { recovery.Dispose(); throw; }
+        return recovery;
+    }
+
     private async void OnBrowseInternalInstallBackupFolder(object? sender, RoutedEventArgs e)
     {
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
@@ -1182,7 +1228,8 @@ public partial class MainWindow
                 }
 
                 SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Prepared.PreparingArtifacts");
-                _internalInstallArtifacts = await InternalInstallArtifacts.PrepareAsync(backup, _internalInstallAndroidGiB, storage, parent, token);
+                using var recovery = await SelectInternalInstallRecoveryAsync(client, backup, parent, token);
+                _internalInstallArtifacts = await InternalInstallArtifacts.PrepareAsync(backup, _internalInstallAndroidGiB, storage, parent, token, recoveryBackup: recovery, initializeDiskLauncherSettings: package.Validation.UsesArmadaBoot);
 
                 SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Prepared.LoadingComponents");
                 var materials = Path.Combine(parent, ".armada-installer-assets", Guid.NewGuid().ToString("N"));
