@@ -54,6 +54,7 @@ _PROPERTY_NAMES = (
     "BundledAvbSigningKey",
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
+    "BundledTb322fcAbl188",
     "BundledPlatformToolsArchive",
 )
 
@@ -170,6 +171,9 @@ def prepare(repo_root, work_dir, manifest_path=None):
         # GblPreserveOem stages these embedded EFI files; Core embeds them only when the props name them.
         "BundledGblPrcEfi": str(Path(fetched["gblPrc"]).resolve()),
         "BundledGblRowEfi": str(Path(fetched["gblRow"]).resolve()),
+        "BundledTb322fcAbl188": str(
+            (repo_root / "vendor" / "qualcomm" / "g4" / "abl_aosp_capable.img").resolve()
+        ),
         # Step 1 needs adb and fastboot; the window extracts this archive on first use instead of asking the
         # user to install platform-tools.
         "BundledPlatformToolsArchive": str(Path(fetched["platformToolsMacos"]).resolve()),

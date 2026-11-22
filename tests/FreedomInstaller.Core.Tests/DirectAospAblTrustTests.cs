@@ -13,9 +13,10 @@ using Xunit;
 namespace FreedomInstaller.Core.Tests;
 
 /// <summary>
-/// AVB01: the first-install AOSP re-sign proof for a locked TB322FC whose current ABL references both the
-/// OEM and the AOSP AVB key. Every input here is a synthetic fixture that already exists in the repository;
-/// nothing reads, restores, substitutes or writes an ABL, and no original/historical backup is involved.
+/// AVB01: the first-install AOSP re-sign proof for a locked TB322FC whose current ABL uses the AOSP AVB key
+/// as its effective (primary) key. Every input here is a synthetic fixture that already exists in the
+/// repository; nothing reads, restores, substitutes or writes an ABL, and no original/historical backup is
+/// involved.
 /// </summary>
 public sealed class DirectAospAblTrustTests
 {
@@ -29,8 +30,8 @@ public sealed class DirectAospAblTrustTests
 
     /// <summary>
     /// An OEM vbmeta root on a locked device is accepted for an AOSP re-sign when that slot's current ABL
-    /// really references the AOSP key beside the OEM key. Zero replacements exist and no original backup is
-    /// needed, on slot A and on slot B alike.
+    /// uses the AOSP key as its effective key beside a secondary OEM key. Zero replacements exist and no
+    /// original backup is needed, on slot A and on slot B alike.
     /// </summary>
     [Theory]
     [InlineData("a")]
@@ -67,8 +68,37 @@ public sealed class DirectAospAblTrustTests
     {
         using var fixture = new DirectAvbSourceTestFixture(DirectAvbSourceKind.Oem);
 
-        Dictionary<string, string[]> evidence = DualKeyEvidenceForBothSlots();
-        evidence[slot] = KeyHashes(AblAvbTrustTests.DualKeyImage(aospReferenced: false));
+        Dictionary<string, string> evidence = DualKeyEvidenceForBothSlots();
+        evidence[slot] = PrimaryKeyHash(AblAvbTrustTests.DualKeyImage(aospReferenced: false));
+
+        object? proof = CreateDirectProof(
+            BootloaderState.Locked,
+            SelfSourcedBothSlots(),
+            OriginalRootKeys(fixture),
+            CurrentVbmeta(fixture),
+            evidence);
+
+        Assert.Null(proof);
+
+        object node = await ResignOemRootAsync(fixture.Sources["vbmeta_" + slot]);
+        var error = Assert.Throws<InvalidOperationException>(
+            () => RequireDirectAvbRootTrust(slot, BootloaderState.Locked, node, proof: null));
+        Assert.StartsWith("requires-compatible-bootloader:", error.Message);
+    }
+
+    /// <summary>
+    /// Reviewed device evidence: the live TB322FC OEM ABL references the AOSP key as a secondary blob but
+    /// uses the OEM key as its effective key. That is not acceptance, so no re-sign proof may be made.
+    /// </summary>
+    [Theory]
+    [InlineData("a")]
+    [InlineData("b")]
+    public async Task OemPrimaryWithSecondaryAospReferenceDoesNotAuthorize(string slot)
+    {
+        using var fixture = new DirectAvbSourceTestFixture(DirectAvbSourceKind.Oem);
+
+        Dictionary<string, string> evidence = DualKeyEvidenceForBothSlots();
+        evidence[slot] = PrimaryKeyHash(AblAvbTrustTests.DualKeyImage());
 
         object? proof = CreateDirectProof(
             BootloaderState.Locked,
@@ -102,9 +132,9 @@ public sealed class DirectAospAblTrustTests
             sourceSlots,
             OriginalRootKeys(fixture),
             CurrentVbmeta(fixture),
-            new Dictionary<string, string[]>(StringComparer.Ordinal)
+            new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["a"] = KeyHashes(AblAvbTrustTests.DualKeyImage()),
+                ["a"] = PrimaryKeyHash(AblAvbTrustTests.AospPrimaryDualKeyImage()),
             });
 
         Assert.NotNull(proof);
@@ -213,24 +243,26 @@ public sealed class DirectAospAblTrustTests
             ["b"] = fixture.Sources["vbmeta_b"].Sha256,
         };
 
-    private static Dictionary<string, string[]> DualKeyEvidenceForBothSlots() =>
+    private static Dictionary<string, string> DualKeyEvidenceForBothSlots() =>
         new(StringComparer.Ordinal)
         {
-            ["a"] = KeyHashes(AblAvbTrustTests.DualKeyImage()),
-            ["b"] = KeyHashes(AblAvbTrustTests.DualKeyImage()),
+            ["a"] = PrimaryKeyHash(AblAvbTrustTests.AospPrimaryDualKeyImage()),
+            ["b"] = PrimaryKeyHash(AblAvbTrustTests.AospPrimaryDualKeyImage()),
         };
 
-    /// <summary>Every referenced key the production all-keys view reports for the synthetic dual-key ABL.</summary>
-    private static string[] KeyHashes(byte[] pe) => AblAvbTrustTests.InspectAllKeys(pe)
-        .Select(facts => (string)facts.GetType().GetProperty("KeySha256")!.GetValue(facts)!)
-        .ToArray();
+    /// <summary>The effective key the production single-key view reports for the synthetic dual-key ABL.</summary>
+    private static string PrimaryKeyHash(byte[] pe)
+    {
+        object facts = AblAvbTrustTests.Inspect(pe);
+        return (string)facts.GetType().GetProperty("KeySha256")!.GetValue(facts)!;
+    }
 
     private static object? CreateDirectProof(
         BootloaderState lockState,
         Dictionary<string, string> sourceSlots,
         Dictionary<string, string> originalRootKeys,
         Dictionary<string, string> currentVbmetaSha256,
-        Dictionary<string, string[]> referencedAblKeySha256,
+        Dictionary<string, string> primaryAblKeySha256,
         string model = SupportedModel)
     {
         MethodInfo method = RecoveryType
@@ -246,7 +278,7 @@ public sealed class DirectAospAblTrustTests
                 sourceSlots,
                 originalRootKeys,
                 currentVbmetaSha256,
-                referencedAblKeySha256,
+                primaryAblKeySha256,
                 new List<VerifiedEdlFile>(),
             });
         }

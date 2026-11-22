@@ -128,11 +128,12 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
     }
 
     /// <summary>
-    /// First-install proof for a locked TB322FC. Every selected source slot is classified from the AVB keys
-    /// its current ABL actually references. A slot that already references the AOSP key keeps that live ABL;
-    /// a slot that does not is replaced with the pinned AOSP-capable 188 ABL. The provider is invoked only
-    /// when at least one selected slot needs that replacement, so an all-AOSP source never stages the asset.
-    /// Otherwise this returns null and the existing GBL / fail-closed gates decide.
+    /// First-install proof for a locked TB322FC. Every selected source slot is classified from the effective
+    /// (primary) AVB key of its current ABL. A slot whose primary key is AOSP keeps that live ABL; a slot
+    /// whose primary key is not AOSP is replaced with the pinned AOSP-capable 188 ABL. A secondary AOSP key
+    /// blob is not evidence: the live TB322FC OEM ABL carries one and still rejects the AOSP-signed chain.
+    /// The provider is invoked only when at least one selected slot needs that replacement, so an all-AOSP
+    /// source never stages the asset. Otherwise this returns null and the existing GBL / fail-closed gates decide.
     /// </summary>
     internal static async Task<BootMaintenanceAblRecovery?> CreateDirectAsync(
         InternalBackupSet current,
@@ -164,10 +165,10 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         bool allRootsAosp = roots.Values.All(IsAosp);
 
         // The replacement decision is per selected slot and comes from the live ABL, not from a firmware
-        // version. A slot that already references AOSP is left untouched; only a slot without that evidence
-        // needs the AOSP-capable 188 loader.
-        var referenced = new Dictionary<string, string[]>(StringComparer.Ordinal);
-        var aospReferencedSlots = new HashSet<string>(StringComparer.Ordinal);
+        // version. The primary key is the one the loader actually uses; merely referencing a secondary AOSP
+        // blob does not mean the locked bootloader accepts AOSP-signed vbmeta.
+        var primaryKeySha256 = new Dictionary<string, string>(StringComparer.Ordinal);
+        var aospPrimarySlots = new HashSet<string>(StringComparer.Ordinal);
         var claims = new List<VerifiedEdlFile>();
         foreach (string slot in selected)
         {
@@ -178,17 +179,27 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
             if (!roots.ContainsKey(slot)) return null;
 
             VerifiedEdlFile ablClaim;
-            IReadOnlyList<EdlRawBootBuilder.AblAvbKeyFacts> keys;
+            bool acceptsAosp;
             try
             {
                 ablClaim = Claim(current, "abl_" + slot);
                 byte[] abl = await ReadAsync(ablClaim, ct).ConfigureAwait(false);
-                keys = EdlRawBootBuilder.InspectAblAvbKeys(abl, ct);
+                var primary = PrimaryAblKey(abl, ct);
+                acceptsAosp = IsAosp(primary.KeySha256);
 
-                // A GBL-capable loader is owned by the existing GBL route, even when it does not
-                // reference the AOSP key. Replacing it with 188 would move that device onto an
+                // A GBL-capable loader is owned by the existing GBL route, even when its primary key
+                // is not AOSP. Replacing it with 188 would move that device onto an
                 // ABL-writing route for no reason.
-                if (!keys.Any(key => IsAosp(key.KeySha256)) && IsGblCapableAbl(abl, ct)) return null;
+                if (!acceptsAosp && IsGblCapableAbl(abl, ct)) return null;
+
+                primaryKeySha256[slot] = primary.KeySha256;
+            }
+            catch (InvalidDataException ex) when (EdlRawBootBuilder.IsAmbiguousAblAvbKey(ex))
+            {
+                throw new InvalidDataException(
+                    "tb322fc-abl-key-ambiguous: the selected source ABL has tied primary AVB keys; "
+                    + "refusing install, slot " + slot + ".",
+                    ex);
             }
             catch (InvalidDataException)
             {
@@ -198,16 +209,15 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
 
             claims.Add(ablClaim);
             claims.Add(Claim(current, "vbmeta_" + slot));
-            referenced[slot] = keys.Select(key => key.KeySha256).ToArray();
-            if (keys.Any(key => IsAosp(key.KeySha256))) aospReferencedSlots.Add(slot);
+            if (acceptsAosp) aospPrimarySlots.Add(slot);
         }
 
         // Nothing to replace: an all-AOSP source map is owned by the existing eligibility path, while a
-        // mixed-root source still uses the established AOSP-reference proof.
-        if (aospReferencedSlots.Count == selected.Count)
+        // mixed-root source still uses the established AOSP-primary proof.
+        if (aospPrimarySlots.Count == selected.Count)
         {
             if (allRootsAosp) return null;
-            return CreateDirect("TB322FC", lockState, sourceSlots, roots, vbmetaSha256, referenced, claims);
+            return CreateDirect("TB322FC", lockState, sourceSlots, roots, vbmetaSha256, primaryKeySha256, claims);
         }
 
         // Builds without the optional 188 asset keep the upstream fail-closed behavior.
@@ -217,7 +227,8 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         if (tb322fcAbl188 is null)
         {
             throw new InvalidOperationException(
-                "tb322fc-abl188-missing: a selected TB322FC ABL does not reference the AOSP signing key "
+                "tb322fc-abl188-missing: a selected TB322FC ABL does not use the AOSP signing key as its "
+                + "effective key "
                 + "and this build does not embed the AOSP-capable 188 ABL.");
         }
 
@@ -225,7 +236,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         byte[] candidate = await ReadAsync(tb322fcAbl188, ct).ConfigureAwait(false);
         foreach (string slot in selected)
         {
-            if (aospReferencedSlots.Contains(slot)) continue;
+            if (aospPrimarySlots.Contains(slot)) continue;
 
             ct.ThrowIfCancellationRequested();
             VerifiedEdlFile xbl = Claim(current, "xbl_config_" + slot);
@@ -248,14 +259,15 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
             vbmetaSha256,
             current.Files,
             tb322fcAbl188,
-            aospReferencedSlots,
+            aospPrimarySlots,
             claims);
     }
 
     /// <summary>
-    /// The pure trust decision behind <see cref="CreateDirectAsync"/>: every selected source slot must reference
-    /// the AOSP signing key in its own current ABL, including a mixed slot whose original root already is the
-    /// AOSP key. The facts are already authenticated; this method never reads, writes or replaces anything.
+    /// The pure trust decision behind <see cref="CreateDirectAsync"/>: every selected source slot's current
+    /// ABL must use the AOSP signing key as its effective (primary) key, including a mixed slot whose original
+    /// root already is the AOSP key. The facts are already authenticated; this method never reads, writes or
+    /// replaces anything.
     /// </summary>
     internal static BootMaintenanceAblRecovery? CreateDirect(
         string model,
@@ -263,13 +275,13 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         IReadOnlyDictionary<string, string> sourceSlots,
         IReadOnlyDictionary<string, string> originalRootKeys,
         IReadOnlyDictionary<string, string> currentVbmetaSha256,
-        IReadOnlyDictionary<string, string[]> referencedAblKeySha256,
+        IReadOnlyDictionary<string, string> primaryAblKeySha256,
         List<VerifiedEdlFile>? claims = null)
     {
         ArgumentNullException.ThrowIfNull(sourceSlots);
         ArgumentNullException.ThrowIfNull(originalRootKeys);
         ArgumentNullException.ThrowIfNull(currentVbmetaSha256);
-        ArgumentNullException.ThrowIfNull(referencedAblKeySha256);
+        ArgumentNullException.ThrowIfNull(primaryAblKeySha256);
 
         if (model != "TB322FC" || lockState != BootloaderState.Locked) return null;
 
@@ -293,9 +305,9 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         foreach (string slot in selected)
         {
             // Evidence is required for every selected source, never only for an OEM-root one.
-            if (!referencedAblKeySha256.TryGetValue(slot, out string[]? keys)
-                || keys is null
-                || !keys.Any(IsAosp)) return null;
+            if (!primaryAblKeySha256.TryGetValue(slot, out string? key)
+                || key is null
+                || !IsAosp(key)) return null;
         }
 
         return new BootMaintenanceAblRecovery(
@@ -311,9 +323,9 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
     }
 
     /// <summary>
-    /// The test-build trust decision: a selected source slot that does not already reference the AOSP
-    /// signing key is replaced with the reviewed 188 ABL. Slots that already carry that evidence keep
-    /// their live ABL. The candidate must cover the full captured abl_{slot} partition before the
+    /// The test-build trust decision: a selected source slot whose effective (primary) key is not the AOSP
+    /// signing key is replaced with the reviewed 188 ABL. Slots that already use that key keep their live
+    /// ABL. The candidate must cover the full captured abl_{slot} partition before the
     /// replacement is authorized. This method performs no I/O and no write.
     /// </summary>
     internal static BootMaintenanceAblRecovery? CreateDirectWithAbl188(
@@ -324,23 +336,23 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         IReadOnlyDictionary<string, string> currentVbmetaSha256,
         IReadOnlyDictionary<string, EdlCapturedRegion> currentFiles,
         VerifiedEdlFile? candidate,
-        IReadOnlySet<string> aospReferencedSlots,
+        IReadOnlySet<string> aospPrimarySlots,
         List<VerifiedEdlFile>? claims = null)
     {
         ArgumentNullException.ThrowIfNull(sourceSlots);
         ArgumentNullException.ThrowIfNull(originalRootKeys);
         ArgumentNullException.ThrowIfNull(currentVbmetaSha256);
         ArgumentNullException.ThrowIfNull(currentFiles);
-        ArgumentNullException.ThrowIfNull(aospReferencedSlots);
+        ArgumentNullException.ThrowIfNull(aospPrimarySlots);
 
         if (model != "TB322FC" || lockState != BootloaderState.Locked) return null;
 
         var selected = new SortedSet<string>(sourceSlots.Values, StringComparer.Ordinal);
         if (selected.Count == 0) return null;
-        if (aospReferencedSlots.Any(slot => !selected.Contains(slot)))
+        if (aospPrimarySlots.Any(slot => !selected.Contains(slot)))
         {
             throw new InvalidDataException(
-                "tb322fc-abl188-slots: AOSP evidence was supplied for a slot that is not a selected source.");
+                "tb322fc-abl188-slots: AOSP-primary evidence was supplied for a slot that is not a selected source.");
         }
 
         var roots = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -354,13 +366,14 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         }
 
         string[] replacementSlots = selected
-            .Where(slot => !aospReferencedSlots.Contains(slot))
+            .Where(slot => !aospPrimarySlots.Contains(slot))
             .ToArray();
         if (replacementSlots.Length == 0 && roots.Values.All(IsAosp)) return null;
         if (replacementSlots.Length > 0 && candidate is null)
         {
             throw new InvalidOperationException(
-                "tb322fc-abl188-missing: a selected TB322FC ABL does not reference the AOSP signing key "
+                "tb322fc-abl188-missing: a selected TB322FC ABL does not use the AOSP signing key as its "
+                + "effective key "
                 + "and this build does not embed the AOSP-capable 188 ABL.");
         }
 
@@ -512,6 +525,20 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
     }
 
     private static bool IsAosp(string hash) => Same(hash, EdlRawBootBuilder.SigningPublicKeySha256);
+
+    /// <summary>
+    /// The ABL's effective AVB key: the referenced key with the strongest executable-code evidence.
+    /// </summary>
+    internal static EdlRawBootBuilder.AblAvbKeyFacts PrimaryAblKey(byte[] abl, CancellationToken ct) =>
+        EdlRawBootBuilder.InspectAblAvbKey(abl, ct);
+
+    /// <summary>
+    /// Whether the live ABL actually uses the AOSP signing key as its effective key. A secondary AOSP
+    /// key blob is deliberately not enough: the reviewed TB322FC OEM ABL references one and still
+    /// rejects AOSP-signed vbmeta under a locked bootloader.
+    /// </summary>
+    internal static bool AblAcceptsAosp(byte[] abl, CancellationToken ct) =>
+        IsAosp(PrimaryAblKey(abl, ct).KeySha256);
 
     internal static bool IsGblCapableAbl(byte[] abl, CancellationToken ct) =>
         InternalSlotLoaderStructure.TryDecodeAblForGbl(abl, ct, out byte[] pe)

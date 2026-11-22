@@ -1142,7 +1142,11 @@ namespace FreedomInstaller.Core.Tests
 
             private static byte[] BuildKeyBlob(RSA rsa)
             {
-                var parameters = rsa.ExportParameters(false);
+                RSAParameters parameters;
+                lock (SignGate)
+                {
+                    parameters = rsa.ExportParameters(false);
+                }
                 Assert.NotNull(parameters.Modulus);
                 Assert.Equal(512, parameters.Modulus.Length);
                 byte[] modulus = (byte[])parameters.Modulus.Clone();

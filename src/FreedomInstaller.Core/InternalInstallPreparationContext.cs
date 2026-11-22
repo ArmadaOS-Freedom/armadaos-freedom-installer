@@ -722,8 +722,9 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             // failures in that gate are diagnosable. Direct installs only; nothing else changed.
             services.DiagnosticBootSourcesVerified?.Invoke();
 
-            // A locked TB322FC is classified from the AVB keys its live ABL references. Slots that already
-            // reference AOSP keep their ABL; only slots without that evidence use the pinned 188 loader.
+            // A locked TB322FC is classified from the effective (primary) AVB key of its live ABL. Slots
+            // whose primary key is AOSP keep their ABL; only slots whose primary key is not AOSP use the
+            // pinned 188 loader. A secondary AOSP blob alone is not acceptance.
             // The asset is staged lazily, so an all-AOSP source never needs the optional build input. A null
             // proof leaves every existing path as is, and the boot-only route never reads ABL evidence it
             // would not use.

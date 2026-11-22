@@ -12,6 +12,21 @@ public static partial class EdlRawBootBuilder
 {
     internal readonly record struct AblAvbKeyFacts(string KeySha256, string PeSha256, int XrefCount, int RawOffset);
 
+    private const string AmbiguousAblAvbKeyDataKey = "FreedomInstaller.Core.AmbiguousAblAvbKey";
+
+    internal static bool IsAmbiguousAblAvbKey(InvalidDataException error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return error.Data.Contains(AmbiguousAblAvbKeyDataKey);
+    }
+
+    private static InvalidDataException AmbiguousAblAvbKey(string message)
+    {
+        var error = new InvalidDataException(message);
+        error.Data[AmbiguousAblAvbKeyDataKey] = true;
+        return error;
+    }
+
     internal static AblAvbKeyFacts InspectAblAvbKey(byte[] abl, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(abl);
@@ -26,9 +41,10 @@ public static partial class EdlRawBootBuilder
     {
         var keys = ReadAblAvbKeyCandidates(pe, token);
         var ranked = keys.OrderByDescending(pair => pair.Value.XrefCount).ToArray();
-        if (ranked.Length == 0 || ranked[0].Value.XrefCount == 0
-            || (ranked.Length > 1 && ranked[0].Value.XrefCount == ranked[1].Value.XrefCount))
-            throw new InvalidDataException("ABL AVB key is missing, unreferenced or ambiguous.");
+        if (ranked.Length == 0 || ranked[0].Value.XrefCount == 0)
+            throw new InvalidDataException("ABL AVB key is missing or unreferenced.");
+        if (ranked.Length > 1 && ranked[0].Value.XrefCount == ranked[1].Value.XrefCount)
+            throw AmbiguousAblAvbKey("ABL AVB key is ambiguous: multiple keys have the same reference count.");
         var best = ranked[0];
         return new AblAvbKeyFacts(best.Key, Sha256Text.Hex(pe).ToUpperInvariant(),
             best.Value.XrefCount, best.Value.RawOffset);
