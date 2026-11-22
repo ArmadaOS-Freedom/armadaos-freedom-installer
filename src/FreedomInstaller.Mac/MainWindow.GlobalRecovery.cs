@@ -581,7 +581,8 @@ public partial class MainWindow
                 catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
                 {
                     RenderGlobalConnection();
-                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ConnectFailed", exception.Message);
+                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ConnectFailed", exception);
+                    AppendGlobalLog(M("Dynamic.RawValue", exception.ToString()));
                 }
             });
             return;
@@ -613,7 +614,7 @@ public partial class MainWindow
                         // takes priority over the backup and must never open it.
                         if (!await HasPresentGlobalEdlAsync(Discovery, token))
                         {
-                            throw new InvalidOperationException(T("Dynamic.Global.Error.ManualEdlRequired"));
+                            throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.ManualEdlRequired"));
                         }
 
                         SetText(GlobalProgressStatusText, "Dynamic.Global.Status.VerifyingRestoreSource");
@@ -649,7 +650,8 @@ public partial class MainWindow
             catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
             {
                 RenderGlobalConnection();
-                SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ConnectFailed", exception.Message);
+                SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ConnectFailed", exception);
+                AppendGlobalLog(M("Dynamic.RawValue", exception.ToString()));
             }
         });
     }
@@ -732,7 +734,7 @@ public partial class MainWindow
         if (!anyPresentEdl && _globalRecoveryMode == GlobalRecoveryMode.Restore)
         {
             // A restore only connects when a 9008 endpoint is already present: never reboot Android into 9008.
-            throw new InvalidOperationException(T("Dynamic.Global.Error.ManualEdlRequired"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.ManualEdlRequired"));
         }
 
         if (anyPresentEdl)
@@ -781,18 +783,18 @@ public partial class MainWindow
         var devices = await transport.ListDevicesAsync(token);
         if (devices.Count == 0)
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.NoAdbDevice"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.NoAdbDevice"));
         }
 
         if (devices.Count > 1)
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.MultipleAdbDevices"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.MultipleAdbDevices"));
         }
 
         var device = devices[0];
         if (device.ConnectionState != ConnectionState.Authorized)
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.UnauthorizedAdb"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.UnauthorizedAdb"));
         }
 
         var identity = await transport.ReadAdbIdentityAsync(device.Serial, token);
@@ -1112,7 +1114,8 @@ public partial class MainWindow
             {
                 DisposeGlobalRestorePlanOnly();
                 SetText(GlobalRestoreSummaryText, "Dynamic.Global.Restore.NotPrepared");
-                SetText(GlobalProgressStatusText, "Dynamic.Global.Status.RestorePrepareFailed", exception.Message);
+                SetText(GlobalProgressStatusText, "Dynamic.Global.Status.RestorePrepareFailed", exception);
+                AppendGlobalLog(M("Dynamic.RawValue", exception.ToString()));
             }
         });
     }
@@ -1195,7 +1198,7 @@ public partial class MainWindow
                     DisposeGlobalRestorePlanOnly();
                     SetText(GlobalRestoreSummaryText, "Dynamic.Global.Restore.NotPrepared");
                     SetText(GlobalProgressStatusText, "Dynamic.Global.Status.RestoreNotStarted",
-                        result.Error ?? T("Dynamic.Global.Error.Unknown"));
+                        (object?)result.Error ?? M("Dynamic.Global.Error.Unknown"));
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
@@ -1217,7 +1220,7 @@ public partial class MainWindow
     {
         _globalRestoreUncertain = true;
         _globalRestoreWriteAttempted = true;
-        var text = string.IsNullOrWhiteSpace(detail) ? T("Dynamic.Global.Error.Unknown") : detail!;
+        object text = string.IsNullOrWhiteSpace(detail) ? M("Dynamic.Global.Error.Unknown") : detail!;
         AppendGlobalLog(M("Dynamic.Global.Log.RestoreUncertain", text));
         SetText(GlobalProgressStatusText, "Dynamic.Global.Status.RestoreUncertain", text);
         // The old Sahara proof no longer describes the device: show the unverified state right away.
@@ -1272,7 +1275,7 @@ public partial class MainWindow
                 if (!evidence.CommandAccepted)
                 {
                     _globalResetUnknown = true;
-                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ResetUnknown", T("Dynamic.Global.Error.ResetNotAccepted"));
+                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ResetUnknown", M("Dynamic.Global.Error.ResetNotAccepted"));
                     return;
                 }
 

@@ -163,7 +163,7 @@ public partial class MainWindow
         if (!string.IsNullOrWhiteSpace(_offlineDescriptorSha256)) sb.AppendLine("OfflineUpgradeDescriptorSha256: " + _offlineDescriptorSha256);
         sb.AppendLine("OfflineUpgradePreflightPassed: " + (_offlinePreflightPassed ? "true" : "false"));
         sb.AppendLine("OfflineUpgradeBootPolicySupported: " + (_offlineBootPolicySupported ? "true" : "false"));
-        if (!string.IsNullOrWhiteSpace(_offlinePreflightError)) sb.AppendLine("OfflineUpgradePreflightError: " + _offlinePreflightError);
+        if (_offlinePreflightError != null) sb.AppendLine("OfflineUpgradePreflightError: " + _uiText.Format(_offlinePreflightError));
         if (!string.IsNullOrWhiteSpace(_offlineLastLoggedPhase)) sb.AppendLine("OfflineUpgradeLastLoggedPhase: " + _offlineLastLoggedPhase);
         if (!string.IsNullOrWhiteSpace(_offlineLastCompletionState)) sb.AppendLine("OfflineUpgradeLastCompletionState: " + _offlineLastCompletionState);
         sb.AppendLine("OfflineUpgradeReceiptLive: " + (_offlineReceiptLive ? "true" : "false"));

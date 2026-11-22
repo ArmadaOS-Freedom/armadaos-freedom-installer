@@ -325,7 +325,7 @@ public partial class MainWindow
         {
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
-                M("Dynamic.InternalInstall.Capacity.ImportFailed", exception.Message));
+                M("Dynamic.InternalInstall.Capacity.ImportFailed", exception));
             RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
         }
         catch (Exception exception)
@@ -333,7 +333,7 @@ public partial class MainWindow
             // 其余失败同样如实显示；不保留「正在导入」的旧文字，也不伪造成功。
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
-                M("Dynamic.InternalInstall.Capacity.ImportFailed", exception.Message));
+                M("Dynamic.InternalInstall.Capacity.ImportFailed", exception));
             RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
         }
         finally

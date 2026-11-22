@@ -98,7 +98,8 @@ public partial class MainWindow
                     catch (Exception exception)
                     {
                         RenderGlobalConnection();
-                        SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ConnectFailed", exception.Message);
+                        SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ConnectFailed", exception);
+                        AppendLocalizedLog(M("Dynamic.RawValue", exception.ToString()));
                     }
                 });
             }
@@ -157,7 +158,7 @@ public partial class MainWindow
                             // 打开备份前先只读确认在场 9008：缺失端点优先要求人工进入 EDL，绝不先打开备份。
                             if (!await HasPresentGlobalEdlAsync(new WindowsEdlEndpointDiscovery(), token))
                             {
-                                throw new InvalidOperationException(T("Dynamic.Global.Error.ManualEdlRequired"));
+                                throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.ManualEdlRequired"));
                             }
 
                             // 备份来源必须先完成本地完整校验，之后的任何重启都只针对已核实的身份。
@@ -191,7 +192,8 @@ public partial class MainWindow
                 catch (Exception exception)
                 {
                     RenderGlobalConnection();
-                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ConnectFailed", exception.Message);
+                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ConnectFailed", exception);
+                    AppendLocalizedLog(M("Dynamic.RawValue", exception.ToString()));
                 }
             });
         }
@@ -270,7 +272,7 @@ public partial class MainWindow
         // 恢复视图只接管在场的 9008；不在场时在访问 ADB 之前明确要求人工进入 EDL。
         if (_globalRecoveryMode == GlobalRecoveryMode.Restore && !anyPresentEdl)
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.ManualEdlRequired"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.ManualEdlRequired"));
         }
 
         if (anyPresentEdl)
@@ -328,18 +330,18 @@ public partial class MainWindow
         var devices = await transport.ListDevicesAsync(token);
         if (devices.Count == 0)
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.NoAdbDevice"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.NoAdbDevice"));
         }
 
         if (devices.Count > 1)
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.MultipleAdbDevices"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.MultipleAdbDevices"));
         }
 
         ConnectedDevice device = devices[0];
         if (device.ConnectionState != ConnectionState.Authorized)
         {
-            throw new InvalidOperationException(T("Dynamic.Global.Error.UnauthorizedAdb"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.Global.Error.UnauthorizedAdb"));
         }
 
         DeviceIdentity identity = await transport.ReadAdbIdentityAsync(device.Serial, token);
@@ -744,7 +746,8 @@ public partial class MainWindow
                 {
                     DisposeGlobalRestorePlanOnly();
                     SetText(GlobalRestoreSummaryText, "Dynamic.Global.Restore.NotPrepared");
-                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.RestorePrepareFailed", exception.Message);
+                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.RestorePrepareFailed", exception);
+                    AppendLocalizedLog(M("Dynamic.RawValue", exception.ToString()));
                 }
             });
         }
@@ -875,7 +878,7 @@ public partial class MainWindow
                     SetText(
                         GlobalProgressStatusText,
                         "Dynamic.Global.Status.RestoreNotStarted",
-                        result.Error ?? T("Dynamic.Global.Error.Unknown"));
+                        (object?)result.Error ?? M("Dynamic.Global.Error.Unknown"));
                 }
                 catch (Exception exception)
                 {
@@ -902,11 +905,11 @@ public partial class MainWindow
         _globalRestoreWriteAttempted = true;
         AppendLocalizedLog(M(
             "Dynamic.Global.Log.RestoreUncertain",
-            string.IsNullOrWhiteSpace(detail) ? T("Dynamic.Global.Error.Unknown") : detail!));
+            string.IsNullOrWhiteSpace(detail) ? M("Dynamic.Global.Error.Unknown") : detail!));
         SetText(
             GlobalProgressStatusText,
             "Dynamic.Global.Status.RestoreUncertain",
-            string.IsNullOrWhiteSpace(detail) ? T("Dynamic.Global.Error.Unknown") : detail!);
+            string.IsNullOrWhiteSpace(detail) ? M("Dynamic.Global.Error.Unknown") : detail!);
     }
 
     // ---------- 显式重启 ----------
@@ -960,7 +963,7 @@ public partial class MainWindow
                     SetText(
                         GlobalProgressStatusText,
                         "Dynamic.Global.Status.ResetUnknown",
-                        T("Dynamic.Global.Error.ResetNotAccepted"));
+                        M("Dynamic.Global.Error.ResetNotAccepted"));
                     return;
                 }
 
@@ -973,7 +976,7 @@ public partial class MainWindow
         {
             // 已发起过的重置取消同样属于未知结果。
             _globalResetUnknown = true;
-            SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ResetUnknown", T("Dynamic.Global.Status.Canceled"));
+            SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ResetUnknown", M("Dynamic.Global.Status.Canceled"));
         }
         finally
         {

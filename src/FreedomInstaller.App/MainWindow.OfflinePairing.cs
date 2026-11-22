@@ -117,7 +117,8 @@ namespace FreedomInstaller.App
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, T("Dynamic.OfflineUpdate.PairingCopyFailed", ex.Message),
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
+                MessageBox.Show(this, T("Dynamic.OfflineUpdate.PairingCopyFailed", ex),
                     T("Static.OfflineUpdate.Title"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -169,7 +170,7 @@ namespace FreedomInstaller.App
             }
             catch (OfflineUpdateSshManagedException ex)
             {
-                throw new InvalidOperationException(T(OfflineManagedFailureKey(ex.Reason), ex.Message), ex);
+                throw new LocalizedInvalidOperationException(M(OfflineManagedFailureKey(ex.Reason), ex.Message), ex.Message, ex);
             }
             finally
             {
