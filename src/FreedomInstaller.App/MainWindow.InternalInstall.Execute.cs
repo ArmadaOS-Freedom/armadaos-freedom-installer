@@ -385,8 +385,6 @@ public partial class MainWindow
             return;
         }
 
-        _internalInstallExecuteAttempted = true;
-        _internalInstallAttemptedBackend = backend;
         _internalInstallExecutionActive = true;
         _internalInstallOperationActive = true;
         _internalInstallLastProgressLog = null;
@@ -404,6 +402,10 @@ public partial class MainWindow
 
                 try
                 {
+                    _workSession?.ProtectRecovery();
+                    // 保护恢复完成后、真正触达后端前，标记「已尝试」。
+                    _internalInstallExecuteAttempted = true;
+                    _internalInstallAttemptedBackend = backend;
                     await backend.ExecuteAsync(
                         prepared.ConfirmationId,
                         userdataEraseConfirmed: true,

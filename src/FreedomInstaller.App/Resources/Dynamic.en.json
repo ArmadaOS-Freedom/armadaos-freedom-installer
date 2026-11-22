@@ -1259,6 +1259,7 @@
   "Dynamic.RecoverySource.BoardReady": "Using the tablet recovery backup. A verified PC copy is saved at: {0}",
   "Dynamic.RecoverySource.BoardMissing": "No tablet recovery backup was found. Select the original pre-install PC backup.",
   "Dynamic.RecoverySource.BoardInvalid": "The tablet recovery backup is unavailable: {0}. Use the original pre-install PC backup.",
+  "Dynamic.RecoverySource.BoardRetryWithPc": "The tablet recovery backup is unavailable; retrying with the original pre-install PC backup.",
   "Dynamic.RecoverySource.PickOriginal": "Choose the original recovery backup saved before installation",
   "Dynamic.RecoverySource.PickOutput": "Choose where to save recovery files and the rollback backup",
   "Dynamic.RecoverySource.NeedOriginal": "A valid original recovery backup is required. Select the PC backup saved before installation.",

@@ -34,6 +34,9 @@ public partial class MainWindow
     /// <summary>用户显式选择的电脑文件夹，只作为新建备份的父目录；绝不回退到系统临时目录。</summary>
     private string? _internalInstallBackupParent;
 
+    /// <summary>内部安装自动分支中板读失败所对应的在线客户端；同一客户端重试时直接走电脑目录。</summary>
+    private EdlClient? _rejectedInternalBoardClient;
+
     /// <summary>
     /// 内部安装在当前模式下实际使用的工作父目录：新建模式仍是用户选择的电脑备份位置；
     /// 复用模式改用环境准备已建立的会话目录，因此不再要求新的备份位置。
@@ -619,11 +622,10 @@ public partial class MainWindow
         // 上一份备份对象与其派生结果先作废；客户端、工具链与 9008 证据保持原样。
         ReleaseInternalInstallBackupObject();
 
-        // 内部安装自动备份真正开始时先报告「正在自动备份」；每次尝试在真实读/捕获之前
-        // 于既有工作会话中登记自己的令牌。关闭时任一未确认令牌都会保留临时会话里的恢复资料。
+        // 内部安装自动备份真正开始时先报告「正在自动备份」；在真实读取之前登记待定备份令牌，
+        // 该令牌与本次读取的实际生命周期绑定，成功时转移，失败/取消时放弃。
         if (internalAutoBranch)
         {
-            _internalInstallActiveBackupAttempt = _workSession?.BeginRecoveryBackup();
             InternalInstallAutomaticBackupPanel.Visibility = Visibility.Visible;
         }
         // 新的真实备份尝试开始：作废旧失败尝试快照，只保留本次回调真正完成的 ABL 记录。
@@ -654,6 +656,7 @@ public partial class MainWindow
 
                 // 本次刚加载、尚未交给字段的工具链；只要还没进入 9008，失败时就释放它自己的暂存目录。
                 EdlToolchain? pendingTools = null;
+                Guid? pending = null;
 
                 try
                 {
@@ -811,66 +814,50 @@ public partial class MainWindow
 
                     // 唯一一次真实调用：已有模式只校验原始目录，正常模式才在父目录下新建子目录。
                     // 修复模式（非内部使用板备份分支）走修复专用助手，其他模式保持原样。
-                    InternalBackupSet set;
-                    BoardRecoveryExtraction? extraction = null;
+                    InternalBackupSet? set;
+                    UiMessage? recoveredSourceStatus = null;
                     if (internalAutoBranch)
                     {
                         SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.ReadingBoard"));
-                        extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
-                            activeClient, parentPath, TemporaryWorkRoot, token);
+                        // 连接/前置检查已完成、真实读取开始之前先登记内部自动分支的待定备份令牌；
+                        // 该令牌与本次读取的实际生命周期绑定，成功时转移，失败/取消时放弃。
+                        pending = _workSession?.BeginRecoveryBackup();
+                        var prepared = await TryPrepareInternalRecoverySnapshotAsync(
+                            activeClient, parentPath, useBoardBackup, progress, token);
+                        recoveredSourceStatus = prepared.SourceStatus;
+                        set = prepared.Snapshot;
                     }
-                    if (IsRepairInstallationMode && IsBootMaintenanceMode && !useBoardBackup && !useExisting)
+                    else set = null;
+                    if (set is null)
                     {
-                        set = await CaptureRepairCurrentAsync(activeClient, parentPath, progress, token);
-                    }
-                    else if (extraction is not null)
-                    {
-                        InternalBackupSet? recovery = null;
-                        try
+                        if (IsRepairInstallationMode && IsBootMaintenanceMode && !useBoardBackup && !useExisting)
                         {
-                            // The lease stays alive across opening, binding and the preparation snapshot; any
-                            // failure or cancellation releases those locks before the lease cleanup runs.
-                            recovery = await InternalInstallBackup.OpenRecoveryAsync(
-                                activeClient, extraction.DirectoryPath, token: token);
-                            set = await InternalInstallBackup.CreatePreparationSnapshotAsync(
-                                activeClient, recovery!, TemporaryWorkRoot, progress, token);
+                            set = await CaptureRepairCurrentAsync(activeClient, parentPath, progress, token);
                         }
-                        catch
+                        else if (useBoardBackup)
                         {
-                            recovery?.Dispose();
-                            extraction.Dispose();
-                            throw;
+                            throw new InvalidDataException(T("Dynamic.RecoverySource.BoardMissing"));
                         }
-                        _internalInstallRecoverySource = recovery;
-                        _boardRecoveryDiscoveredDirectory = extraction.DirectoryPath;
-                        _boardRecoveryAttemptManifest = set.ManifestSha256;
-                        extraction.Retain();
-                        useBoardBackup = true;
-                        AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", extraction.DirectoryPath));
+                        else set = useExisting
+                            ? await InternalInstallBackup.OpenExistingAsync(
+                                activeClient,
+                                existingDirectory!,
+                                progress,
+                                token)
+                            : internalAutoBranch && _internalInstallDeviceCheck is { } checkedDevice
+                            ? await InternalInstallBackup.CreateForFirstInstallAsync(
+                                activeClient,
+                                parentPath,
+                                checkedDevice,
+                                progress,
+                                token,
+                                diagnosticAblCaptures.Add)
+                            : await InternalInstallBackup.CreateAsync(
+                                activeClient,
+                                parentPath,
+                                progress,
+                                token);
                     }
-                    else if (useBoardBackup)
-                    {
-                        throw new InvalidDataException(T("Dynamic.RecoverySource.BoardMissing"));
-                    }
-                    else set = useExisting
-                        ? await InternalInstallBackup.OpenExistingAsync(
-                            activeClient,
-                            existingDirectory!,
-                            progress,
-                            token)
-                        : internalAutoBranch && _internalInstallDeviceCheck is { } checkedDevice
-                        ? await InternalInstallBackup.CreateForFirstInstallAsync(
-                            activeClient,
-                            parentPath,
-                            checkedDevice,
-                            progress,
-                            token,
-                            diagnosticAblCaptures.Add)
-                        : await InternalInstallBackup.CreateAsync(
-                            activeClient,
-                            parentPath,
-                            progress,
-                            token);
 
                     acceptProgress = false;
 
@@ -897,15 +884,21 @@ public partial class MainWindow
                     }
                     else
                     {
+                        if (internalAutoBranch)
+                        {
+                            // 局部令牌已在实际读取前登记；此处只把它转移到活跃尝试字段。
+                            _internalInstallActiveBackupAttempt = pending;
+                            pending = null;
+                        }
                         _internalInstallBackup = set;
                     }
 
-                    if (useBoardBackup)
+                    if (recoveredSourceStatus is not null)
                     {
                         SetInternalInstallBackupProgressIndeterminate(false, 100);
                         SetInternalInstallBackupVerified(M("Dynamic.InternalInstall.Backup.KeepEdl"));
                         RenderInternalInstallBackupDetail();
-                        SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.BoardReady", _internalInstallRecoverySource!.DirectoryPath));
+                        SetInternalInstallBackupStatus(recoveredSourceStatus);
                     }
                     else RenderInternalInstallBackupSuccess(useExisting ? set : _internalInstallBackup!, useExisting);
                     RefreshInternalInstallActions();
@@ -972,6 +965,12 @@ public partial class MainWindow
                 }
                 finally
                 {
+                    // 未转移的待定令牌一律放弃；只处理本尝试登记的令牌，不动其它活跃写入保护。
+                    if (pending is { } abandoned)
+                    {
+                        _workSession?.AbandonRecoveryBackup(abandoned);
+                    }
+
                     // 本次工作已结束却没有留下完整备份（含工具链 / 身份校验的提前返回）：此刻才把运行提示换成失败提示；
                     // 成功返回的备份已写入 KeepEdl，绝不覆盖。
                     if (_internalInstallBackup is null)
@@ -1003,6 +1002,129 @@ public partial class MainWindow
             _internalInstallOperationActive = false;
             RefreshInternalInstallActions();
             UpdateSummary();
+        }
+    }
+
+    /// <summary>
+    /// 内部安装自动分支：先尝试从平板读取既有恢复目录；真正不存在且未要求板备份时为 null，
+    /// 让调用方回退到首次安装流程。已知失败或格式错误转为已校验的电脑目录选择。
+    /// </summary>
+    private async Task<(InternalBackupSet? Snapshot, UiMessage? SourceStatus)>
+        TryPrepareInternalRecoverySnapshotAsync(
+            EdlClient activeClient,
+            string parentPath,
+            bool useBoardBackup,
+            IProgress<InternalBackupProgress>? progress,
+            CancellationToken token)
+    {
+        if (!ReferenceEquals(_rejectedInternalBoardClient, activeClient))
+        {
+            BoardRecoveryExtraction? extraction = null;
+            InternalBackupSet? recovery = null;
+            try
+            {
+                try
+                {
+                    extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
+                        activeClient, parentPath, TemporaryWorkRoot, token, allowRetainedCopy: false);
+                    if (extraction is null)
+                    {
+                        if (!useBoardBackup)
+                        {
+                            return (null, null);
+                        }
+                        AppendLocalizedLog(M("Dynamic.RecoverySource.BoardMissing"));
+                        _rejectedInternalBoardClient = activeClient;
+                    }
+                    else
+                    {
+                        // 租约跨打开、绑定与准备快照存活；失败时先释放锁再执行租约清理。
+                        recovery = await InternalInstallBackup.OpenRecoveryAsync(
+                            activeClient, extraction.DirectoryPath, token: token);
+                    }
+                }
+                catch (Exception error) when (error is InvalidOperationException
+                    or IOException
+                    or TimeoutException
+                    or UnauthorizedAccessException
+                    or InvalidDataException
+                    or System.Text.Json.JsonException
+                    or FormatException)
+                {
+                    AppendLocalizedLog(M("Dynamic.RecoverySource.BoardInvalid", error.Message));
+                    _rejectedInternalBoardClient = activeClient;
+                }
+
+                if (recovery is not null)
+                {
+                    var set = await InternalInstallBackup.CreatePreparationSnapshotAsync(
+                        activeClient, recovery, TemporaryWorkRoot, progress, token);
+                    _internalInstallRecoverySource = recovery;
+                    _boardRecoveryDiscoveredDirectory = extraction!.DirectoryPath;
+                    _boardRecoveryAttemptManifest = set.ManifestSha256;
+                    extraction.Retain();
+                    recovery = null;
+                    return (set, M("Dynamic.RecoverySource.BoardReady", _internalInstallRecoverySource.DirectoryPath));
+                }
+            }
+            finally
+            {
+                recovery?.Dispose();
+                extraction?.Dispose();
+            }
+        }
+
+        return await ChooseRecoveryFromPcAsync(activeClient, progress, token);
+    }
+
+    private async Task<(InternalBackupSet? Snapshot, UiMessage? SourceStatus)> ChooseRecoveryFromPcAsync(
+        EdlClient activeClient,
+        IProgress<InternalBackupProgress>? progress,
+        CancellationToken token)
+    {
+        SetInternalInstallBackupStatus(M("Dynamic.RecoverySource.BoardRetryWithPc"));
+        var selected = PickExistingDirectory(null, "Dynamic.RecoverySource.PickOriginal");
+        token.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(selected))
+        {
+            if (ReferenceEquals(_rejectedInternalBoardClient, activeClient))
+            {
+                _rejectedInternalBoardClient = null;
+            }
+            throw new OperationCanceledException(token);
+        }
+        var resolved = UninstallBackupDirectorySelection.Resolve(selected!);
+        if (resolved is null
+            || resolved.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected
+            || resolved.DirectoryPath is null)
+        {
+            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedOriginal"), T("Dynamic.RecoverySource.NeedOriginal"));
+        }
+
+        var directoryPath = resolved.DirectoryPath;
+        var workRoot = TemporaryWorkRoot;
+        if (!IsInternalInstallBackupParentOutsideExisting(workRoot, directoryPath))
+        {
+            throw new LocalizedInvalidOperationException(
+                M("Dynamic.InternalInstall.Backup.ExistingWorkRootConflict", directoryPath),
+                T("Dynamic.InternalInstall.Backup.ExistingWorkRootConflict", directoryPath));
+        }
+        InternalBackupSet? recovery = null;
+        try
+        {
+            recovery = await InternalInstallBackup.OpenRecoveryAsync(activeClient, directoryPath, token: token);
+            var set = await InternalInstallBackup.CreatePreparationSnapshotAsync(
+                activeClient, recovery!, workRoot, progress, token);
+            _internalInstallRecoverySource = recovery;
+            _boardRecoveryDiscoveredDirectory = null;
+            _boardRecoveryAttemptManifest = set.ManifestSha256;
+            recovery = null;
+            AppendLocalizedLog(M("Dynamic.RecoverySource.PcReady", directoryPath));
+            return (set, M("Dynamic.RecoverySource.PcReady", directoryPath));
+        }
+        finally
+        {
+            recovery?.Dispose();
         }
     }
 

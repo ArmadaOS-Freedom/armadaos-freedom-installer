@@ -22,7 +22,8 @@ public static partial class BoardRecoveryBackup
     /// removes exactly that new directory.
     /// </summary>
     public static async Task<BoardRecoveryExtraction?> ReadDirectoryAsync(
-        EdlClient client, string durableParent, string temporaryParent, CancellationToken token = default)
+        EdlClient client, string durableParent, string temporaryParent, CancellationToken token = default,
+        bool allowRetainedCopy = true)
     {
         RequireParent(durableParent);
         RequireParent(temporaryParent);
@@ -45,9 +46,11 @@ public static partial class BoardRecoveryBackup
                 "Multiple recovery partitions were found.",
                 "The recovery partition has invalid identity or size.");
             if (partition is null) return null;
-            var borrowed = await TryBorrowDirectoryAsync(
-                client, client.Toolchain.Model, client.Toolchain.HardwareId, partition, table, durableParent, work, token)
-                .ConfigureAwait(false);
+            var borrowed = allowRetainedCopy
+                ? await TryBorrowDirectoryAsync(
+                    client, client.Toolchain.Model, client.Toolchain.HardwareId, partition, table, durableParent, work, token)
+                    .ConfigureAwait(false)
+                : null;
             if (borrowed is not null) return borrowed;
             var image = await client.ReadAsync(0, partition.StartSector, partition.SectorCount,
                 Path.Combine(work, "recovery.img"), token).ConfigureAwait(false);
@@ -68,7 +71,8 @@ public static partial class BoardRecoveryBackup
 
     public static async Task<InternalBackupSet?> ReadAsync(
         EdlClient client, InternalBackupSet current, string durableParent, string temporaryParent,
-        CancellationToken token = default)
+        CancellationToken token = default, bool allowRetainedCopy = true,
+        Action<BoardRecoveryExtraction>? adoptTemporaryExtraction = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(current);
@@ -86,8 +90,10 @@ public static partial class BoardRecoveryBackup
         Directory.CreateDirectory(work);
         try
         {
-            var borrowed = await TryBorrowRecoveryAsync(client, current, partition, durableParent, work, token)
-                .ConfigureAwait(false);
+            var borrowed = allowRetainedCopy
+                ? await TryBorrowRecoveryAsync(client, current, partition, durableParent, work, token)
+                    .ConfigureAwait(false)
+                : null;
             if (borrowed is not null) return borrowed;
             var path = Path.Combine(work, "recovery.img");
             var capture = await client.ReadAsync(0, partition.StartSector, partition.SectorCount, path, token).ConfigureAwait(false);
@@ -104,7 +110,16 @@ public static partial class BoardRecoveryBackup
             {
                 recovered = await InternalInstallBackup.OpenRecoveryAsync(client, extraction.DirectoryPath, token: token).ConfigureAwait(false);
                 ValidateSource(current, recovered);
-                extraction.Retain();
+                if (adoptTemporaryExtraction is not null)
+                {
+                    // Transfer the fresh, unretained lease to the caller. If the handoff fails, the catch
+                    // below releases the opened backup first and then removes this new extraction.
+                    adoptTemporaryExtraction(extraction);
+                }
+                else
+                {
+                    extraction.Retain();
+                }
                 var result = recovered;
                 recovered = null;
                 return result;
