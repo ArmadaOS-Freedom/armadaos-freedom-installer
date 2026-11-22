@@ -2,8 +2,9 @@
 
 The two windows cannot share markup (WPF and Avalonia XAML differ), but they share every string. This test
 compares what each page shows and does: the named controls the code drives, the static string keys, the click
-handlers, and the Dynamic.Global.* messages the code-behind can show. When the WPF page or its code changes,
-it fails until the Mac page follows.
+handlers, and the Dynamic.Global.* messages the code-behind can show. Workflow behavior stays matched while
+approved platform-only layout (WPF-only containers, the common sidebar back control vs. the Mac per-page back)
+may differ; every other shared feature, action, confirmation, string and wiring remains strict.
 """
 
 import re
@@ -23,12 +24,16 @@ MAC_CODE = [
     ROOT / "src" / "FreedomInstaller.Mac" / "MainWindow.axaml.cs",
 ]
 
-# Intentional differences, each with its reason:
-# - the WPF page shows a collapsible connection drawing (a WPF-only UserControl); the Mac page shows the same
-#   lead text without the drawing, so neither the drawing nor its expander title appear there;
-# - the WPF log expander and output section carry names the code never uses.
-_WPF_ONLY_KEYS = {"Static.Global.ConnectionGuideTitle"}
-_WPF_ONLY_NAMES = set()
+# Workflow behavior is matched while approved platform-only layout may differ.
+# - The WPF page shows a collapsible connection drawing (a WPF-only UserControl); the Mac page shows the same
+#   lead text without the drawing, so neither the drawing nor its expander title appear there.
+# - PR #118 moved the Windows back control into the common sidebar; the Mac page keeps its per-page back button.
+_WPF_ONLY_KEYS = {
+    "Static.Global.ConnectionGuideTitle",
+}
+_WPF_ONLY_NAMES = {"GlobalConnectionStep", "GlobalRestoreSourceInputs", "GlobalRestoreConfirmation"}
+_MAC_ONLY_KEYS = {"Static.Global.BackHome"}
+_MAC_ONLY_NAMES = {"GlobalBackHomeButton"}
 # The WPF window may run without an adb transport; the Mac page is only reachable after the environment check
 # found adb, so its transport always exists and this refusal cannot occur there.
 _WPF_ONLY_MESSAGES = {"Dynamic.Global.Error.TransportUnavailable"}
@@ -77,17 +82,25 @@ class MacGlobalRecoveryParityTests(unittest.TestCase):
         cls.mac = _page(MAC_XAML)
 
     def test_static_keys_match(self):
-        self.assertEqual(_keys(self.wpf, "Static.") - _WPF_ONLY_KEYS, _keys(self.mac, "Static."))
+        wpf = _keys(self.wpf, "Static.")
+        mac = _keys(self.mac, "Static.")
+        self.assertEqual(wpf - mac, _WPF_ONLY_KEYS)
+        self.assertEqual(mac - wpf, _MAC_ONLY_KEYS)
 
     def test_named_controls_match(self):
-        self.assertEqual(_names(self.wpf) - _WPF_ONLY_NAMES, _names(self.mac))
+        wpf = _names(self.wpf)
+        mac = _names(self.mac)
+        self.assertEqual(wpf - mac, _WPF_ONLY_NAMES)
+        self.assertEqual(mac - wpf, _MAC_ONLY_NAMES)
 
     def test_handlers_match(self):
         # Compared per control and event, so two controls that swap handlers are caught.
         wpf = _handlers(self.wpf)
+        mac = _handlers(self.mac)
         self.assertIn(("GlobalBackupButton", "Click", "OnGlobalBackupAction"), wpf)
         self.assertIn(("GlobalRestoreConfirmCheck", "CheckedChanged", "OnGlobalRestoreConsentChanged"), wpf)
-        self.assertEqual(wpf, _handlers(self.mac))
+        self.assertIn(("GlobalBackHomeButton", "Click", "OnGlobalBackHome"), mac)
+        self.assertEqual(wpf, mac - {("GlobalBackHomeButton", "Click", "OnGlobalBackHome")})
 
     def test_initial_dynamic_texts_match(self):
         self.assertEqual(_keys(self.wpf, "Dynamic."), _keys(self.mac, "Dynamic."))
@@ -98,6 +111,12 @@ class MacGlobalRecoveryParityTests(unittest.TestCase):
         mac = _code_messages(MAC_CODE)
         self.assertLessEqual(wpf, mac)
         self.assertEqual(set(), {key for key in mac - wpf if not key.startswith("Dynamic.Global.Dialog.")})
+
+    def test_wpf_back_control_sits_in_common_sidebar(self):
+        main = WPF_XAML.read_text(encoding="utf-8")
+        self.assertRegex(main, r'x:Name="BackToFunctionsButton"[^>]*Click="OnBackToFunctions"')
+        code = (ROOT / "src" / "FreedomInstaller.App" / "MainWindow.Functions.cs").read_text(encoding="utf-8")
+        self.assertRegex(code, r'if \(_showingGlobalRecovery\)\s*\{\s*OnGlobalBackHome\(sender, e\);')
 
     def test_home_cards_open_the_page(self):
         text = MAC_XAML.read_text(encoding="utf-8")
