@@ -10,8 +10,9 @@ namespace FreedomInstaller.Core;
 /// <summary>
 /// The reviewed TB322FC 188 ABL, used as an AOSP-capable loader rather than a firmware-version-specific
 /// image. This optional test-build asset is pinned by both length and SHA-256 and is staged into the
-/// preparation's evidence directory only when a selected live ABL does not already reference the AOSP
-/// signing key. There is no path, stream or file-name input and no download or generation at run time.
+/// preparation's evidence directory only when a selected live ABL does not use the AOSP signing key as
+/// its effective (primary) key. There is no path, stream or file-name input and no download or generation
+/// at run time.
 /// </summary>
 internal static class Tb322fcAbl188Assets
 {

@@ -31,7 +31,7 @@ public sealed class AblAvbTrustTests
             .Invoke(null, new object[] { key })!;
     }
 
-    private static object Inspect(byte[] image, CancellationToken ct = default, bool container = false)
+    internal static object Inspect(byte[] image, CancellationToken ct = default, bool container = false)
     {
         try
         {
@@ -159,6 +159,16 @@ public sealed class AblAvbTrustTests
     }
 
     [Fact]
+    public void EffectiveKeyDistinguishesOemPrimaryFromAospPrimary()
+    {
+        // The live OEM loader has the OEM key as its strongest reference, even though an AOSP blob exists.
+        Assert.Equal(Sha256(Other), Value<string>(Inspect(DualKeyImage()), "KeySha256"));
+
+        // The reviewed 188 loader ranks AOSP first; that is the only dual-key shape treated as acceptance.
+        Assert.Equal(Sha256(Aosp), Value<string>(Inspect(AospPrimaryDualKeyImage()), "KeySha256"));
+    }
+
+    [Fact]
     public void AllKeysViewEmitsEachKeyOnceWithItsOwnStrongestEvidence()
     {
         var pe = Image();
@@ -203,6 +213,22 @@ public sealed class AblAvbTrustTests
         }
 
         Adr(pe, 0x244, 0x2803);
+        Adr(pe, 0x248, 0x2803);
+        return pe;
+    }
+
+    /// <summary>
+    /// Two structurally valid keys where the AOSP key wins the effective-key ranking (two code references)
+    /// and the OEM key is a secondary reference. This mirrors the reviewed 188 loader's role, not the live
+    /// OEM loader that has the opposite ranking.
+    /// </summary>
+    internal static byte[] AospPrimaryDualKeyImage()
+    {
+        var pe = Image();
+        Aosp.CopyTo(pe, 0x1803);
+        Other.CopyTo(pe, 0x2803);
+        Adr(pe, 0x240, 0x1803);
+        Adr(pe, 0x244, 0x1803);
         Adr(pe, 0x248, 0x2803);
         return pe;
     }

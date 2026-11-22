@@ -115,6 +115,11 @@
       "path": "vendor/qualcomm/g4/firehose.melf"
     },
     {
+      "bytes": 1048576,
+      "sha256": "6C2DD7CA087C4481B9B3970E8251C4E09846ED85FE1A279EB8A2F7E637B3FF15",
+      "path": "vendor/qualcomm/g4/abl_aosp_capable.img"
+    },
+    {
       "bytes": 12088,
       "sha256": "a98c7ae167f5d0daf947dc707e3c3679ea438f30ea6ebc510edf15655a14d223",
       "path": "vendor/qualcomm/g5/multi_image_qti.mbn"
