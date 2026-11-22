@@ -211,6 +211,48 @@ public static class InternalSlotMaterialReader
     }
 
     /// <summary>
+    /// Same five-source verification as <see cref="AnalyzeAsync"/>, but when the live kernel is a
+    /// kShim the base image is recovered from the archived stock recovery BOOT image rather than
+    /// by unpacking the kShim payload. The archived BOOT must be a plain OEM image; the live
+    /// kShim is only used for cross-checking the stock body it wraps.
+    /// </summary>
+    internal static Task<InternalSlotMaterial> AnalyzeAndExportReinstallBaseAsync(
+        string slot,
+        VerifiedEdlFile currentBoot,
+        VerifiedEdlFile vendorBoot,
+        VerifiedEdlFile initBoot,
+        VerifiedEdlFile abl,
+        VerifiedEdlFile xblConfig,
+        VerifiedEdlFile recoveryBoot,
+        string baseOutputPath,
+        CancellationToken token = default)
+    {
+        if (slot is not ("a" or "b"))
+        {
+            throw new ArgumentException("slot must be 'a' or 'b'.", nameof(slot));
+        }
+        ArgumentNullException.ThrowIfNull(currentBoot);
+        ArgumentNullException.ThrowIfNull(vendorBoot);
+        ArgumentNullException.ThrowIfNull(initBoot);
+        ArgumentNullException.ThrowIfNull(abl);
+        ArgumentNullException.ThrowIfNull(xblConfig);
+        ArgumentNullException.ThrowIfNull(recoveryBoot);
+        if (string.IsNullOrWhiteSpace(baseOutputPath))
+        {
+            throw new ArgumentException(
+                "base output path must name a non-empty file path.", nameof(baseOutputPath));
+        }
+
+        string outputPath = Path.GetFullPath(baseOutputPath);
+
+        return Task.Run(
+            () => Analyze(
+                slot, currentBoot, vendorBoot, initBoot, abl, xblConfig, token, outputPath,
+                recoveryBoot),
+            token);
+    }
+
+    /// <summary>
     /// Same five-source verification and base recovery as <see cref="AnalyzeAsync"/>,
     /// additionally writing the already recovered base image to a caller-owned file path.
     /// The export is file material only; it makes no signature or hardware trust assertion.
@@ -256,7 +298,8 @@ public static class InternalSlotMaterialReader
         VerifiedEdlFile abl,
         VerifiedEdlFile xblConfig,
         CancellationToken token,
-        string? baseOutputPath = null)
+        string? baseOutputPath = null,
+        VerifiedEdlFile? recoveryBoot = null)
     {
         FileStream? currentStream = null;
         FileStream? vendorStream = null;
@@ -324,8 +367,13 @@ public static class InternalSlotMaterialReader
             VerifyClaim(abl, "abl", ablSha, abl.Length);
             VerifyClaim(xblConfig, "xbl_config", xblSha, xblConfig.Length);
 
-            (byte[] baseImage, bool isKshim) = RecoverBaseImage(
-                kernel, budget.MaxRawBytes, token);
+            byte[]? archivedBase = recoveryBoot is null
+                ? null
+                : TryReadLegacyRecoveryBase(
+                    kernel, current.RamdiskSize, budget.MaxRawBytes, recoveryBoot, token);
+            (byte[] baseImage, bool isKshim) = archivedBase is not null
+                ? (archivedBase, true)
+                : RecoverBaseImage(kernel, budget.MaxRawBytes, token);
             string baseSha = Sha256Hex(baseImage);
             long baseImageSize = (long)ReadUInt64(baseImage, Arm64ImageSizeOffset);
             ulong baseTextOffset = ReadUInt64(baseImage, Arm64TextOffset);
@@ -1296,6 +1344,198 @@ public static class InternalSlotMaterialReader
         }
 
         return restored;
+    }
+
+    /// <summary>
+    /// Recovers stock raw Android base bytes for an archived legacy recovery BOOT image, using the
+    /// live kShim only for cross-validation. Returns null only if the live kernel does not qualify
+    /// as a recognized over-budget kShim. Any structural mismatch after qualification throws.
+    /// </summary>
+    private static byte[]? TryReadLegacyRecoveryBase(
+        byte[] liveKernel,
+        long liveRamdiskSize,
+        long rawBudget,
+        VerifiedEdlFile recoveryBoot,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+
+        long limit = Math.Min(rawBudget, AbsoluteImageLimit);
+
+        // Step 1: ordinary live kernel path. A non-gzip, short, or unrecognized header is not a
+        // claim about this slot and declines quietly.
+        if (liveKernel.Length < 18)
+        {
+            return null;
+        }
+        if (liveKernel[0] != GzipMagic[0] || liveKernel[1] != GzipMagic[1])
+        {
+            return null;
+        }
+
+        uint isize = BinaryPrimitives.ReadUInt32LittleEndian(
+            liveKernel.AsSpan(liveKernel.Length - 4));
+        if (isize <= (uint)limit || isize > (uint)AbsoluteImageLimit)
+        {
+            return null;
+        }
+
+        using var compressed = new MemoryStream(liveKernel, writable: false);
+        using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
+
+        byte[] liveHead = new byte[Arm64MinLen];
+        int headRead = gzip.ReadAtLeast(liveHead, liveHead.Length, false);
+        if (headRead != Arm64MinLen)
+        {
+            return null;
+        }
+
+        if (!liveHead.AsSpan(Arm64MagicOffset, 4).SequenceEqual(Arm64Magic))
+        {
+            return null;
+        }
+        ulong liveImageSize = ReadUInt64(liveHead, Arm64ImageSizeOffset);
+        if (liveImageSize != isize)
+        {
+            return null;
+        }
+
+        uint word0 = ReadUInt32(liveHead, 0);
+        if ((word0 & BranchMask) != BlOpcode)
+        {
+            return null;
+        }
+        long liveTarget = Imm26Target(word0);
+        if (liveTarget <= 0 || liveTarget >= BlSignedRange)
+        {
+            return null;
+        }
+
+        ulong shimOffset = ReadUInt64(liveHead, 48);
+        if ((ulong)liveTarget != shimOffset)
+        {
+            return null;
+        }
+
+        ulong manifestOffset = ReadUInt64(liveHead, 32);
+        ulong manifestSize = ReadUInt64(liveHead, 40);
+        if (manifestOffset <= shimOffset || manifestOffset >= isize || manifestSize < ManifestHeaderSize || manifestSize != isize - manifestOffset)
+        {
+            return null;
+        }
+
+        // Step 2: qualifying archived BOOT is plain OEM. Validate it with the same parsers the
+        // live path uses, then recover the stock raw kernel from it.
+        FileStream archiveStream = OpenVerified(recoveryBoot, "recovery_boot");
+        byte[] archivedKernel;
+        BootInfo archived;
+        string archivedSha;
+        try
+        {
+            byte[] archivePrefix = ReadPrefix(archiveStream, BootMinLen, token);
+            archived = ParseBootHeader(
+                archivePrefix, recoveryBoot.Length, "recovery_boot", true);
+            if (archived.RamdiskSize != liveRamdiskSize)
+            {
+                throw Reject(
+                    "recovery_boot",
+                    $"archived ramdisk {archived.RamdiskSize} differs from live {liveRamdiskSize}");
+            }
+            if (archived.KernelSize > int.MaxValue || archived.KernelSize > MaxInputBytes)
+            {
+                throw Reject("recovery_boot", "stock kernel size exceeds the supported bound");
+            }
+            archivedKernel = ReadKernelThenRest(
+                archiveStream, archivePrefix, archived.KernelSize, token, out archivedSha);
+        }
+        finally
+        {
+            archiveStream.Dispose();
+        }
+        VerifyClaim(recoveryBoot, "recovery_boot", archivedSha, recoveryBoot.Length);
+
+        (byte[] stockBase, bool stockIsKshim) = RecoverBaseImage(
+            archivedKernel, rawBudget, token);
+        if (stockIsKshim)
+        {
+            throw Reject("recovery_boot", "archived BOOT carries a kShim; refusing to treat as stock");
+        }
+
+        // Step 3: cross-check the archived stock base against the live kShim wrapper.
+        long stockLen = stockBase.LongLength;
+        if (stockLen > (long)shimOffset)
+        {
+            throw Reject(
+                "recovery_boot",
+                $"archived base {stockLen} exceeds live shim offset {shimOffset}");
+        }
+        long aligned = AlignUp(
+            Math.Max(stockLen, (long)ReadUInt64(stockBase, Arm64ImageSizeOffset)), 4);
+        if ((ulong)aligned != shimOffset)
+        {
+            throw Reject(
+                "recovery_boot",
+                $"aligned stock base {aligned} differs from live shim offset {shimOffset}");
+        }
+
+        foreach (int offset in new[] { 8, 24, 56 })
+        {
+            token.ThrowIfCancellationRequested();
+            if (stockLen < offset + 8 || liveHead.Length < offset + 8)
+            {
+                throw Reject("recovery_boot", $"header range at {offset} unavailable for comparison");
+            }
+            if (!stockBase.AsSpan(offset, 8).SequenceEqual(
+                    liveHead.AsSpan(offset, 8)))
+            {
+                throw Reject("recovery_boot", $"untouched header bytes at {offset} differ");
+            }
+        }
+
+        // Expected live word1 derived from the archived original words.
+        uint originalWord0 = ReadUInt32(stockBase, 0);
+        uint originalWord1 = ReadUInt32(stockBase, 4);
+        uint expectedWord1;
+        if (IsBranchB(originalWord0) && !IsBranchB(originalWord1))
+        {
+            expectedWord1 = BOpcode | ((originalWord0 - 1) & Imm26Mask);
+        }
+        else
+        {
+            if (!IsBranchB(originalWord1))
+            {
+                throw Reject("recovery_boot", "archived original word1 is not a B instruction");
+            }
+            expectedWord1 = originalWord1;
+        }
+        uint liveWord1 = ReadUInt32(liveHead, 4);
+        if (liveWord1 != expectedWord1)
+        {
+            throw Reject(
+                "recovery_boot",
+                $"live word1 0x{liveWord1:x8} differs from expected 0x{expectedWord1:x8}");
+        }
+
+        // Continue reading the original gzip stream at decompressed byte 64 and compare with the
+        // stock base body. No reopening, seeking, or slicing of the compressed file.
+        byte[] buffer = new byte[64 * 1024];
+        int bodyOffset = Arm64MinLen;
+        while (bodyOffset < stockLen)
+        {
+            token.ThrowIfCancellationRequested();
+            int count = (int)Math.Min(buffer.Length, stockLen - bodyOffset);
+            int read = gzip.ReadAtLeast(buffer.AsSpan(0, count), count, false);
+            if (read != count || !buffer.AsSpan(0, count).SequenceEqual(
+                    stockBase.AsSpan(bodyOffset, count)))
+            {
+                throw Reject(
+                    "recovery_boot",
+                    "stock kernel body differs from the live kShim Android payload");
+            }
+            bodyOffset += count;
+        }
+
+        return stockBase;
     }
 
     private static bool IsBranchB(uint word) => (word & BranchMask) == BOpcode;
