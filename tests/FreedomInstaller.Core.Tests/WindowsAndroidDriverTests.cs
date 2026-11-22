@@ -8,6 +8,7 @@ public sealed class WindowsAndroidDriverTests
 {
     private const string D00d = @"USB\VID_18D1&PID_D00D";
     private const string Ee0 = @"USB\VID_18D1&PID_4EE0";
+    private const string AdbCompatible = @"USB\Class_FF&SubClass_42&Prot_01";
     private static readonly string[] Adb = {
         @"USB\VID_18D1&PID_4E11", @"USB\VID_18D1&PID_D001", @"USB\VID_18D1&PID_4EE7",
         @"USB\VID_18D1&PID_4EE2&MI_01", @"USB\VID_18D1&PID_4EE4&MI_02", @"USB\VID_18D1&PID_4EE6&MI_01"
@@ -186,7 +187,7 @@ public sealed class WindowsAndroidDriverTests
     [Fact]
     public void SelectedAdbConnectsExactOemSignedBinding()
     {
-        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var adb = Package("oem98.inf", [AdbCompatible], signed: true);
         var google = Package("oem56.inf", Adb, signed: false);
         var good = SelectedEndpoint("oem98.inf", "SERIAL-01");
         var bad = SelectedEndpoint("oem56.inf", "SERIAL-02");
@@ -197,25 +198,68 @@ public sealed class WindowsAndroidDriverTests
     [Fact]
     public void SelectedAdbDuplicateSerialIsProblem()
     {
-        var adb = Package("oem98.inf", Adb[..4], signed: true);
+        var adb = Package("oem98.inf", [AdbCompatible], signed: true);
         var a = SelectedEndpoint("oem98.inf", "SERIAL-01");
         var b = SelectedEndpoint("oem98.inf", "SERIAL-01");
         Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([adb], [a, b]), "SERIAL-01").State);
     }
 
     [Fact]
-    public void SelectedAdbLenovoWinUsbInboxPackage()
+    public void SelectedAdbAcceptsArbitraryVidPidWithInboxWinUsbPackage()
     {
-        const string lenovo = @"USB\VID_17EF&PID_7FE2&MI_01";
-        var ep = Create("DriverEndpointEvidence", lenovo + @"\SERIAL-01", "winusb.inf", "WinUSB", 8u, 0u, true, null);
+        const string arbitrary = @"USB\VID_1234&PID_ABCD&MI_02";
+        var ep = Create("DriverEndpointEvidence", arbitrary + @"\SERIAL-01", "winusb.inf", "WinUSB", 8u, 0u, true, null);
         ep.GetType().GetProperty("UsbSerial")!.SetValue(ep, "SERIAL-01");
-        var emptyIds = Array.Empty<string>();
-        ep.GetType().GetProperty("InboxAdbPackage")!.SetValue(ep, Package("winusb.inf", emptyIds, signed: true));
+        ep.GetType().GetProperty("AdbCompatible")!.SetValue(ep, true);
+        ep.GetType().GetProperty("InboxAdbPackage")!.SetValue(ep, Package("winusb.inf", [AdbCompatible], signed: true));
         Assert.Equal(WindowsDriverCheckState.Connected, SelectedAdb(CreateSnapshot([], [ep]), "SERIAL-01").State);
         ep.GetType().GetProperty("InboxAdbPackage")!.SetValue(ep, null);
         Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([], [ep]), "SERIAL-01").State);
-        ep.GetType().GetProperty("InboxAdbPackage")!.SetValue(ep, Package("winusb.inf", emptyIds, signed: false));
+        ep.GetType().GetProperty("InboxAdbPackage")!.SetValue(ep, Package("winusb.inf", [AdbCompatible], signed: false));
         Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([], [ep]), "SERIAL-01").State);
+    }
+
+    [Fact]
+    public void SelectedAdbAcceptsArbitraryVidPidWithSignedOemGenericCompatibleId()
+    {
+        const string arbitrary = @"USB\VID_1234&PID_ABCD&MI_02";
+        var adb = Package("oem42.inf", [AdbCompatible], signed: true);
+        var endpoint = SelectedEndpoint("oem42.inf", "SERIAL-01", arbitrary);
+        Assert.Equal(WindowsDriverCheckState.Connected, SelectedAdb(CreateSnapshot([adb], [endpoint]), "SERIAL-01").State);
+    }
+
+    [Fact]
+    public void SelectedAdbRejectsOemPackageWithoutGenericCompatibleId()
+    {
+        const string arbitrary = @"USB\VID_1234&PID_ABCD&MI_02";
+        var adb = Package("oem42.inf", [arbitrary], signed: true);
+        var endpoint = SelectedEndpoint("oem42.inf", "SERIAL-01", arbitrary);
+        Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([adb], [endpoint]), "SERIAL-01").State);
+    }
+
+    [Fact]
+    public void SelectedAdbMatchingSerialWithoutAdbCompatibleIdIsMissing()
+    {
+        const string arbitrary = @"USB\VID_1234&PID_ABCD&MI_00";
+        var endpoint = Create("DriverEndpointEvidence", arbitrary + @"\SERIAL-01", "oem42.inf", "WinUSB", 8u, 0u, true, null);
+        endpoint.GetType().GetProperty("UsbSerial")!.SetValue(endpoint, "SERIAL-01");
+        Assert.Equal(WindowsDriverCheckState.Missing, SelectedAdb(CreateSnapshot([], [endpoint]), "SERIAL-01").State);
+    }
+
+    [Fact]
+    public void SelectedAdbUnknownDriverIsProblem()
+    {
+        var endpoint = SelectedEndpoint("unknown.inf", "SERIAL-01", @"USB\VID_1234&PID_ABCD&MI_02");
+        Assert.Equal(WindowsDriverCheckState.Problem, SelectedAdb(CreateSnapshot([], [endpoint]), "SERIAL-01").State);
+    }
+
+    [Fact]
+    public void InboxPackageRecordsGenericAdbCompatibleId()
+    {
+        var package = Package("winusb.inf", [], signed: true);
+        var marked = Method("WithAdbCompatibleId").Invoke(null, [package])!;
+        var ids = (string[])marked.GetType().GetProperty("MatchingHardwareIds")!.GetValue(marked)!;
+        Assert.Equal(new[] { AdbCompatible }, ids);
     }
 
     [Fact]
@@ -224,6 +268,7 @@ public sealed class WindowsAndroidDriverTests
         var ep = Create("DriverEndpointEvidence", @"USB\VID_17EF&PID_7FE2&MI_01\PRIVATE_USB.77", "winusb.inf", "WinUSB", 8u, 0u, true,
             "SetupVerifyInfFileW could not verify 0x00000005 for " + @"USB\VID_17EF&PID_7FE2&MI_01\PRIVATE_USB.77 using " + @"C:\Users\private-fixture\driver.inf");
         ep.GetType().GetProperty("UsbSerial")!.SetValue(ep, "PRIVATE_USB.77");
+        ep.GetType().GetProperty("AdbCompatible")!.SetValue(ep, true);
         var result = SelectedAdb(CreateSnapshot([], [ep]), "PRIVATE_USB.77");
         Assert.Equal(WindowsDriverCheckState.Unknown, result.State);
 
@@ -252,10 +297,11 @@ public sealed class WindowsAndroidDriverTests
     private static object CreateSnapshot(object[] packages, object[] endpoints) =>
         Create("DriverEvidenceSnapshot", true, null, null, null,
             Typed("DriverPackageEvidence", packages), Typed("DriverEndpointEvidence", endpoints));
-    private static object SelectedEndpoint(string inf, string serial)
+    private static object SelectedEndpoint(string inf, string serial, string? hardwareId = null)
     {
-        var obj = Create("DriverEndpointEvidence", Adb[0] + @"\" + serial, inf, "WinUSB", 8u, 0u, true, null);
+        var obj = Create("DriverEndpointEvidence", (hardwareId ?? Adb[0]) + @"\" + serial, inf, "WinUSB", 8u, 0u, true, null);
         obj.GetType().GetProperty("UsbSerial")!.SetValue(obj, serial);
+        obj.GetType().GetProperty("AdbCompatible")!.SetValue(obj, true);
         return obj;
     }
     private static object Package(string inf, string[] ids, bool signed = true)
