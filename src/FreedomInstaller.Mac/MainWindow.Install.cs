@@ -1035,7 +1035,8 @@ public partial class MainWindow
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
-            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Capacity.RangeFailed", exception.Message);
+            AppendLog(M("Dynamic.RawValue", exception.ToString()));
+            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Capacity.RangeFailed", exception);
             return;
         }
 
