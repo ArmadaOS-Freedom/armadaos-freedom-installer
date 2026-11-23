@@ -460,7 +460,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         string? smallSystemSlot = null,
         string? ablFixturePath = null,
         long? reinstallAndroidGiB = null,
-        string? mediaPath = null)
+        string? mediaPath = null,
+        ulong baseBootTextOffset = 0x80000UL)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -550,9 +551,9 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
             if (gblSources is null)
             {
                 EdlRawBootBuilderTests.SlotFixture slotA =
-                    EdlRawBootBuilderTests.CreateSlot(workspace, "a", 0x31);
+                    EdlRawBootBuilderTests.CreateSlot(workspace, "a", 0x31, baseBootTextOffset);
                 EdlRawBootBuilderTests.SlotFixture slotB =
-                    EdlRawBootBuilderTests.CreateSlot(workspace, "b", 0x71);
+                    EdlRawBootBuilderTests.CreateSlot(workspace, "b", 0x71, baseBootTextOffset);
 
                 sources = new(StringComparer.Ordinal)
                 {

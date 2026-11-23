@@ -1120,12 +1120,20 @@ public sealed class EdlRawBootBuilderTests
             tools,
             workspace.Root);
 
-    internal static SlotFixture CreateSlot(Workspace workspace, string slot, byte seed)
+    internal static SlotFixture CreateSlot(
+        Workspace workspace,
+        string slot,
+        byte seed,
+        ulong baseTextOffset = 0x80000UL)
     {
         string directory = Path.Combine(workspace.Root, "slot-" + slot);
         Directory.CreateDirectory(directory);
 
-        byte[] baseImage = MakeArm64(320 + (seed % 7) * 8, 0x11110000u + seed, 1024 + (seed % 7) * 16);
+        byte[] baseImage = MakeArm64(
+            320 + (seed % 7) * 8,
+            0x11110000u + seed,
+            1024 + (seed % 7) * 16,
+            baseTextOffset);
         byte[] salt = new byte[16];
         for (int index = 0; index < salt.Length; index++)
         {

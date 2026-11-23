@@ -32,6 +32,13 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
     // Opt-in: when the lab ARMADA_BOOT signed ZIP is configured, run the direct-overwrite fact against it.
     private const string ArmadaBootOverwriteMediaEnv = "FREEDOM_ARMADA_BOOT_OVERWRITE_MEDIA";
 
+    // Opt-in: real media ZIPs for the fresh-install guard regression. The ArmadaBoot package must be
+    // admitted without reading a nonexistent ARMADA_BACKUP, and the legacy package must stay on its
+    // embedded-boot path.
+    private const string ArmadaBootFreshMediaEnv = "FREEDOM_ARMADA_BOOT_FRESH_MEDIA";
+
+    private const string LegacyFreshMediaEnv = "FREEDOM_LEGACY_FRESH_MEDIA";
+
     private const int RawSectorSize = 4096;
 
     private const long BoardBytes = 2L << 30;
@@ -177,6 +184,9 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
         // Preserve Android: no wipe, no erase.
         Assert.False(prepared.AndroidDataErase);
 
+        // Preserving an existing install still reads and plans the launcher-defaults region.
+        Assert.NotEmpty(LauncherDefaultsEvidence(session.RootDirectory));
+
         InternalInstallResult result = await session.Backend.ExecuteAsync(
             prepared.ConfirmationId, userdataEraseConfirmed: true, progress: null);
 
@@ -270,6 +280,73 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
             w.Lun == 0
             && w.StartSector < userdata.StartSector + userdata.SectorCount
             && userdata.StartSector < w.StartSector + w.SectorCount);
+    }
+
+    [Fact]
+    public async Task Direct_fresh_install_admits_signed_ArmadaBoot_media_without_launcher_defaults_read()
+    {
+        string? mediaPath = Environment.GetEnvironmentVariable(ArmadaBootFreshMediaEnv);
+        if (string.IsNullOrWhiteSpace(mediaPath))
+        {
+            return;
+        }
+
+        var android = new ReadOnlyAndroidResponder();
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _toolchain.Toolchain, _rawShared, "a", android, mediaPath: mediaPath);
+
+        Assert.Equal("TB322FC", session.Package.DeviceModel);
+
+        EdlRawPackageContract contract = PackageReader.ReadEdlRawContract(
+            session.Package.PackageDirectory, session.Package.DeviceModel);
+        Assert.True(contract.BootRecipe.UsesArmadaBoot);
+
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+
+        // A factory GPT is not a preserved layout: the install erases Android data and must never
+        // read the ARMADA_BACKUP region, which does not exist yet.
+        Assert.True(prepared.AndroidDataErase);
+        Assert.Empty(session.EdlRunner.Writes);
+        Assert.Equal(0, session.EdlRunner.ResetCount);
+        Assert.Empty(LauncherDefaultsEvidence(session.RootDirectory));
+    }
+
+    [Fact]
+    public async Task Direct_fresh_install_admits_legacy_embedded_boot_media()
+    {
+        string? mediaPath = Environment.GetEnvironmentVariable(LegacyFreshMediaEnv);
+        if (string.IsNullOrWhiteSpace(mediaPath))
+        {
+            return;
+        }
+
+        var android = new ReadOnlyAndroidResponder();
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _toolchain.Toolchain, _rawShared, "a", android, mediaPath: mediaPath,
+            // The real 1119 kernel declares text_offset 0, unlike the stock 0x80000 fixture.
+            baseBootTextOffset: 0);
+
+        Assert.Equal("TB322FC", session.Package.DeviceModel);
+
+        EdlRawPackageContract contract = PackageReader.ReadEdlRawContract(
+            session.Package.PackageDirectory, session.Package.DeviceModel);
+        Assert.False(contract.BootRecipe.UsesArmadaBoot);
+
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+
+        // The legacy embedded-boot package has no launcher-defaults stage at all.
+        Assert.True(prepared.AndroidDataErase);
+        Assert.Empty(session.EdlRunner.Writes);
+        Assert.Equal(0, session.EdlRunner.ResetCount);
+        Assert.Empty(LauncherDefaultsEvidence(session.RootDirectory));
+    }
+
+    private static string[] LauncherDefaultsEvidence(string rootDirectory)
+    {
+        string evidenceRoot = Path.Combine(rootDirectory, "evidence");
+        return Directory.Exists(evidenceRoot)
+            ? Directory.GetFiles(evidenceRoot, "launcher-defaults-*", SearchOption.AllDirectories)
+            : Array.Empty<string>();
     }
 
     // ------------------------------------------------------------------ case 1: full success stops after the accepted reset
