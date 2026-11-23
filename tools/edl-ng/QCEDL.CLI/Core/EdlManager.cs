@@ -1370,9 +1370,10 @@ internal sealed partial class EdlManager(GlobalOptionsBinder globalOptions, stri
 
             var storageInfo = await GetDeviceInfoAsync(lun);
             var sectorSize = DetermineSectorSize(storageInfo, logFallback: true);
+            var sectorSizeVerified = storageInfo?.StorageInfo?.BlockSize > 0;
             ulong? totalBlocks = storageInfo?.StorageInfo?.TotalBlocks > 0 ? (ulong)storageInfo.StorageInfo.TotalBlocks : null;
 
-            var geometry = new StorageGeometry(sectorSize, totalBlocks);
+            var geometry = new StorageGeometry(sectorSize, totalBlocks) { SectorSizeVerified = sectorSizeVerified };
             _geometryCache[lun] = geometry;
             return geometry;
         }

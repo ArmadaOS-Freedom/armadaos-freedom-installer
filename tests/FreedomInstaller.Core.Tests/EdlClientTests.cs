@@ -978,7 +978,7 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
             runner.FirehoseCommands[1],
             _fixture.Toolchain.ClientPath,
             WriteTimeout,
-            WithGlobals("erase-sector", "8", "4", "--lun", "0", "--expected-bus-serial", E003EdlTestData.BusSerialHex));
+            WithGlobals("erase-sector", "8", "4", "--lun", "0", "--expected-bus-serial", E003EdlTestData.BusSerialHex, "--expected-sector-size", E003EdlTestData.SectorSize.ToString(CultureInfo.InvariantCulture)));
     }
 
     [Theory]

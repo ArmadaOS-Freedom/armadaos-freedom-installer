@@ -273,7 +273,8 @@ class UninstallTailBackupRegressionTests(unittest.TestCase):
             original_misc = Path(request["misc"]["path"]).read_bytes()
             plan = edl_gpt_cli.prepare_plan(request)
             unit = Path(plan["miscRegion"]["path"]).read_bytes()
-            expected = bytes(32) + original_misc[32:len(unit)]
+            self.assertEqual(2048, len(unit))
+            expected = bytes(32) + original_misc[32:2048]
             self.assertEqual(expected, unit)
             self.assertNotIn(b'boot-recovery\x00', unit)
 

@@ -19,6 +19,10 @@ internal sealed class EraseSectorCommand
         aliases: ["--expected-bus-serial"],
         description: "Expected 8-hex-digit bus serial to validate against the selected EDL device (Windows Qualcomm USB Firehose only).");
 
+    private static readonly Option<uint?> ExpectedSectorSizeOption = new(
+        aliases: ["--expected-sector-size"],
+        description: "Expected sector size to verify against the actual storage geometry (requires --expected-bus-serial; 512 or 4096).");
+
     public static Command Create(GlobalOptionsBinder globalOptionsBinder)
     {
         var command = new Command("erase-sector", "Erases a specified number of sectors from a given LUN and start LBA.")
@@ -26,7 +30,8 @@ internal sealed class EraseSectorCommand
             StartSectorArgument,
             SectorsArgument,
             LunOption,
-            ExpectedBusSerialOption
+            ExpectedBusSerialOption,
+            ExpectedSectorSizeOption
         };
 
         command.SetHandler(ExecuteAsync,
@@ -34,7 +39,8 @@ internal sealed class EraseSectorCommand
             StartSectorArgument,
             SectorsArgument,
             LunOption,
-            ExpectedBusSerialOption);
+            ExpectedBusSerialOption,
+            ExpectedSectorSizeOption);
 
         return command;
     }
@@ -44,7 +50,8 @@ internal sealed class EraseSectorCommand
         ulong startSectorUlong,
         ulong sectorsToEraseUlong,
         uint lun,
-        string? expectedBusSerial)
+        string? expectedBusSerial,
+        uint? expectedSectorSize)
     {
         Logging.Log($"Executing 'erase-sector' command: LUN {lun}, Start LBA {startSectorUlong}, Sectors {sectorsToEraseUlong}...", LogLevel.Trace);
 
@@ -63,6 +70,18 @@ internal sealed class EraseSectorCommand
             }
         }
 
+        if (expectedSectorSize.HasValue != (expectedBusSerial != null))
+        {
+            Logging.Log("Error: --expected-sector-size and --expected-bus-serial must be provided together.", LogLevel.Error);
+            return 1;
+        }
+
+        if (expectedSectorSize is not null and not (512 or 4096))
+        {
+            Logging.Log("Error: --expected-sector-size must be 512 or 4096.", LogLevel.Error);
+            return 1;
+        }
+
         return await CommandExecutor.RunAsync("erase-sector", async () =>
         {
             using var manager = expectedBusSerial == null
@@ -76,6 +95,14 @@ internal sealed class EraseSectorCommand
             var effectiveLun = manager.IsDirectMode ? 0u : lun;
             var geometry = await manager.GetStorageGeometryAsync(effectiveLun);
             var targetDescription = manager.GetTargetDescription(effectiveLun);
+
+            if (expectedSectorSize is not null
+                && (!geometry.SectorSizeVerified || geometry.SectorSize != expectedSectorSize.Value))
+            {
+                throw new InvalidOperationException(
+                    $"--expected-sector-size {expectedSectorSize.Value} was requested, but the actual sector size for {targetDescription} could not be verified or does not match (reported: {geometry.SectorSize}{(geometry.SectorSizeVerified ? "" : ", unverified")}).");
+            }
+
             Logging.Log($"Using sector size: {geometry.SectorSize} bytes for {targetDescription}.", LogLevel.Debug);
 
             Logging.Log($"Attempting to erase {sectorsToEraseUlong} sectors starting at LBA {startSectorUlong} on {targetDescription}...");

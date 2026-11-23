@@ -902,7 +902,9 @@ public sealed class EdlClient
                 "--lun",
                 Invariant(lun),
                 "--expected-bus-serial",
-                expectedSerial),
+                expectedSerial,
+                "--expected-sector-size",
+                Invariant(geometry.SectorSize)),
             ByteDependentTimeout(byteCount, WriteTimeout));
 
         cancellationToken.ThrowIfCancellationRequested();
