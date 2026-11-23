@@ -99,6 +99,12 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
         InternalInstallPrepared prepared = session.Backend.Prepared;
 
         Assert.Equal(layoutResized, prepared.AndroidDataErase);
+        if (layoutResized)
+        {
+            // Resizing the Android data window erases it; launcher-defaults must not
+            // read a backup region that the fresh layout has not created yet.
+            Assert.Empty(LauncherDefaultsEvidence(session.RootDirectory));
+        }
 
         InternalInstallResult result = await session.Backend.ExecuteAsync(
             prepared.ConfirmationId, userdataEraseConfirmed: true, progress: null);
@@ -296,6 +302,9 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
             _toolchain.Toolchain, _rawShared, "a", android, mediaPath: mediaPath);
 
         Assert.Equal("TB322FC", session.Package.DeviceModel);
+        Assert.DoesNotContain(
+            session.Backup.Tables[0].Partitions,
+            partition => partition.Name.StartsWith("ARMADA_", StringComparison.OrdinalIgnoreCase));
 
         EdlRawPackageContract contract = PackageReader.ReadEdlRawContract(
             session.Package.PackageDirectory, session.Package.DeviceModel);
@@ -309,6 +318,16 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
         Assert.Empty(session.EdlRunner.Writes);
         Assert.Equal(0, session.EdlRunner.ResetCount);
         Assert.Empty(LauncherDefaultsEvidence(session.RootDirectory));
+
+        // The same factory GPT must carry the full 1122 deployment through execution.
+        android.ConfigureFacts(prepared, session.Artifacts, contract.DeviceModel);
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            prepared.ConfirmationId, userdataEraseConfirmed: true, progress: null);
+
+        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
+        Assert.NotEmpty(session.EdlRunner.Writes);
+        Assert.Equal(1, session.EdlRunner.ResetCount);
     }
 
     [Fact]

@@ -14,6 +14,14 @@ internal sealed partial class InternalInstallPreparationContext
 
     private async Task PrepareLauncherDefaultsAsync(EdlClient edl, CancellationToken ct)
     {
+        // A factory or resized layout destroys the Android data window, so there is no
+        // launcher-defaults region to preserve and ARMADA_BACKUP may not exist yet.
+        // Keep the verified 1119 behavior: only a non-erasing install may read it.
+        if (AndroidDataErase)
+        {
+            return;
+        }
+
         var original = _originalTables[0];
         GptPartition? backup = InternalInstallLauncherDefaults.FindInstalledBackupPartition(
             _package.EdlRawContract.BootRecipe.UsesArmadaBoot,
