@@ -93,7 +93,7 @@
   "Dynamic.Global.Error.RestoreRoutePending": "型号 {0} 的全局恢复写入路线尚未开放，本次不会写入设备。",
   "Dynamic.Global.Error.ConnectionProfileMismatch": "当前会话的可信配置与目标型号不一致。",
   "Dynamic.Global.Error.AndroidUpdateUnconfirmed": "无法确认安卓更新已完成，请先进入安卓完成更新并重启，再创建全局备份。",
-  "Dynamic.Global.Error.LinuxAlreadyInstalled": "检测到 Linux 分区，全局备份仅限安装 Linux 之前。",
+  "Dynamic.Global.Error.LinuxAlreadyInstalled": "此平板已经安装过Linux，无法进行安卓9008 备份。",
   "Dynamic.Global.Error.ConnectionBusMismatch": "当前会话的设备标识 {0} 与备份不一致。",
   "Dynamic.Global.Error.ProfileIncomplete": "可信配置不完整。",
   "Dynamic.Global.Error.ProfileUnknown": "该配置不是内置可信配置。",
