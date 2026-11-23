@@ -205,6 +205,75 @@ public sealed class InternalInstallArtifactsTests
     [Theory]
     [InlineData(SectorSize4096)]
     [InlineData(SectorSize512)]
+    public void BuildGptRewrite_ShortFactoryUserdataSupportsReinstall(int sectorSize)
+    {
+        var image = RewriteImage(sectorSize);
+        var head = image.BuildPrimaryFragment();
+        var tail = image.BuildBackupFragment();
+        var diskBytes = image.DiskBytes;
+        var original = OriginalGptImporter.Parse(head, tail, sectorSize, diskBytes);
+        var factoryUserdata = Partition(original, "userdata");
+        var factoryUserdataEnd = factoryUserdata.StartSector + factoryUserdata.SectorCount;
+
+        var planned = InternalPartitionPlanner.Plan(original, 16, Storage());
+
+        var backupEnd = planned.BackupStartSector + planned.BackupSectorCount;
+        var alignmentSectors = (1L << 20) / sectorSize;
+        var expectedBackupEnd = factoryUserdataEnd / alignmentSectors * alignmentSectors;
+        Assert.Equal(expectedBackupEnd, backupEnd);
+        Assert.True(backupEnd < original.LastUsableSector + 1);
+
+        var backupUuid = Guid.NewGuid();
+        var rewrite = Invoke(
+            "BuildGptRewrite",
+            head,
+            tail,
+            sectorSize,
+            diskBytes,
+            original,
+            planned,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            backupUuid)!;
+        var postTable = Field<GptTable>(rewrite, "PostTable");
+
+        var layout = InternalPartitionPlanner.FindInstalledLinuxLayout(postTable);
+        Assert.NotNull(layout);
+        var backup = layout.Value.Backup;
+
+        Assert.Equal(TwoGiB / sectorSize, backup.SectorCount);
+        Assert.Equal(planned.BackupStartSector, backup.StartSector);
+        Assert.Equal(planned.BackupStartSector + planned.BackupSectorCount - 1, backup.StartSector + backup.SectorCount - 1);
+        Assert.Equal(backupUuid, Guid.Parse(backup.PartUuid));
+
+        var resized = InternalPartitionPlanner.Plan(postTable, 17, Storage());
+        Assert.Equal(backup.StartSector, resized.BackupStartSector);
+        Assert.Equal(backup.SectorCount, resized.BackupSectorCount);
+
+        foreach (var name in new[] { "vendor_0", "vendor_19" })
+        {
+            var before = Partition(original, name);
+            var after = Partition(postTable, name);
+            Assert.Equal(before.StartSector, after.StartSector);
+            Assert.Equal(before.SectorCount, after.SectorCount);
+            Assert.Equal(before.PartUuid, after.PartUuid);
+            Assert.Equal(before.Attributes, after.Attributes);
+        }
+
+        var backupSet = NewUnpopulatedBackupSet();
+        SetStoredValue(backupSet, "Model", "TB322FC");
+        SetStoredValue(backupSet, "HardwareId", "TEST");
+        SetStoredValue(
+            backupSet,
+            "Tables",
+            (IReadOnlyDictionary<int, GptTable>)new Dictionary<int, GptTable> { [0] = original });
+
+        BoardRecoveryBackup.ValidateLun0Layout("TB322FC", "TEST", postTable, backupSet);
+    }
+
+    [Theory]
+    [InlineData(SectorSize4096)]
+    [InlineData(SectorSize512)]
     public void BuildGptRewrite_PreservesEveryOriginalByteExceptThePlannedFields(int sectorSize)
     {
         var image = RewriteImage(sectorSize);
