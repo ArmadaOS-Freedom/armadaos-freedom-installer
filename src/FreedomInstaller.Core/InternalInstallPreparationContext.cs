@@ -152,6 +152,11 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
     private readonly IReadOnlyList<InternalArtifactRegion> _gptWriteRegions;
     private readonly InternalArtifactRegion? _boardSummary;
     private readonly IReadOnlyDictionary<string, InternalSlotMaterial> _slotMaterials;
+    private static readonly string[] BootOnlyInactiveBGuardRoles = new[]
+    {
+        "vendor_boot_b", "init_boot_b", "abl_b", "xbl_config_b", "vbmeta_b", "vbmeta_system_b", "recovery_b"
+    };
+
     private readonly IReadOnlyDictionary<string, long> _rawUpperBounds;
     private readonly string _evidenceDirectory;
     private readonly Guid _installationId;
@@ -159,6 +164,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
     private readonly string _summaryManifestSha256;
     private readonly BootloaderState _fastbootLockState;
     private readonly IReadOnlyDictionary<string, HeldClaim> _artifactClaims;
+    private readonly bool _bootOnlyInactiveB;
 
     // The exact abl_{slot} roles of a direct AOSP proof; empty for every other preparation. They are read
     // again in the original capture and in the pre-write recheck, so a live loader that changed after the
@@ -201,7 +207,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         VerifiedGblPlan? directGblPlan = null,
         IReadOnlyList<string>? directPreservedAvbRoles = null,
         IReadOnlyList<string>? directAblGuardRoles = null,
-        IReadOnlyDictionary<string, VerifiedEdlFile>? directAblReplacements = null)
+        IReadOnlyDictionary<string, VerifiedEdlFile>? directAblReplacements = null,
+        bool bootOnlyInactiveB = false)
     {
         _package = package;
         _assets = assets;
@@ -244,6 +251,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             directAblReplacements is null
                 ? new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal)
                 : new Dictionary<string, VerifiedEdlFile>(directAblReplacements, StringComparer.Ordinal));
+        _bootOnlyInactiveB = bootOnlyInactiveB;
 
         if (_directAblReplacements.Count != 0
             && (!_isDirect || directGblPlan is not null || directPreservedAvbRoles is not null))
@@ -682,6 +690,35 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
             string evidenceDirectory = CreateEvidenceDirectory(evidenceParent, identity.Serial);
 
+            bool bootOnlyInactiveB = false;
+            if (artifactSet.BoardSummary != null
+                && InternalPartitionPlanner.FindInstalledLinuxLayout(backupFacts.Tables[0]) is null
+                && string.Equals(profile.Model, "TB323FU", StringComparison.Ordinal)
+                && string.Equals(deviceCheck.CurrentSlot, "a", StringComparison.Ordinal)
+                && deviceCheck.FastbootLockState == BootloaderState.Locked
+                && await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(Claim(backupFacts.Files, "vbmeta_b"), cancellationToken).ConfigureAwait(false)
+                && !await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(Claim(backupFacts.Files, "boot_b"), cancellationToken).ConfigureAwait(false))
+            {
+                foreach (string role in new[] { "vbmeta_system_b", "recovery_b" })
+                {
+                    if (!await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(Claim(backupFacts.Files, role), cancellationToken).ConfigureAwait(false))
+                    {
+                        throw new InvalidDataException($"boot-only inactive B requires {role} to be empty");
+                    }
+                }
+
+                EdlRawInactiveSlotBackup proof = await EdlRawInactiveSlotBackup.VerifyBootOnlyInactiveBAsync(
+                    profile.ProfileId,
+                    Claim(backupFacts.Files, "boot_b"),
+                    Claim(backupFacts.Files, "vendor_boot_b"),
+                    Claim(backupFacts.Files, "init_boot_b"),
+                    Claim(backupFacts.Files, "abl_b"),
+                    Claim(backupFacts.Files, "xbl_config_b"),
+                    cancellationToken).ConfigureAwait(false);
+                inactiveTargets["b"] = proof;
+                bootOnlyInactiveB = true;
+            }
+
             if (string.Equals(profile.Model, "TB323FU", StringComparison.Ordinal)
                 && string.Equals(deviceCheck.CurrentSlot, "a", StringComparison.Ordinal)
                 && deviceCheck.FastbootLockState == BootloaderState.Locked
@@ -867,7 +904,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 avbNodes: avbNodes,
                 gblInputs: gblInputs,
                 directAblGuardRoles: directAblProof?.AblGuardRoles,
-                directAblReplacements: directAblProof?.Replacements);
+                directAblReplacements: directAblProof?.Replacements,
+                bootOnlyInactiveB: bootOnlyInactiveB);
 
             // A GBL run also creates one whole wrapper partition per slot beside the execution work, so the
             // pre-native check reserves those two actual backup partition lengths as real disk bytes. The
@@ -1028,7 +1066,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 directGblGuardRoles: gblPlan is not null
                     ? GetGblGuardRoles(gblPlan.Inputs)
                     : directAblProof?.AblGuardRoles,
-                directPreservedAvbRoles: preservedAvbRoles).ConfigureAwait(false);
+                directPreservedAvbRoles: preservedAvbRoles,
+                bootOnlyInactiveB: bootOnlyInactiveB).ConfigureAwait(false);
 
             context = new InternalInstallPreparationContext(
                 packageSnapshot,
@@ -1051,7 +1090,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 gblPlan,
                 preservedAvbRoles,
                 directAblProof?.AblGuardRoles,
-                directAblProof?.Replacements);
+                directAblProof?.Replacements,
+                bootOnlyInactiveB: bootOnlyInactiveB);
 
             // The context owns the plan's wrappers and its staged input files from here on, so the local
             // hand-off is cleared before the remaining factory work can fail and dispose something the
@@ -1354,7 +1394,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         IReadOnlyList<DirectAvbMetadataNode>? avbNodes = null,
         GblPreparationInputs? gblInputs = null,
         IReadOnlyList<string>? directAblGuardRoles = null,
-        IReadOnlyDictionary<string, VerifiedEdlFile>? directAblReplacements = null)
+        IReadOnlyDictionary<string, VerifiedEdlFile>? directAblReplacements = null,
+        bool bootOnlyInactiveB = false)
     {
         long gptCapture = 0;
         for (int lun = 0; lun < 6; lun++)
@@ -1471,6 +1512,17 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             }
         }
 
+        if (includeOriginalCapture && bootOnlyInactiveB)
+        {
+            foreach (string role in BootOnlyInactiveBGuardRoles)
+            {
+                planned = CheckedAdd(
+                    planned,
+                    RequireBudgetRegion(files, role).Length,
+                    "The boot-only inactive B guard capture budget overflows.");
+            }
+        }
+
         if (directAblReplacements is not null)
         {
             if (gblInputs is not null)
@@ -1569,7 +1621,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             _directAvbNodes,
             _directGblPlan?.Inputs,
             _directAblGuardRoles.Count == 0 ? null : _directAblGuardRoles,
-            _directAblReplacements.Count == 0 ? null : _directAblReplacements);
+            _directAblReplacements.Count == 0 ? null : _directAblReplacements,
+            bootOnlyInactiveB: _bootOnlyInactiveB);
 
         RequireDirectExecutionSpaceAvailable(
             requiredBytes,
@@ -2054,7 +2107,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             directGblGuardRoles: _directGblPlan is not null
                 ? GetGblGuardRoles(_directGblPlan.Inputs)
                 : (_directAblGuardRoles.Count == 0 ? null : _directAblGuardRoles),
-            directPreservedAvbRoles: _directPreservedAvbRoles).ConfigureAwait(false);
+            directPreservedAvbRoles: _directPreservedAvbRoles,
+            bootOnlyInactiveB: _bootOnlyInactiveB).ConfigureAwait(false);
 
         _currentBootSha256 = new ReadOnlyDictionary<string, string>(
             new Dictionary<string, string>(capture.BootSha256, StringComparer.Ordinal));
@@ -3835,7 +3889,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         CancellationToken cancellationToken,
         IReadOnlyList<DirectAvbMetadataNode>? directMetadataNodes = null,
         IReadOnlyList<string>? directGblGuardRoles = null,
-        IReadOnlyList<string>? directPreservedAvbRoles = null)
+        IReadOnlyList<string>? directPreservedAvbRoles = null,
+        bool bootOnlyInactiveB = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(client);
@@ -3972,6 +4027,17 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             if (directPreservedAvbRoles is not null)
             {
                 foreach (string role in directPreservedAvbRoles)
+                {
+                    if (!captureRoles.Contains(role))
+                    {
+                        captureRoles.Add(role);
+                    }
+                }
+            }
+
+            if (bootOnlyInactiveB)
+            {
+                foreach (string role in BootOnlyInactiveBGuardRoles)
                 {
                     if (!captureRoles.Contains(role))
                     {
