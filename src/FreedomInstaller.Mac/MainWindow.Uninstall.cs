@@ -1001,7 +1001,7 @@ public partial class MainWindow
                         {
                             var entry = await Task.Run(() => GlobalEdlBinding.Attach(profile, Discovery), token);
                             client = new EdlClient(tools, entry, _runner, Discovery, hardware);
-                            _uninstallEdlTools = tools;
+                            AdoptUninstallEdlTools(tools);
                             _uninstallEdlEntry = entry;
                             _uninstallEdlClient = client;
                             _uninstallEntryAttempted = true;
@@ -1286,7 +1286,7 @@ public partial class MainWindow
                         {
                             // 平板已在 9008：安卓无法再问，端点的 USB 序列号必须等于第 1 步读到的 SoC 序列号；
                             // 这里不发送任何命令，端点不同或不唯一立即失败。
-                            _uninstallEdlTools = loaded;
+                            AdoptUninstallEdlTools(loaded);
                             pendingTools = null;
                             SetText(UninstallPrepareStatusText, M("Dynamic.Mac.Backup.AlreadyInEdl", expected.SocSerial));
                             var waited = await Task.Run(
@@ -1328,7 +1328,7 @@ public partial class MainWindow
                             }
 
                             // 工具链先落到字段：进入 9008 之后即使失败也保留现场供诊断。
-                            _uninstallEdlTools = loaded;
+                            AdoptUninstallEdlTools(loaded);
                             pendingTools = null;
 
                             _uninstallEntryAttempted = true;
@@ -2889,6 +2889,21 @@ public partial class MainWindow
     /// Releases this page's 9008 session objects once the session is over (completed, or the one leave reset was
     /// acknowledged): the WPF <c>DisposeInternalInstallResources</c>. Files are never deleted.
     /// </summary>
+    /// <summary>
+    /// 换上新加载的工具链。之前一次进入 9008 失败时留下的工具链没有客户端在用：先释放它（删掉它解出的目录，
+    /// 含 Python 运行时），重试多少次都不会留下旧的解出目录。已有客户端在用的工具链绝不在这里释放。
+    /// </summary>
+    private void AdoptUninstallEdlTools(EdlToolchain tools)
+    {
+        var previous = _uninstallEdlTools;
+        _uninstallEdlTools = tools;
+        if (previous is not null && !ReferenceEquals(previous, tools) && _uninstallEdlClient is null)
+        {
+            // 每次加载解到自己的 GUID 目录；Dispose 只删自己的目录，删除失败它自己吞掉。
+            previous.Dispose();
+        }
+    }
+
     private void DisposeUninstallSession()
     {
         ReleaseUninstallBackupObject();
