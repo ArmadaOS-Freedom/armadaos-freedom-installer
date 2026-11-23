@@ -165,6 +165,11 @@
       "path": "vendor/qualcomm/g5/xbl_sc.elf"
     },
     {
+      "bytes": 1048576,
+      "sha256": "b1504a04685d7fd46935e670734b7aaeb8ae6be57be5512ae69a185219ffb596",
+      "path": "vendor/qualcomm/g5/abl_gbl_capable.img"
+    },
+    {
       "bytes": 1573224,
       "sha256": "ad4689b1c52458250d46829ee46a89ec974e69f8e82eee8d4950427919e0b9eb",
       "path": "vendor/qualcomm/tb710fu/firehose.melf"

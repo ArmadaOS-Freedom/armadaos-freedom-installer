@@ -3,7 +3,7 @@
 这里只保存构建安装器所需的通用加载器与未修改驱动文件，不包含设备分区备份、校准资料、个人数据或系统镜像。构建时逐项核对 maintenance/build-inputs.json 中的长度与 SHA-256。
 
 - g4/：TB322FC 四代的 Firehose，来源固件 TB322FC_CN_OPEN_USER_Q00041.1_W_ZUXOS_1.5.10.259_ST_260611；以及一个可接受 AOSP 签名链的 ABL，来源固件 TB322FC ZUXOS 1.1.11.188，固定长度 1048576 字节、SHA-256 `6C2DD7CA087C4481B9B3970E8251C4E09846ED85FE1A279EB8A2F7E637B3FF15`。该 ABL 不作为特定固件版本绑定镜像使用，只在实时 ABL 不接受 AOSP 签名链时按槽位替换。
-- g5/：TB323FU 五代 QCTool 2026.3.21-1 加载文件，包含 Sahara XML 和它引用的八个镜像，完整保留，不与四代混用。
+- g5/：TB323FU 五代 QCTool 2026.3.21-1 加载文件，包含 Sahara XML 和它引用的八个镜像，完整保留，不与四代混用；以及一个支持加载 efisp 的原厂签名 ABL，来源固件 TB323FU_CN_OPEN_USER_Q00020.0_A16_ZUXOS_2.0.12.088_ST_260610，固定长度 1048576 字节、SHA-256 `B1504A04685D7FD46935E670734B7AAEB8AE6BE57BE5512AE69A185219FFB596`。该 ABL 不作为特定固件版本绑定镜像使用，只在实时 ABL 不加载 efisp 时按槽位替换。
 - tb710fu/：TB710FU（小新 Pad Pro GT，SM8650）的 Firehose，取自 ZUXOS 1.5.04.495 免解锁补充包的 EDL/xbl_s_devprg_ns.melf（与该机 9008 线刷包 bin/9008/prog_firehose_ddr-TB710FU.melf 为同一文件）。
 - driver/：Qualcomm USB Serial Driver 2.1.5.2，日期 2023-08-24，AMD64，仅保留 qcser.inf、qcser.cat、serial/amd64/qcusbser.sys；文件取自 Windows DriverStore，目录签名为 Microsoft Windows Hardware Compatibility Publisher。
 

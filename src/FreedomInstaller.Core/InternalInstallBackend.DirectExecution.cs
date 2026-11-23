@@ -106,6 +106,7 @@ public sealed partial class InternalInstallBackend
 
         var metadataRegions = new List<InternalArtifactRegion>();
         var ablRegions = new List<InternalArtifactRegion>();
+        var gblAblRegions = new List<InternalArtifactRegion>();
 
         if (_context.DirectBootTrustMode == InternalInstallBootTrustMode.GblPreserveOem)
         {
@@ -137,6 +138,26 @@ public sealed partial class InternalInstallBackend
 
             candidateA = MakeExecutionRegion(
                 RequireCapturedRegion("boot_a"), gblBoots["a"].EffectiveCandidate, "boot_a");
+
+            var gblReplacements = _context.GblAblReplacements;
+            string[] gblSlotOrder = { "b", "a" };
+            foreach (string slot in gblSlotOrder)
+            {
+                string role = "abl_" + slot;
+                if (gblReplacements.TryGetValue(role, out VerifiedEdlFile? candidate))
+                {
+                    gblAblRegions.Add(
+                        MakeExecutionRegion(RequireCapturedRegion(role), candidate, role));
+                }
+            }
+
+            if (gblAblRegions.Count != gblReplacements.Count)
+            {
+                throw new InvalidOperationException(
+                    DirectExecutionAvbMetadataMismatchCode + ": the prepared GBL ABL replacement map has "
+                    + gblReplacements.Count + " targets but only " + gblAblRegions.Count
+                    + " fixed-slot regions were built.");
+            }
         }
         else
         {
@@ -333,6 +354,29 @@ public sealed partial class InternalInstallBackend
                 progress,
                 ct)
             .ConfigureAwait(false);
+
+        // On the GBL-preserving route any replaced TB323FU 088 ABL is written whole and read back in the
+        // fixed b, a slot order after efisp and both preserved boot candidates, and before misc, launcher
+        // settings and reset. The list is empty on every non-GBL route and whenever live ABLs load efisp.
+        foreach (InternalArtifactRegion region in gblAblRegions)
+        {
+            string? slot = region.Role.EndsWith("_a", StringComparison.Ordinal)
+                ? "a"
+                : region.Role.EndsWith("_b", StringComparison.Ordinal)
+                    ? "b"
+                    : null;
+
+            await WriteExecutionRegionAsync(
+                    _initialEdl,
+                    run,
+                    InternalInstallStage.WritingGblAbl,
+                    slot,
+                    region,
+                    true,
+                    progress,
+                    ct)
+                .ConfigureAwait(false);
+        }
 
         // Every mandatory AVB metadata region of the AOSP-resigned route is written whole and read back over the
         // same initial session, in the frozen prepared order, before the misc overlay and the reset. The list is

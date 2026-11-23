@@ -112,6 +112,13 @@ public enum InternalInstallStage
     /// was accepted by the bootloader.
     /// </summary>
     WritingAbl,
+
+    /// <summary>
+    /// The pinned TB323FU 088 ABL, used as an efisp/GBL-capable OEM-signed loader independent of firmware
+    /// version, is written whole to each planned slot and read back over the initial EDL session. It covers
+    /// only that write and its readback; it does not itself prove that the following boot was accepted.
+    /// </summary>
+    WritingGblAbl,
 }
 
 /// <summary>
@@ -408,6 +415,8 @@ public sealed class InternalInstallPrepared
 
         internal IReadOnlyList<string> Abl188ReplacementSlots = Array.Empty<string>();
 
+        internal IReadOnlyList<string> GblAblReplacementSlots = Array.Empty<string>();
+
         internal string PackageFingerprint = string.Empty;
 
         internal string PackageBindingSha256 = string.Empty;
@@ -466,6 +475,7 @@ public sealed class InternalInstallPrepared
         FastbootLockState = state.FastbootLockState;
         BootTrustMode = state.BootTrustMode;
         Abl188ReplacementSlots = new List<string>(state.Abl188ReplacementSlots).AsReadOnly();
+        GblAblReplacementSlots = new List<string>(state.GblAblReplacementSlots).AsReadOnly();
 
         PackageFingerprint = state.PackageFingerprint;
         PackageBindingSha256 = state.PackageBindingSha256;
@@ -537,6 +547,12 @@ public sealed class InternalInstallPrepared
     /// for every route that writes no ABL.
     /// </summary>
     public IReadOnlyList<string> Abl188ReplacementSlots { get; }
+
+    /// <summary>
+    /// The a/b slots whose ABL is replaced by the pinned TB323FU GBL-capable 088 loader. Empty
+    /// for every route that writes no GBL ABL replacement.
+    /// </summary>
+    public IReadOnlyList<string> GblAblReplacementSlots { get; }
 
     /// <summary>Fingerprint of the selected package.</summary>
     public string PackageFingerprint { get; }

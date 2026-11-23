@@ -936,10 +936,15 @@ public partial class MainWindow
         // 免解锁安装才追加一行短安装方式：它只是保留下来的嵌套消息，随整段一起重渲染。
         if (prepared.BootTrustMode == InternalInstallBootTrustMode.GblPreserveOem)
         {
+            var gblModeMessage = prepared.GblAblReplacementSlots.Count != 0
+                ? M(
+                    "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
+                    string.Join(", ", prepared.GblAblReplacementSlots))
+                : M("Dynamic.InternalInstall.Prepared.GblInstallMode");
             preparedSummaryMessage = M(
                 "Dynamic.InternalInstall.Execution.WithFailureDetails",
                 preparedSummaryMessage,
-                M("Dynamic.InternalInstall.Prepared.GblInstallMode"));
+                gblModeMessage);
         }
         else if (prepared.BootTrustMode == InternalInstallBootTrustMode.AospPreserved)
         {

@@ -1343,9 +1343,19 @@ public partial class MainWindow
         summary = prepared.BootTrustMode switch
         {
             InternalInstallBootTrustMode.GblPreserveOem =>
-                M("Dynamic.InternalInstall.Execution.WithFailureDetails", summary, M("Dynamic.InternalInstall.Prepared.GblInstallMode")),
+                M(
+                    "Dynamic.InternalInstall.Execution.WithFailureDetails",
+                    summary,
+                    prepared.GblAblReplacementSlots.Count != 0
+                        ? M("Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode", string.Join(", ", prepared.GblAblReplacementSlots))
+                        : M("Dynamic.InternalInstall.Prepared.GblInstallMode")),
             InternalInstallBootTrustMode.AospPreserved =>
                 M("Dynamic.InternalInstall.Execution.WithFailureDetails", summary, M("Dynamic.InternalInstall.Prepared.AospPreservedInstallMode")),
+            _ when prepared.Abl188ReplacementSlots.Count != 0 =>
+                M(
+                    "Dynamic.InternalInstall.Execution.WithFailureDetails",
+                    summary,
+                    M("Dynamic.InternalInstall.Prepared.Abl188InstallMode", string.Join(", ", prepared.Abl188ReplacementSlots))),
             _ => summary,
         };
         SetText(

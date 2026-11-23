@@ -784,7 +784,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                     backupFacts,
                     evidenceDirectory,
                     claims,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    allowBundledAblReplacement: true).ConfigureAwait(false);
             }
 
             IReadOnlyDictionary<string, EdlRawResignedAvbNode> avbRoots;
@@ -922,6 +923,11 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
                 try
                 {
+                    VerifiedEdlFile effectiveSourceAbl = gblInputs?.Sources.TryGetValue(sourceSlot, out var gblSource) == true
+                        && gblSource.Replaced
+                        ? gblSource.EffectiveAbl
+                        : Claim(backupFacts.Files, "abl_" + sourceSlot);
+
                     EdlRawBuiltBoot built = await EdlRawBootBuilder
                         .BuildAsync(
                             new EdlRawBootBuildRequest(
@@ -929,7 +935,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                                 Claim(backupFacts.Files, "boot_" + sourceSlot),
                                 Claim(backupFacts.Files, "vendor_boot_" + sourceSlot),
                                 Claim(backupFacts.Files, "init_boot_" + sourceSlot),
-                                Claim(backupFacts.Files, "abl_" + sourceSlot),
+                                effectiveSourceAbl,
                                 Claim(backupFacts.Files, "xbl_config_" + sourceSlot),
                                 contract,
                                 ownAssets.Tools,
@@ -950,7 +956,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                         sourceSlot,
                         contract,
                         packageSnapshot,
-                        backupFacts.Files);
+                        backupFacts.Files,
+                        effectiveSourceAbl);
 
                     if (gblInputs is null && preservedAvbRoles is null && sourceSlot == slot)
                     {
@@ -1444,6 +1451,20 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 RequireBudgetRegion(files, "efisp").Length,
                 "The GBL EFI write budget overflows.");
 
+            // Each GBL ABL replacement writes and reads back one full pinned 088 image into a new evidence
+            // file during execution; the pre-write guard capture of abl_<slot> and xbl_config_<slot> is already
+            // counted below through GetGblGuardRoles(gblInputs).
+            if (gblInputs.ReplacedSourceSlots.Count > 0 && gblInputs.ReplacementAbl is { } gblReplacementAbl)
+            {
+                foreach (string _ in gblInputs.ReplacedSourceSlots)
+                {
+                    planned = CheckedAdd(
+                        planned,
+                        gblReplacementAbl.Length,
+                        "The GBL ABL replacement readback budget overflows.");
+                }
+            }
+
             if (includeOriginalCapture)
             {
                 // The future guard readback covers exactly the roles this plan guards; every role is an actual
@@ -1590,7 +1611,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         string sourceSlot,
         EdlRawPackageContract contract,
         InternalInstallPackageSnapshot snapshot,
-        IReadOnlyDictionary<string, EdlCapturedRegion> files)
+        IReadOnlyDictionary<string, EdlCapturedRegion> files,
+        VerifiedEdlFile? effectiveAbl = null)
     {
         if (!string.Equals(built.Slot, slot, StringComparison.Ordinal))
         {
@@ -1619,7 +1641,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         RequireSource(actual, "current_boot", Claim(files, "boot_" + sourceSlot));
         RequireSource(actual, "vendor_boot", Claim(files, "vendor_boot_" + sourceSlot));
         RequireSource(actual, "init_boot", Claim(files, "init_boot_" + sourceSlot));
-        RequireSource(actual, "abl", Claim(files, "abl_" + sourceSlot));
+        RequireSource(actual, "abl", effectiveAbl ?? Claim(files, "abl_" + sourceSlot));
         RequireSource(actual, "xbl_config", Claim(files, "xbl_config_" + sourceSlot));
 
         if (built.BaseImage.Length != actual.BaseImageLength
@@ -2133,6 +2155,10 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         state.Abl188ReplacementSlots = new List<string>(
             _directAblReplacements.Keys
                 .Select(role => role.StartsWith("abl_", StringComparison.Ordinal) ? role[4..] : role)
+                .OrderBy(slot => slot, StringComparer.Ordinal))
+            .AsReadOnly();
+        state.GblAblReplacementSlots = new List<string>(
+            (_directGblPlan?.Inputs.ReplacedSourceSlots ?? Array.Empty<string>())
                 .OrderBy(slot => slot, StringComparer.Ordinal))
             .AsReadOnly();
         state.PackageFingerprint = _package.ManifestFingerprint;

@@ -460,7 +460,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         string? smallSystemSlot = null,
         string? ablFixturePath = null,
         long? reinstallAndroidGiB = null,
-        string? mediaPath = null)
+        string? mediaPath = null,
+        IReadOnlyDictionary<string, VerifiedEdlFile>? sourceOverrides = null)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -620,6 +621,14 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                     Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(ablBytes)));
                 sources["abl_a"] = syntheticAbl;
                 sources["abl_b"] = syntheticAbl;
+            }
+
+            if (sourceOverrides is not null)
+            {
+                foreach (KeyValuePair<string, VerifiedEdlFile> pair in sourceOverrides)
+                {
+                    sources[pair.Key] = pair.Value;
+                }
             }
 
             // The factual AVB origin handed to the device assembly and reported by the session: the local

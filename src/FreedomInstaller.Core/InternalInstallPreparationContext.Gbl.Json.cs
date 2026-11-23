@@ -58,6 +58,31 @@ internal sealed partial class InternalInstallPreparationContext
             json.WriteEndObject();
         }
         json.WriteEndArray();
+
+        if (inputs.ReplacedSourceSlots.Count > 0 && inputs.ReplacementAbl is { } replacementAbl)
+        {
+            json.WriteStartObject("ablReplacement");
+            json.WriteString("kind", "tb323fu-088");
+            json.WriteString("reason", "locked-oem-gbl-requires-efisp-loading-abl");
+            json.WriteString("sourceFirmware", Tb323fuAbl088Assets.SourceFirmware);
+            json.WriteNumber("imageLength", Tb323fuAbl088Assets.ImageLength);
+            json.WriteString("imageSha256", Tb323fuAbl088Assets.ImageSha256);
+
+            json.WriteStartArray("replacements");
+            foreach (var slot in inputs.ReplacedSourceSlots)
+            {
+                var role = "abl_" + slot;
+                json.WriteStartObject();
+                json.WriteString("slot", slot);
+                json.WriteString("role", role);
+                json.WriteNumber("length", replacementAbl.Length);
+                json.WriteString("candidateSha256", replacementAbl.Sha256.ToUpperInvariant());
+                json.WriteString("currentSha256", RequireBackupRegion(BackupFiles, role).Sha256.ToUpperInvariant());
+                json.WriteEndObject();
+            }
+            json.WriteEndArray();
+            json.WriteEndObject();
+        }
         json.WriteEndObject();
 
         json.WriteStartArray("slots");
@@ -129,6 +154,11 @@ internal sealed partial class InternalInstallPreparationContext
         json.WriteString("role", role);
         json.WriteString("sourceSlot", evidence.SourceSlot);
         WriteVerifiedFile(json, "original", evidence.Abl);
+        if (evidence.Replaced)
+        {
+            json.WriteBoolean("replaced", true);
+            WriteVerifiedFile(json, "effective", evidence.EffectiveAbl);
+        }
         json.WriteString("decodedPeSha256", evidence.PeSha256);
         WriteGblDetector(json, "detector", evidence.Entry);
     }

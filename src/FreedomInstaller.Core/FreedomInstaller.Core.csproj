@@ -83,6 +83,16 @@
                       WithCulture="false" />
   </ItemGroup>
 
+  <!-- TB323FU GBL-capable compatibility loader from the reviewed 2.0.12.088 firmware package.
+       Embedded byte-for-byte under a fixed logical name when supplied by the build; never
+       downloaded or generated at run time. -->
+  <ItemGroup Condition="'$(BundledTb323fuAbl088)' != '' and Exists('$(BundledTb323fuAbl088)')">
+    <EmbeddedResource Include="$(BundledTb323fuAbl088)"
+                      LogicalName="FreedomInstaller.Tb323fu.Abl088.img"
+                      Link="tb323fu-abl-088.img"
+                      WithCulture="false" />
+  </ItemGroup>
+
   <!-- Upstream GBL attribution and the verbatim GNU GPL version 3 text shipped with those assets. -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\docs\GblRuntime-NOTICE.txt"
@@ -111,6 +121,11 @@
   <Target Name="RequireBundledTb322fcAbl188" BeforeTargets="PrepareForBuild">
     <Error Condition="'$(BundledTb322fcAbl188)' != '' and !Exists('$(BundledTb322fcAbl188)')"
            Text="BundledTb322fcAbl188 does not exist: $(BundledTb322fcAbl188)" />
+  </Target>
+
+  <Target Name="RequireBundledTb323fuAbl088" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(BundledTb323fuAbl088)' != '' and !Exists('$(BundledTb323fuAbl088)')"
+           Text="BundledTb323fuAbl088 does not exist: $(BundledTb323fuAbl088)" />
   </Target>
 
 </Project>
