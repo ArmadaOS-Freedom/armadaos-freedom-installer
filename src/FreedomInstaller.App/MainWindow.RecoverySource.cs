@@ -17,6 +17,10 @@ public partial class MainWindow
 
     private string? SelectedUserdataUninstallPcBackup => _userdataUninstallUseBoardBackup ? null : _bootMaintenanceOriginalDirectory;
 
+    private string?[] SharedBackupProtectedSourceDirectories => IsModernUserdataUninstallMode
+        ? new[] { SelectedUserdataUninstallPcBackup }
+        : new[] { _bootMaintenanceOriginalDirectory, _bootMaintenanceProjectDirectory };
+
     private void ClearUserdataUninstallRecoverySource()
     {
         _internalInstallRecoverySource?.Dispose();

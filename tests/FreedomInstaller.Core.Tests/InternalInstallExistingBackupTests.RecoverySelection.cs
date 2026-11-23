@@ -13,6 +13,23 @@ namespace FreedomInstaller.Core.Tests
     public sealed partial class InternalInstallExistingBackupTests
     {
         [Theory]
+        [InlineData(true, true, null, null)]
+        [InlineData(false, true, "original", null)]
+        [InlineData(true, false, "original", "project")]
+        public void SharedBackupProtectedSourceDirectoriesForTest_excludes_null_and_respects_selection(
+            bool useBoardBackup, bool modern, string? firstExpected, string? secondExpected)
+        {
+            var window = new MainWindow(null!, null, "original", string.Empty)
+            {
+                IsModernUserdataUninstallMode = modern
+            };
+
+            string?[] sources = window.SharedBackupProtectedSourceDirectoriesForTestWithSelection(useBoardBackup, "project");
+
+            Assert.Equal(new[] { firstExpected, secondExpected }.OfType<string>(), sources.OfType<string>());
+        }
+
+        [Theory]
         [InlineData("foreign-cache", 1, false)]
         [InlineData("missing-cache", 1, false)]
         [InlineData("valid-cache", 0, false)]
@@ -173,6 +190,7 @@ namespace FreedomInstaller.App
         private EdlToolchain? _internalInstallEdlTools;
         private EdlEntryResult? _internalInstallEdlEntry;
         private string? _bootMaintenanceOriginalDirectory;
+        private string? _bootMaintenanceProjectDirectory;
         private BootMaintenanceHistoricalIdentity? _bootMaintenanceHistoricalIdentity;
         private DeviceTransport? _transport;
         private ICommandRunner? _runner;
@@ -190,6 +208,13 @@ namespace FreedomInstaller.App
         public bool InternalInstallOperationActive => _internalInstallOperationActive;
 
         public bool BoardBackupSelected => _userdataUninstallUseBoardBackup;
+
+        public string?[] SharedBackupProtectedSourceDirectoriesForTestWithSelection(bool useBoardBackup, string? project)
+        {
+            _userdataUninstallUseBoardBackup = useBoardBackup;
+            _bootMaintenanceProjectDirectory = project;
+            return SharedBackupProtectedSourceDirectories;
+        }
 
         public Task RunCheckBoardRecoveryEdlAsync(string parent)
         {
