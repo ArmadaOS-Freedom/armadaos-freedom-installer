@@ -569,6 +569,27 @@ class PrepareTests(unittest.TestCase):
         fetch_mock.assert_not_called()
         run_mock.assert_not_called()
 
+    def test_manifest_without_required_abl_entry_fails_before_fetch_or_compile(self):
+        manifest_path = self.repo_root / "maintenance" / "build-inputs.json"
+        for rel in build_installer._REQUIRED_VENDOR_FILES.values():
+            with self.subTest(rel=rel):
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["vendorFiles"] = [
+                    e for e in manifest["vendorFiles"] if e["path"] != rel
+                ]
+                custom = self.repo_root / "maintenance" / "custom-inputs.json"
+                custom.write_text(json.dumps(manifest), encoding="utf-8")
+                with mock.patch.object(
+                    fetch_build_inputs, "fetch_all"
+                ) as fetch_mock, mock.patch.object(build_installer, "_run") as run_mock:
+                    with self.assertRaises(SystemExit) as raised:
+                        build_installer.prepare(
+                            self.repo_root, self.work_dir, manifest_path=custom
+                        )
+                self.assertIn(rel, str(raised.exception))
+                fetch_mock.assert_not_called()
+                run_mock.assert_not_called()
+
     def test_missing_vendor_fails_before_fetch_or_compile(self):
         (self.repo_root / "vendor" / "qualcomm" / "g4" / "firehose.melf").unlink()
         with mock.patch.object(

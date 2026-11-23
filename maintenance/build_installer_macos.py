@@ -89,7 +89,7 @@ def prepare(repo_root, work_dir, manifest_path=None):
 
     # --- Phase 1: manifest + vendor validation ----------------------------
     manifest = fetch_build_inputs.load_manifest(str(manifest_path))
-    bi._validate_vendor_files(repo_root, manifest)
+    vendor_map = bi._validate_vendor_files(repo_root, manifest)
 
     work_dir.mkdir(parents=True, exist_ok=True)
     downloads_root = work_dir / "downloads"
@@ -172,12 +172,8 @@ def prepare(repo_root, work_dir, manifest_path=None):
         # GblPreserveOem stages these embedded EFI files; Core embeds them only when the props name them.
         "BundledGblPrcEfi": str(Path(fetched["gblPrc"]).resolve()),
         "BundledGblRowEfi": str(Path(fetched["gblRow"]).resolve()),
-        "BundledTb322fcAbl188": str(
-            (repo_root / "vendor" / "qualcomm" / "g4" / "abl_aosp_capable.img").resolve()
-        ),
-        "BundledTb710fuAospAbl": str(
-            (repo_root / "vendor" / "qualcomm" / "tb710fu" / "abl_aosp_capable.img").resolve()
-        ),
+        # validated vendor paths: the digest of each was checked in phase 1
+        **{prop: str(vendor_map[rel]) for prop, rel in bi._REQUIRED_VENDOR_FILES.items()},
         # Step 1 needs adb and fastboot; the window extracts this archive on first use instead of asking the
         # user to install platform-tools.
         "BundledPlatformToolsArchive": str(Path(fetched["platformToolsMacos"]).resolve()),
