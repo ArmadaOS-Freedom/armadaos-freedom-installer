@@ -379,5 +379,54 @@ class MacUninstallParityTests(unittest.TestCase):
         self.assertNotIn("_uninstallDeviceCheck!.Android!.Identity.BootloaderState", code)
 
 
+    # The Mac window code has no executable test host (no Avalonia test project; Core holds the device logic and
+    # has its own tests), so these pin the retry and source-change behaviour in the code itself.
+
+    def test_unconfirmed_entry_resumes_without_a_second_entry(self):
+        code = _code(MAC_CODE)
+        start = code.index("private async Task BackupUninstallAsync")
+        backup = code[start:code.index("\n    private ", start + 1)]
+        # A pending entry no longer stops preparation outright ...
+        self.assertIn("var resumeUnconfirmedEntry = !reuse && _uninstallEntryAttempted;", backup)
+        self.assertNotIn('M("Dynamic.InternalInstall.Backup.EntryUnconfirmed")', backup)
+        # ... a tablet already in 9008 is only waited for, by the step-1 identity: no entry command on that branch;
+        resume = backup.index("if (resumeUnconfirmedEntry && (await ReadEdlPresentAsync(token)).Count > 0)")
+        android = backup.index("else", resume)
+        waited = backup[resume:android]
+        self.assertIn(".WaitForPresentAsync(expected, loaded.Profile, token)", waited)
+        self.assertNotIn("EnterAsync", waited)
+        # ... a tablet back in Android is re-read and compared before the one EnterAsync;
+        entered = backup[android:]
+        reread = entered.index(".ReadAndroidAsync(freshIdentity, token)")
+        compare = entered.index("UninstallAndroidMatches(expected, freshAndroid)")
+        enter = entered.index(".EnterAsync(freshAndroid, loaded.Profile, token)")
+        self.assertLess(reread, compare)
+        self.assertLess(compare, enter)
+        # ... and a mismatch while the entry is unconfirmed keeps the step-1 identity, so the original tablet
+        # can be checked again in either state.
+        mismatch = entered[compare:enter]
+        self.assertRegex(
+            mismatch,
+            r"if \(!resumeUnconfirmedEntry\)\s*\{\s*InvalidateUninstallCheckFromMismatch\(\);\s*\}",
+        )
+
+    def test_source_change_drops_the_source_derived_snapshot_parent(self):
+        code = _code(MAC_CODE)
+        clear = re.compile(
+            r"if \(_uninstallBackupParentFromSource\)\s*\{\s*_uninstallBackupParent = null;"
+            r"\s*_uninstallBackupParentFromSource = false;\s*\}"
+        )
+        for handler in ("private async void OnBrowseUninstallOriginal", "private void OnUserdataUninstallUseBoardBackupChanged"):
+            start = code.index(handler)
+            body = code[start:code.index("\n    private ", start + 1)]
+            self.assertRegex(body, clear, handler)
+            # The 9008 session is kept: a retry reuses it instead of rebooting the tablet again.
+            for kept in ("_uninstallEdlClient = null", "_uninstallEdlTools = null", "_uninstallEdlEntry = null"):
+                self.assertNotIn(kept, body, handler)
+        # The parent is marked source-derived only when it really comes from the selected source.
+        self.assertIn("workParent = Directory.GetParent(Path.GetFullPath(selectedOriginal))?.FullName;", code)
+        self.assertIn("workParentFromSource = !string.IsNullOrWhiteSpace(workParent);", code)
+
+
 if __name__ == "__main__":
     unittest.main()
