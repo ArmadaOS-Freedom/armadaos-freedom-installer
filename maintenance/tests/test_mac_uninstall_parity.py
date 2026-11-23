@@ -53,7 +53,7 @@ _CONTROL_MAP = {
     "InternalInstallNavConfirm": "UninstallNavConfirm",
     "BootMaintenanceOriginalBox": "UninstallOriginalBox",
     "BootMaintenanceOriginalBrowseButton": "UninstallOriginalBrowseButton",
-    "UninstallUseBoardBackupButton": "UninstallUseBoardBackupButton",
+    "UninstallUseBoardBackupCheck": "UninstallUseBoardBackupCheck",
     "UninstallReclaimBackupCheck": "UninstallReclaimBackupCheck",
     "BootMaintenanceRestoreStockCheck": "UninstallRestoreStockCheck",
     "BootMaintenanceRestoreStockHint": "UninstallRestoreStockHint",
@@ -120,7 +120,7 @@ _WPF_ONLY_MESSAGES = {
 _UNINSTALL_HANDLERS = {
     "OnUserdataUninstallRestoreStockChanged",
     "OnUserdataUninstallReclaimBackupChanged",
-    "OnUseBoardUninstallBackup",
+    "OnUserdataUninstallUseBoardBackupChanged",
 }
 # - Not differences in behaviour, listed so they are not mistaken for one:
 #   * the folder for the current-state snapshot is never asked for: like WPF it is the earlier one, else the

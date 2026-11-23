@@ -67,8 +67,20 @@ public partial class MainWindow
     // ---------- 选项与准备 ----------
 
     /// <summary>「恢复原厂安卓引导」；默认不勾选，保持项目菜单默认安卓行为。</summary>
-    private bool _uninstallRestoreStockBoot;
+    // 恢复原厂安卓引导、归还备份空间、使用板内备份默认都勾选（WPF #124）。
+    private bool _uninstallRestoreStockBoot = true;
     private bool _uninstallReclaimBackup = true;
+    private bool _uninstallUseBoardBackup = true;
+
+    /// <summary>当前生效的电脑备份：勾选“使用板内备份”时为 null（已选的路径仍保留，取消勾选后恢复）。</summary>
+    private string? SelectedUninstallPcBackup => _uninstallUseBoardBackup ? null : _uninstallOriginalDirectory;
+
+    private void ClearUninstallRecoverySource()
+    {
+        _uninstallRecoverySource?.Dispose();
+        _uninstallRecoverySource = null;
+        _uninstallBoardRecoveryAttemptManifest = null;
+    }
     private EdlUninstallBackend? _uninstallBackend;
     private CurrentBootMenuPlan? _uninstallMenu;
     private UninstallOriginalGptBackup? _uninstallOriginal;
@@ -340,7 +352,7 @@ public partial class MainWindow
         UninstallSourcesPage.IsVisible = _uninstallStep == 2;
         UninstallConfirmPage.IsVisible = _uninstallStep == 3;
 
-        UninstallOriginalBox.Text = _uninstallOriginalDirectory ?? string.Empty;
+        UninstallOriginalBox.Text = SelectedUninstallPcBackup ?? string.Empty;
         SyncUninstallRestoreStockCheckboxes();
 
         RenderUninstallConfirmPage();
@@ -578,7 +590,10 @@ public partial class MainWindow
             && _uninstallStep < 3
             && (_uninstallStep < 2
                 ? CanEnterUninstallStep(NextUninstallStep(_uninstallStep))
-                : HasUninstallBackupPrerequisite);
+                : HasUninstallBackupPrerequisite
+                    && (_uninstallStep != 2
+                        || _uninstallUseBoardBackup
+                        || !string.IsNullOrWhiteSpace(SelectedUninstallPcBackup)));
 
         UpdateUninstallRestoreStockCheckboxEnabled();
 
@@ -998,9 +1013,10 @@ public partial class MainWindow
                         }
                     }
 
-                    if (!string.IsNullOrWhiteSpace(_uninstallOriginalDirectory))
+                    var activeExplicitDirectory = SelectedUninstallPcBackup;
+                    if (!string.IsNullOrWhiteSpace(activeExplicitDirectory))
                     {
-                        var chosen = UninstallBackupDirectorySelection.Resolve(_uninstallOriginalDirectory);
+                        var chosen = UninstallBackupDirectorySelection.Resolve(activeExplicitDirectory);
                         if (chosen.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || chosen.DirectoryPath is null)
                         {
                             throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
@@ -1070,7 +1086,7 @@ public partial class MainWindow
 
                     if (source is null)
                     {
-                        var selected = _uninstallOriginalDirectory
+                        var selected = activeExplicitDirectory
                             ?? await PickBootMaintenanceFolderAsync("Dynamic.RecoverySource.PickOriginal");
                         if (selected is null)
                         {
@@ -1083,6 +1099,7 @@ public partial class MainWindow
                             : throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
                         await BindUninstallRecoveryIdentityAsync(client, source!, token);
                         _uninstallOriginalDirectory = source;
+                        _uninstallUseBoardBackup = false;
                     }
                 }
                 catch (Exception error) when (error is not OutOfMemoryException)
@@ -1170,10 +1187,10 @@ public partial class MainWindow
         }
 
         // 快照父目录绝不能落在已选原厂来源目录里面；来源永不作为当前目录。
-        if (!string.IsNullOrWhiteSpace(_uninstallOriginalDirectory)
-            && !IsGlobalOutputOutsideSource(parent, _uninstallOriginalDirectory!))
+        if (SelectedUninstallPcBackup is { Length: > 0 } selectedPcSource
+            && !IsGlobalOutputOutsideSource(parent, selectedPcSource))
         {
-            SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.ExistingWorkRootConflict", _uninstallOriginalDirectory!));
+            SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.ExistingWorkRootConflict", selectedPcSource));
             return;
         }
 
@@ -1566,10 +1583,15 @@ public partial class MainWindow
             return; // 用户取消或选择无效：完整保留现有状态。
         }
 
-        if (!string.Equals(directory, _uninstallOriginalDirectory, StringComparison.Ordinal))
+        // 选了电脑备份就不再用板内备份（WPF #124）；从板内切过来也算换来源。
+        var sourceChanged = _uninstallUseBoardBackup
+            || !string.Equals(directory, _uninstallOriginalDirectory, StringComparison.Ordinal);
+        _uninstallUseBoardBackup = false;
+        if (sourceChanged)
         {
             // 更换来源后，旧来源不能再保持已接受：只释放备份只读对象，绝不释放仍有效的客户端 / 工具链 / 会话。
             ReleaseUninstallBackupObject();
+            ClearUninstallRecoverySource();
 
             // 按旧来源推导出的快照父目录也作废（旧来源可能在只读卷上）；下次准备按新来源重新推导。
             // 9008 会话保留，重试不会再重启平板。
@@ -1581,24 +1603,33 @@ public partial class MainWindow
         }
 
         _uninstallOriginalDirectory = directory;
-        UninstallOriginalBox.Text = directory;
         InvalidateUninstallPreparation();
-        RefreshUninstallActions();
+        RenderUninstallPages();
     }
 
     /// <summary>「清除电脑备份选择，自动使用板内备份」。</summary>
-    private void OnUseBoardUninstallBackup(object? sender, RoutedEventArgs e)
+    private void OnUserdataUninstallUseBoardBackupChanged(object? sender, RoutedEventArgs e)
     {
-        if (!CanUninstallToggleOptions())
+        if (_uninstallStockCheckboxSuppress || sender is not CheckBox changed)
         {
             return;
         }
 
+        var desired = changed.IsChecked == true;
+        if (!CanUninstallToggleOptions() || _uninstallUseBoardBackup == desired)
+        {
+            SyncUninstallRestoreStockCheckboxes();
+            return;
+        }
+
+        _uninstallUseBoardBackup = desired;
         InvalidateUninstallPreparation();
-        _uninstallOriginalDirectory = null;
-        _uninstallRecoverySource?.Dispose();
-        _uninstallRecoverySource = null;
-        _uninstallBoardRecoveryAttemptManifest = null;
+        ClearUninstallRecoverySource();
+        if (_uninstallStep >= 3)
+        {
+            _uninstallStep = 2;
+        }
+
         RenderUninstallPages();
     }
 
@@ -1675,6 +1706,7 @@ public partial class MainWindow
             UninstallRestoreStockCheck.IsChecked = _uninstallRestoreStockBoot;
             UninstallConfirmRestoreStockCheck.IsChecked = _uninstallRestoreStockBoot;
             UninstallReclaimBackupCheck.IsChecked = _uninstallReclaimBackup;
+            UninstallUseBoardBackupCheck.IsChecked = _uninstallUseBoardBackup;
             UninstallRestoreStockHint.IsVisible = _uninstallRestoreStockBoot;
             UninstallConfirmRestoreStockHint.IsVisible = _uninstallRestoreStockBoot;
         }
@@ -1690,7 +1722,7 @@ public partial class MainWindow
         UninstallRestoreStockCheck.IsEnabled = enabled;
         UninstallConfirmRestoreStockCheck.IsEnabled = enabled;
         UninstallReclaimBackupCheck.IsEnabled = enabled;
-        UninstallUseBoardBackupButton.IsEnabled = enabled;
+        UninstallUseBoardBackupCheck.IsEnabled = enabled;
     }
 
     private string UninstallSelectedBootBehaviorText() =>
@@ -1770,7 +1802,13 @@ public partial class MainWindow
         var capturedStep = _uninstallStep;
         var capturedRestoreStock = _uninstallRestoreStockBoot;
         var capturedReclaimBackup = _uninstallReclaimBackup;
-        var selectedOriginal = _uninstallOriginalDirectory;
+        var capturedUseBoardBackup = _uninstallUseBoardBackup;
+        if (!capturedUseBoardBackup && string.IsNullOrWhiteSpace(SelectedUninstallPcBackup))
+        {
+            return;
+        }
+
+        var selectedOriginal = SelectedUninstallPcBackup;
         var workParent = _uninstallBackupParent;
         var workParentFromSource = _uninstallBackupParentFromSource;
         if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
@@ -1817,7 +1855,8 @@ public partial class MainWindow
 
             if (_closeConfirmed
                 || _uninstallStep != capturedStep
-                || !string.Equals(_uninstallOriginalDirectory, selectedOriginal, StringComparison.Ordinal)
+                || !string.Equals(SelectedUninstallPcBackup, selectedOriginal, StringComparison.Ordinal)
+                || _uninstallUseBoardBackup != capturedUseBoardBackup
                 || _uninstallRestoreStockBoot != capturedRestoreStock
                 || _uninstallReclaimBackup != capturedReclaimBackup)
             {
@@ -1829,7 +1868,8 @@ public partial class MainWindow
         // 无条件复核全部前提：任何一项失败都停在来源页，不进入确认。
         if (_closeConfirmed
             || _uninstallStep != capturedStep
-            || !string.Equals(_uninstallOriginalDirectory, selectedOriginal, StringComparison.Ordinal)
+            || !string.Equals(SelectedUninstallPcBackup, selectedOriginal, StringComparison.Ordinal)
+            || _uninstallUseBoardBackup != capturedUseBoardBackup
             || _uninstallRestoreStockBoot != capturedRestoreStock
             || _uninstallReclaimBackup != capturedReclaimBackup
             || !HasUninstallDeviceProof
@@ -1876,6 +1916,13 @@ public partial class MainWindow
                     SetText(UninstallPrepareStatusText, M("Dynamic.UserdataUninstall.Status.OpeningOriginal"));
 
                     var recoverySource = await GetUninstallRecoverySourceAsync(fresh, parent, token);
+                    if (capturedUseBoardBackup && !_uninstallUseBoardBackup)
+                    {
+                        // 板内资料不可用、改由用户选了电脑备份：这次准备就以它为准。
+                        capturedUseBoardBackup = false;
+                        selectedOriginal = recoverySource.DirectoryPath;
+                    }
+
                     var originalDirectory = recoverySource.DirectoryPath;
 
                     // 1) 只读打开原始预安装 GPT 备份。
@@ -1956,7 +2003,8 @@ public partial class MainWindow
                         || !ReferenceEquals(_uninstallEdlEntry, entry)
                         || !ReferenceEquals(_uninstallBackup, fresh)
                         || !string.Equals(_uninstallBackupParent, parent, StringComparison.Ordinal)
-                        || !string.Equals(_uninstallOriginalDirectory, selectedOriginal, StringComparison.Ordinal)
+                        || !string.Equals(SelectedUninstallPcBackup, selectedOriginal, StringComparison.Ordinal)
+                        || _uninstallUseBoardBackup != capturedUseBoardBackup
                         || _uninstallRestoreStockBoot != capturedRestoreStock
                         || _uninstallReclaimBackup != capturedReclaimBackup
                         || _uninstallStep != capturedStep
@@ -2023,9 +2071,15 @@ public partial class MainWindow
         InternalBackupSet current, string durableParent, CancellationToken token)
     {
         var workRoot = UninstallWorkRoot;
-        if (!string.IsNullOrWhiteSpace(_uninstallOriginalDirectory))
+        if (!_uninstallUseBoardBackup)
         {
-            var selection = UninstallBackupDirectorySelection.Resolve(_uninstallOriginalDirectory);
+            var selectedPc = SelectedUninstallPcBackup;
+            if (string.IsNullOrWhiteSpace(selectedPc))
+            {
+                throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+            }
+
+            var selection = UninstallBackupDirectorySelection.Resolve(selectedPc);
             if (selection.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || selection.DirectoryPath is null)
             {
                 throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
@@ -2120,11 +2174,8 @@ public partial class MainWindow
             }
         }
 
-        var selected = _uninstallOriginalDirectory;
-        if (string.IsNullOrWhiteSpace(selected))
-        {
-            selected = await PickBootMaintenanceFolderAsync("Dynamic.RecoverySource.PickOriginal");
-        }
+        // 走到这里是用了板内备份（电脑备份已在上面处理）：板内资料都不可用时请用户选电脑备份。
+        var selected = await PickBootMaintenanceFolderAsync("Dynamic.RecoverySource.PickOriginal");
 
         token.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(selected))
@@ -2153,6 +2204,8 @@ public partial class MainWindow
         }
 
         _uninstallRecoverySource = recovery;
+        _uninstallOriginalDirectory = recovery.DirectoryPath;
+        _uninstallUseBoardBackup = false;
         AppendUninstallLog(M("Dynamic.RecoverySource.PcReady", recovery.DirectoryPath));
         return recovery;
     }
@@ -2803,7 +2856,8 @@ public partial class MainWindow
 
         if (!HasUninstallLiveEdlState)
         {
-            _uninstallRestoreStockBoot = false;
+            _uninstallRestoreStockBoot = true;
+            _uninstallUseBoardBackup = true;
             _uninstallReclaimBackup = true;
             _uninstallStockPlan = null;
             _uninstallStockRestoreResult = null;

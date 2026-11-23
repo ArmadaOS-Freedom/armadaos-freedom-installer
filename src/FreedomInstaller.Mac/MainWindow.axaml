@@ -1743,18 +1743,19 @@
                                            TextWrapping="Wrap"
                                            Margin="0,6,0,0" />
 
-                                <Button x:Name="UninstallUseBoardBackupButton"
-                                        Content="{DynamicResource Dynamic.UserdataUninstall.UseBoardBackup}"
-                                        Click="OnUseBoardUninstallBackup"
-                                        Theme="{StaticResource SecondaryButton}"
-                                        HorizontalAlignment="Left"
-                                        Margin="0,8,0,0" />
+                                <CheckBox x:Name="UninstallUseBoardBackupCheck"
+                                          Content="{DynamicResource Dynamic.UserdataUninstall.UseBoardBackup}"
+                                          IsChecked="True"
+                                          IsCheckedChanged="OnUserdataUninstallUseBoardBackupChanged"
+                                          HorizontalAlignment="Left"
+                                          Margin="0,8,0,0" />
                                 <CheckBox x:Name="UninstallReclaimBackupCheck"
                                           Content="{DynamicResource Dynamic.UserdataUninstall.ReclaimBackup}"
                                           IsChecked="True"
                                           IsCheckedChanged="OnUserdataUninstallReclaimBackupChanged"
                                           Margin="0,10,0,0" />
                                 <CheckBox x:Name="UninstallRestoreStockCheck"
+                                          IsChecked="True"
                                           IsCheckedChanged="OnUserdataUninstallRestoreStockChanged"
                                           Margin="0,10,0,0">
                                     <TextBlock x:Name="UninstallRestoreStockText"
@@ -1802,6 +1803,7 @@
 
                         <!-- 确认页上的恢复原厂引导复选框（与来源页共用同一状态）。 -->
                         <CheckBox x:Name="UninstallConfirmRestoreStockCheck"
+                                  IsChecked="True"
                                   IsCheckedChanged="OnUserdataUninstallRestoreStockChanged"
                                   Margin="0,14,0,0">
                             <TextBlock x:Name="UninstallConfirmRestoreStockText"
