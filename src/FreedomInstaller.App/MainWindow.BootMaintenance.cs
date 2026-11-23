@@ -140,7 +140,7 @@ public partial class MainWindow
             }
 
             // 已有真实 9008 会话时走 9008 修复备份；否则走共享备份核心。
-            await BackupInternalInstallCoreAsync(useBoardBackup: false);
+            await BackupInternalInstallCoreAsync();
 
             if (!IsRepairInstallationMode
                 || _internalInstallStep != 2

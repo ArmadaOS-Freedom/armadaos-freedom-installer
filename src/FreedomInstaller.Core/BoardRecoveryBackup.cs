@@ -23,7 +23,7 @@ public static partial class BoardRecoveryBackup
     /// </summary>
     public static async Task<BoardRecoveryExtraction?> ReadDirectoryAsync(
         EdlClient client, string durableParent, string temporaryParent, CancellationToken token = default,
-        bool allowRetainedCopy = true)
+        bool allowRetainedCopy = true, bool validateInternalInstallLayout = false)
     {
         RequireParent(durableParent);
         RequireParent(temporaryParent);
@@ -41,10 +41,12 @@ public static partial class BoardRecoveryBackup
                 await File.ReadAllBytesAsync(primary.FilePath, token).ConfigureAwait(false),
                 await File.ReadAllBytesAsync(secondary.FilePath, token).ConfigureAwait(false),
                 geometry.SectorSize, checked(geometry.TotalSectors * (long)geometry.SectorSize));
-            var partition = FindRecoveryPartition(
-                table,
-                "Multiple recovery partitions were found.",
-                "The recovery partition has invalid identity or size.");
+            var partition = validateInternalInstallLayout
+                ? SelectInternalInstallBackupPartition(table)
+                : FindRecoveryPartition(
+                    table,
+                    "Multiple recovery partitions were found.",
+                    "The recovery partition has invalid identity or size.");
             if (partition is null) return null;
             var borrowed = allowRetainedCopy
                 ? await TryBorrowDirectoryAsync(
@@ -168,9 +170,35 @@ public static partial class BoardRecoveryBackup
         ValidateDiskPair(currentLun0, recovery.Tables[0]);
         var original = recovery.Tables[0];
         var userdata = original.Partitions.SingleOrDefault(p => p.Name == "userdata");
-        if (userdata is null || checked(userdata.StartSector + userdata.SectorCount) != checked(original.LastUsableSector + 1)
-            || original.Partitions.Any(p => p.Name.StartsWith("ARMADA_", StringComparison.OrdinalIgnoreCase)))
+        if (userdata is null || original.Partitions.Any(p => p.Name.StartsWith("ARMADA_", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidDataException("Recovery material does not contain a factory userdata layout.");
+        var archivedEnd = checked(userdata.StartSector + userdata.SectorCount);
+        if (userdata.StartSector < original.FirstUsableSector
+            || archivedEnd > checked(original.LastUsableSector + 1))
+            throw new InvalidDataException("Recovery material does not contain a factory userdata layout.");
+        var liveBackup = FindRecoveryPartition(
+            currentLun0,
+            "Multiple recovery partitions were found.",
+            "The recovery partition has invalid identity or size.");
+        if (liveBackup is not null)
+        {
+            var alignmentSectors = (1L << 20) / original.SectorSize;
+            var alignedArchivedEnd = archivedEnd / alignmentSectors * alignmentSectors;
+            var liveBackupEnd = checked(liveBackup.StartSector + liveBackup.SectorCount);
+            if (liveBackup.StartSector < userdata.StartSector
+                || (liveBackupEnd != archivedEnd && liveBackupEnd != alignedArchivedEnd))
+                throw new InvalidDataException("Recovery material does not contain a factory userdata layout.");
+            foreach (var now in currentLun0.Partitions)
+            {
+                if (now.Name is "ARMADA_BOOT" or "ARMADA_ROOT" or "ARMADA_BACKUP") continue;
+                if (original.Partitions.Any(p => p.Number == now.Number)) continue;
+                throw new InvalidDataException("Recovery material does not match the current vendor partitions.");
+            }
+        }
+        else if (archivedEnd != checked(original.LastUsableSector + 1))
+        {
+            throw new InvalidDataException("Recovery material does not contain a factory userdata layout.");
+        }
         foreach (var before in original.Partitions)
         {
             var now = currentLun0.Partitions.SingleOrDefault(p => p.Number == before.Number);
@@ -211,6 +239,24 @@ public static partial class BoardRecoveryBackup
             || checked(partition.StartSector + partition.SectorCount) > checked(table.LastUsableSector + 1))
             throw new InvalidDataException(invalidMessage);
         return partition;
+    }
+
+    /// <summary>
+    /// Selects the recovery backup partition for the internal install flow from the planner's GPT view.
+    /// Returns null for a positively identified stock GPT. Unsupported or partial layouts surface as
+    /// <see cref="NotSupportedException"/> before any archive read.
+    /// </summary>
+    private static GptPartition? SelectInternalInstallBackupPartition(GptTable table)
+    {
+        try
+        {
+            return InternalPartitionPlanner.FindInstalledLinuxLayout(table)?.Backup
+                ?? InternalPartitionPlanner.FindReusableBackup(table);
+        }
+        catch (InvalidOperationException error)
+        {
+            throw new NotSupportedException(error.Message, error);
+        }
     }
 
     internal static async Task<string> ExtractAsync(
