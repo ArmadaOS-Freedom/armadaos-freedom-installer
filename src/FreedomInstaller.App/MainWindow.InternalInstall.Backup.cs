@@ -547,7 +547,7 @@ public partial class MainWindow
         // 共享模式（含 TF 卡安装）：备份父目录绝不能落在已选原厂 / 项目来源目录里面；来源永不作为当前目录。
         if (IsSharedNonInternalDeviceMode)
         {
-            foreach (var source in new[] { _bootMaintenanceOriginalDirectory, _bootMaintenanceProjectDirectory })
+            foreach (var source in SharedBackupProtectedSourceDirectories)
             {
                 if (string.IsNullOrWhiteSpace(source))
                 {

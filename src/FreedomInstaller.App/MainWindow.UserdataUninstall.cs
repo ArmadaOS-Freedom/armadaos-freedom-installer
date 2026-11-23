@@ -18,8 +18,8 @@ public partial class MainWindow
     /// <summary>卸载后端；null 表示准备尚未完成。</summary>
     private EdlUninstallBackend? _userdataUninstallBackend;
 
-    /// <summary>用户是否勾选“恢复原厂安卓引导”；默认不勾选，保持项目菜单默认安卓行为。</summary>
-    private bool _userdataUninstallRestoreStockBoot;
+    /// <summary>用户是否勾选“恢复原厂安卓引导”；默认勾选。</summary>
+    private bool _userdataUninstallRestoreStockBoot = true;
     private bool _userdataUninstallReclaimBackup = true;
 
     /// <summary>已提交的原厂引导恢复方案；仅在勾选恢复引导且准备成功时非 null。</summary>
@@ -162,7 +162,8 @@ public partial class MainWindow
         // 同一保护范围内：未被现场锁定的用户选择也一并复位；存在真实会话时保留用户选择。
         if (!HasInternalInstallLiveEdlState)
         {
-            _userdataUninstallRestoreStockBoot = false;
+            _userdataUninstallRestoreStockBoot = true;
+            _userdataUninstallUseBoardBackup = true;
             _userdataUninstallReclaimBackup = true;
             _userdataUninstallStockPlan = null;
             _userdataUninstallStockRestoreResult = null;
@@ -218,7 +219,10 @@ public partial class MainWindow
         var capturedStep = _internalInstallStep;
         var capturedRestoreStock = _userdataUninstallRestoreStockBoot;
         var capturedReclaimBackup = _userdataUninstallReclaimBackup;
-        var selectedOriginal = _bootMaintenanceOriginalDirectory;
+        var capturedUseBoardBackup = _userdataUninstallUseBoardBackup;
+        if (!capturedUseBoardBackup && string.IsNullOrWhiteSpace(SelectedUserdataUninstallPcBackup))
+            return;
+        var selectedOriginal = SelectedUserdataUninstallPcBackup;
         var workParent = _internalInstallBackupParent;
         if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
         {
@@ -245,7 +249,8 @@ public partial class MainWindow
             if (!IsModernUserdataUninstallMode
                 || _closed
                 || _internalInstallStep != capturedStep
-                || !string.Equals(_bootMaintenanceOriginalDirectory, selectedOriginal, StringComparison.Ordinal)
+                || !string.Equals(SelectedUserdataUninstallPcBackup, selectedOriginal, StringComparison.Ordinal)
+                || _userdataUninstallUseBoardBackup != capturedUseBoardBackup
                 || _userdataUninstallRestoreStockBoot != capturedRestoreStock
                 || _userdataUninstallReclaimBackup != capturedReclaimBackup)
             {
@@ -257,7 +262,8 @@ public partial class MainWindow
         if (!IsModernUserdataUninstallMode
             || _closed
             || _internalInstallStep != capturedStep
-            || !string.Equals(_bootMaintenanceOriginalDirectory, selectedOriginal, StringComparison.Ordinal)
+            || !string.Equals(SelectedUserdataUninstallPcBackup, selectedOriginal, StringComparison.Ordinal)
+            || _userdataUninstallUseBoardBackup != capturedUseBoardBackup
             || _userdataUninstallRestoreStockBoot != capturedRestoreStock
             || _userdataUninstallReclaimBackup != capturedReclaimBackup
             || !HasBootMaintenanceDeviceProof
@@ -297,6 +303,11 @@ public partial class MainWindow
                     SetText(BootMaintenancePrepareStatusText, M("Dynamic.UserdataUninstall.Status.OpeningOriginal"));
 
                     var recoverySource = await GetBoardFirstRecoverySourceAsync(fresh, parent, token);
+                    if (capturedUseBoardBackup && !_userdataUninstallUseBoardBackup)
+                    {
+                        capturedUseBoardBackup = false;
+                        selectedOriginal = recoverySource.DirectoryPath;
+                    }
                     var originalDirectory = recoverySource.DirectoryPath;
                     // 1) 只读打开原始预安装 GPT 备份。
                     original = await InternalInstallBackup.OpenOriginalGptForUninstallAsync(
@@ -372,7 +383,8 @@ public partial class MainWindow
                         || !ReferenceEquals(_internalInstallEdlEntry, entry)
                         || !ReferenceEquals(_internalInstallBackup, fresh)
                         || !string.Equals(_internalInstallBackupParent, parent, StringComparison.Ordinal)
-                        || !string.Equals(_bootMaintenanceOriginalDirectory, selectedOriginal, StringComparison.Ordinal)
+                        || !string.Equals(SelectedUserdataUninstallPcBackup, selectedOriginal, StringComparison.Ordinal)
+                        || _userdataUninstallUseBoardBackup != capturedUseBoardBackup
                         || _userdataUninstallRestoreStockBoot != capturedRestoreStock
                         || _userdataUninstallReclaimBackup != capturedReclaimBackup
                         || _internalInstallStep != capturedStep
