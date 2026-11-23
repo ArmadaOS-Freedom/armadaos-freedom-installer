@@ -1500,6 +1500,24 @@ public sealed class InternalSlotMaterialReaderTests
         Assert.False(InvokeBudget(ablSha, 1048576, KnownXblSha, 245760, 4096, 0, 10633132, 0, 3).KnownLoaderMatch);
     }
 
+    [Theory]
+    [InlineData("6cfa16e65c2dadd0fc557dd356e6c383c693b4c3b7f0a651d92bb9f6e38b74a8", "ee165befc3fcac316f9c2ea0cd609207774ae5351af554a8706da29a7c90c0a4")]
+    [InlineData("1cdc214a8f5cbd24878ccba205cf71c61be998696181d0933e3500113f326d72", "ee165befc3fcac316f9c2ea0cd609207774ae5351af554a8706da29a7c90c0a4")]
+    [InlineData("1cdc214a8f5cbd24878ccba205cf71c61be998696181d0933e3500113f326d72", "388eb4d311993e9b314f058d11f1fb1b486ed2536090b086ea95ffbbc9ec9ce6")]
+    public void Tb710fu_stock_495_loaders_get_the_same_window_budget(string ablSha, string xblSha)
+    {
+        // Lenovo's stock ZUXOS 1.5.04.495 ABL (replaced by the 279 ABL before an AOSP-signed boot runs) and its
+        // xbl_config (the same configuration as the no-unlock one, re-signed): same 256 MiB Kernel window.
+        InternalSlotLoaderBudget budget = InvokeBudget(
+            ablSha, 1048576, xblSha, 245760, 4096, 0, 10633132, 0, 3);
+        Assert.True(budget.KnownLoaderMatch);
+        Assert.Equal("tb710fu-abl495-xbl-config-ramdisk-derived", budget.Profile);
+        Assert.Equal(268435456L - 524288 - 10633216 - 8192 - 2097152, budget.MaxRawBytes);
+
+        // A TB710FU ABL never pairs with the TB322FC xbl_config.
+        Assert.False(InvokeBudget(ablSha, 1048576, KnownXblSha, 245760, 4096, 0, 10633132, 0, 3).KnownLoaderMatch);
+    }
+
     private static InternalSlotLoaderBudget InvokeBudget(
         string ablSha, long ablBytes, string xblSha, long xblBytes,
         int pageSize, long bootRamdisk, long vendorRamdisk, long initRamdisk,
