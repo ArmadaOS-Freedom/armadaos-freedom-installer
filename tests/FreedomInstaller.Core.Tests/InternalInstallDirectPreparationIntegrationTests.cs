@@ -460,7 +460,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         string? smallSystemSlot = null,
         string? ablFixturePath = null,
         long? reinstallAndroidGiB = null,
-        string? mediaPath = null)
+        string? mediaPath = null,
+        bool useDirectAndroidDataErase = false)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -807,7 +808,10 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 recoveryBackup: factoryRecovery);
 
             EdlEntry entry = new(TestAdbPath, router, discovery);
-            var services = new InternalInstallServices(entry, router, discovery, TestAdbPath);
+            var services = new InternalInstallServices(entry, router, discovery, TestAdbPath)
+            {
+                UseDirectAndroidDataErase = useDirectAndroidDataErase
+            };
 
             string evidenceParent = Path.Combine(root, "evidence");
             Directory.CreateDirectory(evidenceParent);

@@ -15,7 +15,7 @@ using Qualcomm.EmergencyDownload.Transport;
 
 namespace QCEDL.CLI.Core;
 
-internal sealed partial class EdlManager(GlobalOptionsBinder globalOptions) : IDisposable
+internal sealed partial class EdlManager(GlobalOptionsBinder globalOptions, string? expectedBusSerial = null) : IDisposable
 {
     private string? _devicePath;
     private Guid? _deviceGuid;
@@ -695,6 +695,33 @@ internal sealed partial class EdlManager(GlobalOptionsBinder globalOptions) : ID
             // For simplicity, pick the first one if multiple is found, or require user to specify.
             // return false; // Or handle selection
             Logging.Log($"Picking the first device: {uniqueEdlDevices[0].DevicePath}", LogLevel.Warning);
+        }
+
+        if (expectedBusSerial != null)
+        {
+            if (uniqueEdlDevices.Count != 1)
+            {
+                Logging.Log($"--expected-bus-serial {expectedBusSerial} requires exactly one unique EDL device; found {uniqueEdlDevices.Count}.", LogLevel.Error);
+                return false;
+            }
+
+            var (_, busName, _, _, _) = uniqueEdlDevices[0];
+            var snTokens = (busName ?? string.Empty)
+                .Split('_')
+                .Where(t => t.StartsWith("SN:", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (snTokens.Count != 1)
+            {
+                Logging.Log($"--expected-bus-serial {expectedBusSerial} requires exactly one SN: token on the selected device; found {snTokens.Count}.", LogLevel.Error);
+                return false;
+            }
+
+            var actualSerial = snTokens[0][3..];
+            if (actualSerial.Length != 8 || !actualSerial.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F')) || !string.Equals(actualSerial, expectedBusSerial, StringComparison.OrdinalIgnoreCase))
+            {
+                Logging.Log($"--expected-bus-serial {expectedBusSerial} does not match device serial '{actualSerial}'.", LogLevel.Error);
+                return false;
+            }
         }
 
         var (finalDevicePath, finalBusName, finalInterfaceGuid, finalDevInst, finalOpenPath) =

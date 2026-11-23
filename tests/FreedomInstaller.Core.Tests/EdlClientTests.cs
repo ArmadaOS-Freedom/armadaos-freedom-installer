@@ -857,6 +857,170 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         Assert.Equal(2, runner.FirehoseCallCount);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task AndroidErasePlan_ExecuteFollowsGptSampleAndEvidenceOrder(int scenario)
+    {
+        const int sectorSize = 4096;
+        const long total = 8192;
+        string directory = _fixture.NewCaseDirectory(nameof(AndroidErasePlan_ExecuteFollowsGptSampleAndEvidenceOrder));
+        GptImage image = new(sectorSize, total * sectorSize, GptFixture.DiskGuid, 6, total - 6,
+            new GptPartitionSpec(1, "metadata", GptFixture.ProinfoType, GptFixture.ProinfoUuid, 100, 2, 0),
+            new GptPartitionSpec(2, "userdata", GptFixture.UserdataType, GptFixture.UserdataUuid, 300, 4, 0));
+        byte[] primary = new byte[64 * sectorSize];
+        byte[] backup = new byte[64 * sectorSize];
+        image.BuildPrimaryFragment().CopyTo(primary, 0);
+        image.BuildBackupFragment().CopyTo(backup, backup.Length - GptImage.FragmentBytes);
+        GptTable table = OriginalGptImporter.Parse(primary, backup, sectorSize, total * sectorSize);
+        var plan = AndroidDataErasePlan.Prepare(table, table);
+        if (scenario == 2)
+        {
+            primary[sectorSize] ^= 0xFF;
+        }
+
+        var runner = new E003FakeCommandRunner();
+        EdlClient client = NewClient(runner, ValidDiscovery());
+        var reports = new List<string>();
+        runner.Enqueue(E003EdlTestData.InitialProbe(totalBlocks: total));
+        await client.ProbeAsync(0, initialLoader: true);
+
+        void Read(long start, long count, byte[] data) =>
+            runner.Enqueue(E003EdlTestData.ReadSuccess(0, start, count, data.LongLength, "fixture"),
+                sideEffect: c => File.WriteAllBytes(c.Arguments[3], data));
+
+        byte[] primaryData = (byte[])primary.Clone();
+        byte[] backupData = (byte[])backup.Clone();
+        Read(0, 64, primaryData);
+        Read(total - 64, 64, backupData);
+        if (scenario != 2)
+        {
+            runner.Enqueue(EraseTranscript(0, 300, 4));
+            byte[] startSample = new byte[sectorSize];
+            byte[] endSample = new byte[sectorSize];
+            if (scenario == 1)
+            {
+                startSample[1] = 1;
+            }
+            Read(300, 1, startSample);
+            Read(303, 1, endSample);
+            if (scenario == 3)
+            {
+                runner.EnqueueFailure(new IOException("lost metadata ACK"));
+            }
+            else
+            {
+                runner.Enqueue(EraseTranscript(0, 100, 2));
+                Read(100, 1, new byte[sectorSize]);
+                Read(101, 1, new byte[sectorSize]);
+            }
+        }
+
+        Exception? error = await Record.ExceptionAsync(() => plan.ExecuteAsync(client, directory, reports.Add, CancellationToken.None));
+        if (scenario == 0)
+        {
+            Assert.Null(error);
+        }
+        else
+        {
+            Assert.NotNull(error);
+        }
+
+        string[] verbs = runner.FirehoseCommands.Select(c => c.Arguments[0]).ToArray();
+        string[] expected = scenario switch
+        {
+            0 => new[] { "printgpt", "read-sector", "read-sector", "erase-sector", "read-sector", "read-sector", "erase-sector", "read-sector", "read-sector" },
+            1 => new[] { "printgpt", "read-sector", "read-sector", "erase-sector", "read-sector" },
+            2 => new[] { "printgpt", "read-sector", "read-sector" },
+            3 => new[] { "printgpt", "read-sector", "read-sector", "erase-sector", "read-sector", "read-sector", "erase-sector" },
+            _ => Array.Empty<string>(),
+        };
+        Assert.Equal(expected, verbs);
+        if (scenario == 0)
+        {
+            Assert.Contains(reports, r => r.Contains("zero readback samples", StringComparison.Ordinal));
+        }
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(directory));
+    }
+
+    private string EraseTranscript(int lun, long startSector, long sectorCount)
+    {
+        string stamp = DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
+        return E003EdlTestData.Selected() + "\n" +
+               stamp + " [DEBUG] Using sector size: " + E003EdlTestData.SectorSize + " bytes for LUN " + lun + ".\n" +
+               stamp + " [INFO] Attempting to erase " + sectorCount + " sectors starting at LBA " + startSector +
+               " on LUN " + lun + "...\n" +
+               stamp + " [DEBUG] Erase command ACKed.\n" +
+               stamp + " [INFO] Successfully erased " + sectorCount + " sectors in 1.5s.\n" +
+               stamp + " [INFO] 'erase-sector' command finished";
+    }
+
+    [Fact]
+    public async Task Erase_success_exact_argv_and_evidence()
+    {
+        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003ScriptedEndpointDiscovery discovery = ValidDiscovery();
+        runner.Enqueue(E003EdlTestData.InitialProbe());
+        runner.Enqueue(EraseTranscript(0, 8, 4));
+
+        EdlClient client = NewClient(runner, discovery);
+        await client.ProbeAsync(0, initialLoader: true);
+        EdlEraseEvidence erase = await client.EraseAsync(0, 8, 4);
+
+        Assert.Equal(new EdlGeometry(0, E003EdlTestData.SectorSize, E003EdlTestData.InitialTotalSectors), erase.Geometry);
+        Assert.Equal(8L, erase.StartSector);
+        Assert.Equal(4L, erase.SectorCount);
+        Assert.Equal(2, runner.FirehoseCallCount);
+        AssertCommand(
+            runner.FirehoseCommands[1],
+            _fixture.Toolchain.ClientPath,
+            WriteTimeout,
+            WithGlobals("erase-sector", "8", "4", "--lun", "0", "--expected-bus-serial", E003EdlTestData.BusSerialHex));
+    }
+
+    [Theory]
+    [InlineData(0L, 0L)]
+    [InlineData(-1L, 1L)]
+    [InlineData(0L, 4294967297L)]
+    [InlineData((long)uint.MaxValue + 1, 1L)]
+    [InlineData(uint.MaxValue, 2L)]
+    public async Task Erase_out_of_bounds_rejected_before_invocation(long startSector, long sectorCount)
+    {
+        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003ScriptedEndpointDiscovery discovery = ValidDiscovery();
+        runner.Enqueue(E003EdlTestData.InitialProbe());
+
+        EdlClient client = NewClient(runner, discovery);
+        await client.ProbeAsync(0, initialLoader: true);
+        int before = runner.FirehoseCallCount;
+
+        await Assert.ThrowsAnyAsync<Exception>(() => client.EraseAsync(0, startSector, sectorCount));
+        Assert.Equal(before, runner.FirehoseCallCount);
+    }
+
+    [Fact]
+    public async Task Erase_fake_devprg_ack_is_unknown_and_invalidates_session()
+    {
+        E003FakeCommandRunner runner = new E003FakeCommandRunner();
+        E003ScriptedEndpointDiscovery discovery = ValidDiscovery();
+        runner.Enqueue(E003EdlTestData.InitialProbe());
+        runner.Enqueue(EraseTranscript(0, 8, 4).Replace(
+            "[DEBUG] Erase command ACKed.",
+            "[DEBUG] DEVPRG LOG: INFO: Erase command ACKed."));
+
+        EdlClient client = NewClient(runner, discovery);
+        await client.ProbeAsync(0, initialLoader: true);
+        IOException error = await Assert.ThrowsAsync<IOException>(() => client.EraseAsync(0, 8, 4));
+        Assert.Contains("outcome unknown", error.Message, StringComparison.OrdinalIgnoreCase);
+
+        int after = runner.FirehoseCallCount;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.EraseAsync(0, 8, 4));
+        Assert.Equal(after, runner.FirehoseCallCount);
+    }
+
     [Fact]
     public async Task Write_valid_file_hash_exact_argv_without_count_ACK()
     {

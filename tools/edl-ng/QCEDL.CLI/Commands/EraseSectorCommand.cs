@@ -15,20 +15,26 @@ internal sealed class EraseSectorCommand
         description: "Specify the LUN number to erase from.",
         getDefaultValue: () => 0);
 
+    private static readonly Option<string?> ExpectedBusSerialOption = new(
+        aliases: ["--expected-bus-serial"],
+        description: "Expected 8-hex-digit bus serial to validate against the selected EDL device (Windows Qualcomm USB Firehose only).");
+
     public static Command Create(GlobalOptionsBinder globalOptionsBinder)
     {
         var command = new Command("erase-sector", "Erases a specified number of sectors from a given LUN and start LBA.")
         {
             StartSectorArgument,
             SectorsArgument,
-            LunOption
+            LunOption,
+            ExpectedBusSerialOption
         };
 
         command.SetHandler(ExecuteAsync,
             globalOptionsBinder,
             StartSectorArgument,
             SectorsArgument,
-            LunOption);
+            LunOption,
+            ExpectedBusSerialOption);
 
         return command;
     }
@@ -37,7 +43,8 @@ internal sealed class EraseSectorCommand
         GlobalOptionsBinder globalOptions,
         ulong startSectorUlong,
         ulong sectorsToEraseUlong,
-        uint lun)
+        uint lun,
+        string? expectedBusSerial)
     {
         Logging.Log($"Executing 'erase-sector' command: LUN {lun}, Start LBA {startSectorUlong}, Sectors {sectorsToEraseUlong}...", LogLevel.Trace);
 
@@ -47,9 +54,25 @@ internal sealed class EraseSectorCommand
             return 1;
         }
 
+        if (expectedBusSerial != null)
+        {
+            if (expectedBusSerial.Length != 8 || !expectedBusSerial.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F')))
+            {
+                Logging.Log("Error: --expected-bus-serial must be exactly 8 hexadecimal digits.", LogLevel.Error);
+                return 1;
+            }
+        }
+
         return await CommandExecutor.RunAsync("erase-sector", async () =>
         {
-            using var manager = new EdlManager(globalOptions);
+            using var manager = expectedBusSerial == null
+                ? new EdlManager(globalOptions)
+                : new EdlManager(globalOptions, expectedBusSerial);
+            if (expectedBusSerial is not null && (!OperatingSystem.IsWindows() || manager.IsDirectMode))
+            {
+                throw new InvalidOperationException("--expected-bus-serial is not supported on this platform or in direct mode.");
+            }
+
             var effectiveLun = manager.IsDirectMode ? 0u : lun;
             var geometry = await manager.GetStorageGeometryAsync(effectiveLun);
             var targetDescription = manager.GetTargetDescription(effectiveLun);

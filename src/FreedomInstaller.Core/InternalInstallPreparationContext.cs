@@ -378,6 +378,14 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     internal bool AndroidDataErase => !(_isDirect && PreservesAndroidLayout(_boardSummary, _originalTables[0], _postGpt, _allocation));
 
+    /// <summary>
+    /// Optional direct Android-erase plan prepared from the already captured original tables and post-GPT. Only
+    /// set when the caller opted in through <see cref="InternalInstallServices.UseDirectAndroidDataErase"/>
+    /// and this context's own <see cref="AndroidDataErase"/> decision is true. Preparation performs no I/O;
+    /// execution remains behind the existing Write/Execute confirmation guards.
+    /// </summary>
+    internal AndroidDataErasePlan? DirectAndroidErase { get; private set; }
+
     private static bool PreservesAndroidLayout(
         InternalArtifactRegion? boardSummary,
         GptTable originalTable,
@@ -1066,6 +1074,11 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             context._originalDeviceVerified = true;
 
             await context.PrepareLauncherDefaultsAsync(initialEdl, cancellationToken).ConfigureAwait(false);
+            if (services.UseDirectAndroidDataErase && context.AndroidDataErase)
+            {
+                AndroidDataErasePlan plan = AndroidDataErasePlan.Prepare(context.OriginalTables[0], context.PostGpt);
+                context.DirectAndroidErase = plan;
+            }
             context.SealConfirmation(cancellationToken);
 
             // Ready is only reached after every builder output, this factory's own original capture and the
@@ -4267,6 +4280,17 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             json.WriteString("kind", "armada-internal-install-confirmation");
             json.WriteString("installationId", _installationId.ToString("D"));
             json.WriteBoolean("androidDataErase", AndroidDataErase);
+            if (DirectAndroidErase is { } directErase)
+            {
+                json.WriteStartObject("directAndroidErase");
+                json.WriteString("partUuid", directErase.Userdata.PartUuid);
+                json.WriteNumber("startSector", directErase.Userdata.StartSector);
+                json.WriteNumber("sectorCount", directErase.Userdata.SectorCount);
+                json.WriteString("metadataPartUuid", directErase.Metadata.PartUuid);
+                json.WriteNumber("metadataStartSector", directErase.Metadata.StartSector);
+                json.WriteNumber("metadataSectorCount", directErase.Metadata.SectorCount);
+                json.WriteEndObject();
+            }
 
             json.WriteStartArray("slotOrder");
             foreach (string slot in SlotOrder)
@@ -4918,7 +4942,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         && left.SectorCount == right.SectorCount
         && left.Attributes == right.Attributes;
 
-    private static void RequireSameTable(GptTable expected, GptTable actual, string subject)
+    internal static void RequireSameTable(GptTable expected, GptTable actual, string subject)
     {
         if (!string.Equals(expected.DiskGuid, actual.DiskGuid, StringComparison.OrdinalIgnoreCase)
             || expected.SectorSize != actual.SectorSize

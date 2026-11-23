@@ -154,6 +154,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
 
     public int MenuWriteCount => _currentMenu?.WriteTargets.Count ?? 0;
 
+    public bool UsesDirectAndroidDataErase => _plan.AndroidErase is not null;
+
     // -----------------------------------------------------------------
     // Factory
     // -----------------------------------------------------------------
@@ -195,7 +197,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         ICommandRunner runner,
         IProgress<EdlUninstallProgress>? progress = null,
         CancellationToken token = default,
-        bool reclaimBoardBackup = true)
+        bool reclaimBoardBackup = true,
+        bool useDirectAndroidDataErase = false)
     {
         ArgumentNullException.ThrowIfNull(currentBackup);
         ArgumentNullException.ThrowIfNull(menuPlan);
@@ -211,7 +214,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         return CreatePreparedCoreAsync(
             client, tools, binding, assets, workRoot, runner,
             currentBackup, menuPlan, actualCurrentSlot,
-            progress, token, reclaimBoardBackup: reclaimBoardBackup);
+            progress, token, reclaimBoardBackup: reclaimBoardBackup,
+            useDirectAndroidDataErase: useDirectAndroidDataErase);
     }
 
     public static Task<EdlUninstallBackend> CreatePreparedForStockRestoreAsync(
@@ -219,7 +223,7 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         UninstallGptAssets assets, InternalBackupSet currentBackup,
         BootMaintenancePrepared stockRestore, string workRoot, ICommandRunner runner,
         IProgress<EdlUninstallProgress>? progress = null, CancellationToken token = default,
-        bool reclaimBoardBackup = true)
+        bool reclaimBoardBackup = true, bool useDirectAndroidDataErase = false)
     {
         ArgumentNullException.ThrowIfNull(currentBackup);
         ArgumentNullException.ThrowIfNull(stockRestore);
@@ -230,7 +234,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             || !SamePath(stockRestore.BackupDirectory, currentBackup.DirectoryPath))
             throw new InvalidOperationException("The stock restoration plan does not match the current uninstall device and backup.");
         return CreatePreparedCoreAsync(client, tools, binding, assets, workRoot, runner,
-            currentBackup, null, stockRestore.CurrentSlot, progress, token, stockRestore, reclaimBoardBackup);
+            currentBackup, null, stockRestore.CurrentSlot, progress, token, stockRestore, reclaimBoardBackup,
+            useDirectAndroidDataErase);
     }
 
     private static async Task<EdlUninstallBackend> CreatePreparedCoreAsync(
@@ -246,7 +251,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         IProgress<EdlUninstallProgress>? progress,
         CancellationToken token,
         BootMaintenancePrepared? stockRestore = null,
-        bool reclaimBoardBackup = true)
+        bool reclaimBoardBackup = true,
+        bool useDirectAndroidDataErase = false)
     {
         if (client is null)
         {
@@ -522,6 +528,10 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
                 writer.WriteNumber("sectorSize", lun0.SectorSize);
                 writer.WriteNumber("diskBytes", diskBytes);
                 writer.WriteBoolean("reclaimBoardBackup", reclaimBoardBackup);
+                if (useDirectAndroidDataErase)
+                {
+                    writer.WriteBoolean("directAndroidDataErase", true);
+                }
                 WriteFileReference(writer, "currentPrimary", capture.Regions["gpt_lun0_primary"]);
                 WriteFileReference(writer, "currentBackup", capture.Regions["gpt_lun0_backup"]);
                 WriteStagedReference(writer, "originalPrimary", stagedPrimary);
@@ -588,7 +598,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
 
                 JsonElement planElement = Object(gptRoot, "plan", "The GPT response");
                 plan = await ValidateGptPlanAsync(
-                    planElement, capture, inputs, diskBytes, gptOutputDirectory, token)
+                    planElement, capture, inputs, diskBytes, gptOutputDirectory,
+                    useDirectAndroidDataErase, token)
                     .ConfigureAwait(false);
             }
 
@@ -1256,6 +1267,16 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
 
             RequireRange(geometry, start, count, "misc-bcb");
 
+            if (_plan.AndroidErase is { } erasePlan)
+            {
+                await erasePlan.ExecuteAsync(_client, _backupDirectory, message => WriteJson(Path.Combine(_backupDirectory, "evidence", "android-erase-" + Guid.NewGuid().ToString("N") + ".json"), writer =>
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("message", message);
+                    writer.WriteEndObject();
+                }, CancellationToken.None), token).ConfigureAwait(false);
+            }
+
             WriteProgress(
                 "intent",
                 "misc-bcb",
@@ -1367,6 +1388,7 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         ValidatedUninstallInputs inputs,
         long diskBytes,
         string outputDirectory,
+        bool useDirectAndroidDataErase,
         CancellationToken token)
     {
         AndroidRestorePlan expectedPlan = inputs.Plan;
@@ -1809,6 +1831,25 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             expectedPlan,
             inputs.Record.BoardBackupPartUuid);
 
+        AndroidDataErasePlan? androidErase = null;
+        if (useDirectAndroidDataErase)
+        {
+            byte[] prefix = new byte[checked((int)miscBytes)];
+            using (FileStream stream = File.OpenRead(misc.FilePath))
+            {
+                await stream.ReadExactlyAsync(prefix.AsMemory(), token).ConfigureAwait(false);
+            }
+
+            byte[] unit = InternalInstallBackend.BuildBcbWriteUnit(prefix, miscSectorSize, androidDataErase: false);
+            byte[] actual = await File.ReadAllBytesAsync(miscPath, token).ConfigureAwait(false);
+            if (!unit.AsSpan().SequenceEqual(actual))
+            {
+                throw new InvalidOperationException("The actual MISC bytes do not match the prepared BCB unit.");
+            }
+
+            androidErase = AndroidDataErasePlan.Prepare(inputs.CurrentTable, postTable);
+        }
+
         return new GptPlanEvidence(
             userdataStart,
             userdataEnd,
@@ -1821,7 +1862,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             new MiscRegionExpectation(miscPath, miscBytes, miscSectorCount, miscSha256),
             postPrimary,
             postBackup,
-            plan.Clone());
+            plan.Clone(),
+            androidErase);
     }
 
     private static PostExpectation ReadPostExpectation(
@@ -2013,7 +2055,16 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         AppendLine(body, "plan.post.backup.offset", plan.PostBackup.ByteOffset);
         AppendLine(body, "plan.post.backup.sha256", plan.PostBackup.Sha256);
 
-        return CanonicalHash(body);
+        string baseHash = CanonicalHash(body);
+        if (plan.AndroidErase is not null)
+        {
+            var directBody = new StringBuilder();
+            directBody.Append("directAndroidDataErase=1\n")
+                .Append("base=").Append(baseHash).Append('\n');
+            return CanonicalHash(directBody);
+        }
+
+        return baseHash;
     }
 
     private static void AppendRegion(StringBuilder body, string name, EdlCapturedRegion region)
@@ -3279,7 +3330,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             MiscRegionExpectation miscRegion,
             PostExpectation postPrimary,
             PostExpectation postBackup,
-            JsonElement raw)
+            JsonElement raw,
+            AndroidDataErasePlan? androidErase)
         {
             UserdataStart = userdataStart;
             UserdataEnd = userdataEnd;
@@ -3293,6 +3345,7 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
             PostPrimary = postPrimary;
             PostBackup = postBackup;
             Raw = raw;
+            AndroidErase = androidErase;
         }
 
         internal long UserdataStart { get; }
@@ -3316,6 +3369,8 @@ public sealed partial class EdlUninstallBackend : IUserdataUninstallBackend, IDi
         internal PostExpectation PostPrimary { get; }
 
         internal PostExpectation PostBackup { get; }
+
+        internal AndroidDataErasePlan? AndroidErase { get; }
 
         // Cloned so the manifest keeps the full plan after the response document is disposed.
         internal JsonElement Raw { get; }

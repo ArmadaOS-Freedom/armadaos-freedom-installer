@@ -265,6 +265,18 @@ class UninstallTailBackupRegressionTests(unittest.TestCase):
             userdata = next(e for e in rebuilt.entries if e.name == "userdata")
             self.assertEqual(meta["userdataEndLbaExclusive"], userdata.last_lba + 1)
 
+    def test_uninstall_direct_android_data_erase_keeps_board_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            request, meta = _new_layout(Path(temporary), tail_padding_sectors=2039)
+            request["directAndroidDataErase"] = True
+            request["reclaimBoardBackup"] = False
+            original_misc = Path(request["misc"]["path"]).read_bytes()
+            plan = edl_gpt_cli.prepare_plan(request)
+            unit = Path(plan["miscRegion"]["path"]).read_bytes()
+            expected = bytes(32) + original_misc[32:len(unit)]
+            self.assertEqual(expected, unit)
+            self.assertNotIn(b'boot-recovery\x00', unit)
+
     def test_arbitrary_tail_padding_is_rejected(self) -> None:
         for padding in (1, 2038, 2040, 4087):
             with self.subTest(padding=padding), tempfile.TemporaryDirectory() as temporary:

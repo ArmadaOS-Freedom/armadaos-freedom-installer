@@ -739,7 +739,7 @@ def plan_restore(
     )
 
 
-def make_factory_reset_bcb(existing: bytes) -> bytes:
+def make_factory_reset_bcb(existing: bytes, *, queue_recovery: bool = True) -> bytes:
     """Return a 2048-byte BCB that queues a one-shot factory reset.
 
     ``existing`` must be exactly 2048 bytes whose ``command[0:32]`` is
@@ -762,8 +762,11 @@ def make_factory_reset_bcb(existing: bytes) -> bytes:
         raise GptError("a boot command or recovery request is already pending")
 
     buffer = bytearray(data)
-    buffer[0:32] = _BCB_COMMAND.ljust(32, b"\x00")
-    buffer[64:832] = _BCB_RECOVERY.ljust(768, b"\x00")
+    if queue_recovery:
+        buffer[0:32] = _BCB_COMMAND.ljust(32, b"\x00")
+        buffer[64:832] = _BCB_RECOVERY.ljust(768, b"\x00")
+    else:
+        buffer[0:32] = bytes(32)
     return bytes(buffer)
 
 

@@ -253,6 +253,7 @@
   "Dynamic.UserdataUninstall.Runtime.Stage.ReclaimAndroidSpace": "归还安卓空间",
   "Dynamic.UserdataUninstall.Runtime.Stage.InitializeAndroid": "初始化安卓",
   "Dynamic.UserdataUninstall.Runtime.Stage.AwaitingFactoryReset": "等待清除数据",
+  "Dynamic.UserdataUninstall.Runtime.Stage.AwaitingAndroidBoot": "等待 Android 启动",
   "Dynamic.UserdataUninstall.Runtime.Active": "正在执行：{0}…",
   "Dynamic.UserdataUninstall.Runtime.Resetting": "写入与校验已全部完成，正在发送一次复位请求，请保持连接与供电…",
   "Dynamic.UserdataUninstall.Runtime.ResetUnknown": "写入校验已完成，但复位请求未被确认。请保留备份和当前现场，不要重复执行。",

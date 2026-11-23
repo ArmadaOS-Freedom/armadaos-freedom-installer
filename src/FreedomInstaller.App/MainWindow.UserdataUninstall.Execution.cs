@@ -95,6 +95,7 @@ public partial class MainWindow
         UninstallStage.ReclaimAndroidSpace => "Dynamic.UserdataUninstall.Runtime.Stage.ReclaimAndroidSpace",
         UninstallStage.InitializeAndroid => "Dynamic.UserdataUninstall.Runtime.Stage.InitializeAndroid",
         UninstallStage.AwaitingFactoryReset => "Dynamic.UserdataUninstall.Runtime.Stage.AwaitingFactoryReset",
+        UninstallStage.AwaitingAndroidBoot => "Dynamic.UserdataUninstall.Runtime.Stage.AwaitingAndroidBoot",
         _ => "Dynamic.UserdataUninstall.Runtime.Stage.Preflight",
     };
 
@@ -257,7 +258,7 @@ public partial class MainWindow
                     _userdataUninstallLastResult = result;
                     _userdataUninstallDisplayStage = result.Stage;
 
-                    if (result.Success && result.Stage == UninstallStage.AwaitingFactoryReset)
+                    if (result.Success && (result.Stage == UninstallStage.AwaitingFactoryReset || result.Stage == UninstallStage.AwaitingAndroidBoot))
                     {
                         // 全部写入与读回校验已由 Core 完成：这里才有权决定复位还是原厂引导恢复。
                         AppendLocalizedLog(M("Dynamic.UserdataUninstall.Runtime.LogSuccess"));
@@ -439,7 +440,7 @@ public partial class MainWindow
         }
 
         var result = _userdataUninstallLastResult;
-        if (result is { Success: true, Stage: UninstallStage.AwaitingFactoryReset })
+        if (result is { Success: true, Stage: UninstallStage.AwaitingFactoryReset or UninstallStage.AwaitingAndroidBoot })
         {
             // 写入校验完成但复位未被确认：如实说明，绝不写成完成。
             SetModernUserdataUninstallExitStatus(M("Dynamic.UserdataUninstall.Runtime.VerifiedUnknownReset"));

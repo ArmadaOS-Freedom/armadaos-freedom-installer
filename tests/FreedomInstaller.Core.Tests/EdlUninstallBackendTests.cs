@@ -728,10 +728,13 @@ internal sealed class EbRunner : ICommandRunner
         byte[] miscUnit = Slice(miscBytes, 0, sectorSize);
         Array.Clear(miscUnit, 0, 32);
         Array.Clear(miscUnit, 64, 832 - 64);
-        byte[] bcbCommand = Encoding.ASCII.GetBytes("boot-recovery");
-        Array.Copy(bcbCommand, 0, miscUnit, 0, bcbCommand.Length);
-        byte[] bcbRecovery = Encoding.ASCII.GetBytes("recovery\n--wipe_data\n--reason=armada-uninstall\n");
-        Array.Copy(bcbRecovery, 0, miscUnit, 64, bcbRecovery.Length);
+        if (!request.TryGetProperty("directAndroidDataErase",out JsonElement directErase) || !directErase.GetBoolean())
+        {
+            byte[] bcbCommand = Encoding.ASCII.GetBytes("boot-recovery");
+            Array.Copy(bcbCommand, 0, miscUnit, 0, bcbCommand.Length);
+            byte[] bcbRecovery = Encoding.ASCII.GetBytes("recovery\n--wipe_data\n--reason=armada-uninstall\n");
+            Array.Copy(bcbRecovery, 0, miscUnit, 64, bcbRecovery.Length);
+        }
 
         byte[] fullAfterMisc = (byte[])miscBytes.Clone();
         Array.Copy(miscUnit, 0, fullAfterMisc, 0, sectorSize);
