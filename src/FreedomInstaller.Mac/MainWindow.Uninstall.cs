@@ -374,6 +374,11 @@ public partial class MainWindow
             UninstallCheckButtonText,
             _uninstallAlreadyEdl ? "Dynamic.BootMaintenance.CheckEdl" : "Static.InternalInstall.Check.Button");
         UninstallCheckFastbootHint.IsVisible = !_uninstallAlreadyEdl;
+
+        // 9008 路线不走 USB 调试 / 自动进入 9008：换成 9008 路线的说明（WPF 卸载在这条路线上显示的同一句）。
+        SetText(
+            UninstallCheckLead,
+            _uninstallAlreadyEdl ? "Dynamic.UserdataUninstall.EdlHint" : "Dynamic.Shared.DeviceCheckLead");
     }
 
     private void RenderUninstallPower() => SetText(UninstallPowerText, PowerMessage(_uninstallPower));
@@ -1315,7 +1320,13 @@ public partial class MainWindow
                                 loaded.Dispose();
                                 pendingTools = null;
                                 acceptProgress = false;
-                                InvalidateUninstallCheckFromMismatch();
+                                if (!resumeUnconfirmedEntry)
+                                {
+                                    InvalidateUninstallCheckFromMismatch();
+                                }
+
+                                // 上一次进入未确认时保留第 1 步的身份证据：接回原平板（安卓或 9008）后可以再次核对、继续，
+                                // 不会卡在既没有检查结论、又不能再进入的状态。
                                 SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.IdentityMismatch"));
                                 return;
                             }
@@ -1625,6 +1636,13 @@ public partial class MainWindow
         _uninstallUseBoardBackup = desired;
         InvalidateUninstallPreparation();
         ClearUninstallRecoverySource();
+
+        // 换来源（板内 ↔ 电脑备份）时，按旧来源推导的快照父目录一起作废；9008 会话保留。
+        if (_uninstallBackupParentFromSource)
+        {
+            _uninstallBackupParent = null;
+            _uninstallBackupParentFromSource = false;
+        }
         if (_uninstallStep >= 3)
         {
             _uninstallStep = 2;

@@ -1622,7 +1622,7 @@
                     <!-- 01 连接检测：默认走完整自动检查（安卓 -> Fastboot -> 安卓，取得锁态）；9008 路线读板内 / 电脑恢复资料核对身份。 -->
                     <StackPanel x:Name="UninstallCheckPage" Margin="0,18,0,0">
                         <TextBlock Text="{DynamicResource Static.InternalInstall.Check.Title}" Classes="H1Text" />
-                        <TextBlock Text="{DynamicResource Dynamic.Shared.DeviceCheckLead}" Classes="BodyText" TextWrapping="Wrap" Margin="0,6,0,0" />
+                        <TextBlock x:Name="UninstallCheckLead" Text="{DynamicResource Dynamic.Shared.DeviceCheckLead}" Classes="BodyText" TextWrapping="Wrap" Margin="0,6,0,0" />
                         <TextBlock Text="{DynamicResource Static.Connection.Gen4UsbPortHint}"
                                    Classes="BodyInkText"
                                    FontWeight="SemiBold"

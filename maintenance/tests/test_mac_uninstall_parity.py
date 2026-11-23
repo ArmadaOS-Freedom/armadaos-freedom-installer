@@ -33,6 +33,7 @@ WPF_SHARED = [
     APP / "MainWindow.InternalInstall.Preparation.cs",
     APP / "MainWindow.BootMaintenance.Edl.cs",
     APP / "MainWindow.BootMaintenance.View.cs",
+    APP / "MainWindow.SharedDeviceEntry.cs",
 ]
 MAC_XAML = MAC / "MainWindow.axaml"
 MAC_CODE = [MAC / "MainWindow.Uninstall.cs"]
@@ -292,7 +293,13 @@ class MacUninstallParityTests(unittest.TestCase):
             mac,
         )
         self.assertIsNotNone(guard)
-        self.assertLess(guard.start(), mac.index("GlobalEdlBinding.Attach(", guard.start()))
+        attach = mac.index("GlobalEdlBinding.Attach(", guard.start())
+        self.assertLess(guard.start(), attach)
+        # Control: a supported model passes that branch. Between the guard's own throw and Attach there is no
+        # other refusal, so only the pending predicate can stop it.
+        after_guard = mac[mac.index("}", guard.end()) + 1:attach]
+        self.assertNotIn("throw", after_guard)
+        self.assertNotIn("return", after_guard)
         self.assertNotIn("!DeviceModelRoutes.IsWriteRoutePending(profile.Model)", mac)
         core = (ROOT / "src" / "FreedomInstaller.Core" / "DeviceModelRoutes.cs").read_text(encoding="utf-8")
         self.assertIn("string.Equals(model, Tb710fuModel, StringComparison.OrdinalIgnoreCase)", core)
