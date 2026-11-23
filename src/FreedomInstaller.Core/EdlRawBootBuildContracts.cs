@@ -75,6 +75,8 @@ public sealed class EdlRawBootBuildRequest
 
     public VerifiedEdlFile CurrentBoot { get; }
 
+    internal VerifiedEdlFile? ReinstallRecoveryBoot { get; init; }
+
     public VerifiedEdlFile VendorBoot { get; }
 
     public VerifiedEdlFile InitBoot { get; }

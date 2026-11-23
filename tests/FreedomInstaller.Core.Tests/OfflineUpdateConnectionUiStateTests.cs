@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Xml.Linq;
 using FreedomInstaller.App;
 using Xunit;
 
@@ -178,6 +179,32 @@ public sealed class OfflineUpdateConnectionUiStateTests
             OfflineUpdateTransport.Wifi, OfflineUpdateCredentialMode.PublicKey, "armada", "/k", "/h"));
         Assert.False(OfflineUpdateConnectionUiState.IsExplicitKeyIncomplete(
             OfflineUpdateTransport.Usb, OfflineUpdateCredentialMode.PublicKey, string.Empty, string.Empty, string.Empty));
+    }
+
+    [Fact]
+    public void OfflineUpgradeView_WrapsExistingControlsInNamedWorkflowSteps()
+    {
+        string xaml = ReadEmbedded("FreedomInstaller.Tests.OfflineUpgradeView.xaml");
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XDocument doc = XDocument.Parse(xaml);
+
+        XElement connectionStep = Assert.Single(doc.Descendants(),
+            e => (string?)e.Attribute(x + "Name") == "OfflineConnectionStep");
+        XElement packageStep = Assert.Single(doc.Descendants(),
+            e => (string?)e.Attribute(x + "Name") == "OfflinePackageStep");
+        XElement confirmationStep = Assert.Single(doc.Descendants(),
+            e => (string?)e.Attribute(x + "Name") == "OfflineConfirmationStep");
+
+        Assert.Single(connectionStep.Descendants(),
+            e => (string?)e.Attribute(x + "Name") == "ConnectButton");
+        Assert.Single(packageStep.Descendants(),
+            e => (string?)e.Attribute(x + "Name") == "ValidatePackageButton");
+        Assert.Single(confirmationStep.Descendants(),
+            e => (string?)e.Attribute(x + "Name") == "ExecuteButton");
+
+        Assert.Same(connectionStep.Parent, packageStep.Parent);
+        Assert.Same(connectionStep.Parent, confirmationStep.Parent);
+        Assert.IsType<XElement>(connectionStep.Parent);
     }
 
     [Fact]

@@ -986,10 +986,12 @@ public partial class MainWindow
                 var validation = imported.Validation;
                 if (!validation.IsValid || validation.Storage is null)
                 {
-                    var reasons = validation.Storage is null && validation.IsValid
-                        ? T("Dynamic.InternalInstall.Capacity.StorageMissing")
+                    object reasons = validation.Storage is null && validation.IsValid
+                        ? M("Dynamic.InternalInstall.Capacity.StorageMissing")
                         : string.Join(T("Dynamic.Package.ReasonSeparator"), validation.Reasons);
                     SetText(InternalInstallPackageStatusText, "Dynamic.InternalInstall.Capacity.Invalid", reasons);
+                    if (!validation.IsValid)
+                        AppendLog(M("Dynamic.RawValue", string.Join(" | ", validation.Reasons)));
                     imported.Dispose();
                     return;
                 }
@@ -1014,7 +1016,8 @@ public partial class MainWindow
             }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
-                SetText(InternalInstallPackageStatusText, "Dynamic.InternalInstall.Capacity.Invalid", exception.Message);
+                SetText(InternalInstallPackageStatusText, "Dynamic.InternalInstall.Capacity.Invalid", exception);
+                AppendLog(M("Dynamic.RawValue", exception.ToString()));
             }
         });
     }
@@ -1036,7 +1039,8 @@ public partial class MainWindow
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
-            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Capacity.RangeFailed", exception.Message);
+            AppendLog(M("Dynamic.RawValue", exception.ToString()));
+            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Capacity.RangeFailed", exception);
             return;
         }
 
@@ -1113,7 +1117,8 @@ public partial class MainWindow
         {
             _internalInstallAllocation = null;
             _internalInstallAndroidGiB = 0;
-            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Capacity.PlanFailed", exception.Message);
+            AppendLog(M("Dynamic.RawValue", exception.ToString()));
+            SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Capacity.PlanFailed", exception);
         }
     }
 

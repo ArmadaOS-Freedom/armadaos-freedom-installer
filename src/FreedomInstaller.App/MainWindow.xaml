@@ -940,7 +940,8 @@
                                TextWrapping="Wrap"
                                Margin="8,0,0,10" />
 
-                    <TextBlock Text="{DynamicResource Static.NavTitle}"
+                    <TextBlock x:Name="WorkflowNavigationTitle"
+                               Text="{DynamicResource Static.NavTitle}"
                                Style="{StaticResource CaptionText}"
                                Margin="8,4,0,8" />
 
@@ -1023,6 +1024,50 @@
                             <StackPanel>
                                 <TextBlock x:Name="SharedWorkflowConfirmStepNumber" Text="04" FontSize="11" />
                                 <TextBlock x:Name="SharedWorkflowConfirmStepText" Text="{DynamicResource Static.InternalInstall.Nav.Confirm}" FontSize="14" FontWeight="SemiBold" />
+                            </StackPanel>
+                        </RadioButton>
+                    </StackPanel>
+
+                    <!-- 辅助流程步骤导航：默认折叠，由既有侧栏承载。 -->
+                    <StackPanel x:Name="AuxiliaryWorkflowStepNav"
+                                Visibility="Collapsed">
+                        <RadioButton x:Name="AuxiliaryWorkflowNavDevice"
+                                     GroupName="AuxiliaryWorkflowSteps"
+                                     Style="{StaticResource StepNavItem}"
+                                     Tag="0"
+                                     Checked="OnAuxiliaryWorkflowStepChecked">
+                            <StackPanel>
+                                <TextBlock Text="01" FontSize="11" />
+                                <TextBlock x:Name="AuxiliaryWorkflowDeviceLabel"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="AuxiliaryWorkflowNavInput"
+                                     GroupName="AuxiliaryWorkflowSteps"
+                                     Style="{StaticResource StepNavItem}"
+                                     Tag="1"
+                                     Checked="OnAuxiliaryWorkflowStepChecked">
+                            <StackPanel>
+                                <TextBlock Text="02" FontSize="11" />
+                                <TextBlock x:Name="AuxiliaryWorkflowInputLabel"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="AuxiliaryWorkflowNavConfirm"
+                                     GroupName="AuxiliaryWorkflowSteps"
+                                     Style="{StaticResource StepNavItem}"
+                                     Tag="2"
+                                     Checked="OnAuxiliaryWorkflowStepChecked">
+                            <StackPanel>
+                                <TextBlock Text="03" FontSize="11" />
+                                <TextBlock x:Name="AuxiliaryWorkflowConfirmLabel"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
                         </RadioButton>
                     </StackPanel>
@@ -2808,6 +2853,12 @@
 
                             <Border Style="{StaticResource CardBorder}" Margin="0,16,0,0">
                                 <StackPanel>
+                                    <CheckBox x:Name="UninstallUseBoardBackupCheck" Visibility="Collapsed"
+                                              HorizontalAlignment="Left" Margin="0,8,0,0"
+                                              Style="{StaticResource RiskCheckBox}" IsChecked="True"
+                                              Content="{DynamicResource Dynamic.UserdataUninstall.UseBoardBackup}"
+                                              Checked="OnUserdataUninstallUseBoardBackupChanged"
+                                              Unchecked="OnUserdataUninstallUseBoardBackupChanged" />
                                     <TextBlock x:Name="SharedEdlOriginalSourceLabel"
                                                Text="{DynamicResource Dynamic.BootMaintenance.OriginalSource}"
                                                Style="{StaticResource FieldLabelText}"
@@ -2834,11 +2885,7 @@
                                                Style="{StaticResource CaptionText}"
                                                Margin="0,6,0,0" />
 
-                                    <!-- 卸载专用：恢复原厂安卓引导（默认不勾选，其他模式隐藏）。 -->
-                                    <Button x:Name="UninstallUseBoardBackupButton" Visibility="Collapsed"
-                                            HorizontalAlignment="Left" Margin="0,8,0,0"
-                                            Content="{DynamicResource Dynamic.UserdataUninstall.UseBoardBackup}"
-                                            Click="OnUseBoardUninstallBackup" />
+                                    <!-- 卸载专用：恢复原厂安卓引导（默认勾选，其他模式隐藏）。 -->
                                     <CheckBox x:Name="UninstallReclaimBackupCheck" Visibility="Collapsed"
                                               Style="{StaticResource RiskCheckBox}" Margin="0,10,0,0" IsChecked="True"
                                               Content="{DynamicResource Dynamic.UserdataUninstall.ReclaimBackup}"
@@ -2848,6 +2895,7 @@
                                               Style="{StaticResource RiskCheckBox}"
                                               Visibility="Collapsed"
                                               Margin="0,10,0,0"
+                                              IsChecked="True"
                                               Checked="OnUserdataUninstallRestoreStockChanged"
                                               Unchecked="OnUserdataUninstallRestoreStockChanged">
                                         <TextBlock x:Name="BootMaintenanceRestoreStockText"
@@ -2954,6 +3002,7 @@
                                       Style="{StaticResource RiskCheckBox}"
                                       Visibility="Collapsed"
                                       Margin="0,14,0,0"
+                                      IsChecked="True"
                                       Checked="OnUserdataUninstallRestoreStockChanged"
                                       Unchecked="OnUserdataUninstallRestoreStockChanged">
                                 <TextBlock x:Name="BootMaintenanceConfirmRestoreStockText"
@@ -3376,8 +3425,7 @@
                 进入时不做任何设备访问，连接必须由用户显式发起；连接、日志与进度为两个视图共用。
             -->
             <ScrollViewer x:Name="GlobalRecoveryPage"
-                          Grid.Column="0"
-                          Grid.ColumnSpan="3"
+                          Grid.Column="2"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
                           Visibility="Collapsed"
@@ -3406,15 +3454,6 @@
                                TextWrapping="Wrap"
                                Margin="0,6,0,0"
                                Visibility="Collapsed" />
-
-                    <!-- 本页唯一的返回入口：没有受保护现场时回功能首页。 -->
-                    <WrapPanel Margin="0,12,0,0">
-                        <Button x:Name="GlobalBackHomeButton"
-                                Content="{DynamicResource Static.Global.BackHome}"
-                                Click="OnGlobalBackHome"
-                                Style="{StaticResource SecondaryButton}"
-                                Margin="0,0,8,8" />
-                    </WrapPanel>
 
                     <!-- 连接前的准备：可折叠的连接图示与说明，默认展开；进入本页不会自动访问设备。 -->
                     <Expander x:Name="GlobalAndroidConnectionGuide"
@@ -3562,7 +3601,7 @@
                     </Expander>
 
                     <!-- 连接：型号由连接时自动识别，页面没有手动选择；进入本页不会自动访问设备。 -->
-                    <Border Style="{StaticResource CardBorder}" Margin="0,12,0,0">
+                    <Border x:Name="GlobalConnectionStep" Style="{StaticResource CardBorder}" Margin="0,12,0,0">
                         <StackPanel>
                             <TextBlock x:Name="GlobalAutoDetectText"
                                        Text="{DynamicResource Static.Global.AutoDetect}"
@@ -3627,6 +3666,16 @@
                             <TextBlock Text="{DynamicResource Static.Global.BackupBody}"
                                        Style="{StaticResource BodyText}"
                                        TextWrapping="Wrap" />
+                            <TextBlock Text="{DynamicResource Static.Global.BackupDirectoryLabel}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <TextBlock Text="{Binding Text, ElementName=GlobalBackupDirectoryBox}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource InkBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,0,0" />
                             <WrapPanel Margin="0,10,0,0">
                                 <Button x:Name="GlobalBackupButton"
                                         Content="{DynamicResource Static.Global.BackupButton}"
@@ -3651,59 +3700,63 @@
                             <TextBlock Text="{DynamicResource Static.Global.RestoreBody}"
                                        Style="{StaticResource BodyText}"
                                        TextWrapping="Wrap" />
-                            <TextBlock Text="{DynamicResource Static.Global.RestoreDirectoryLabel}"
-                                       FontSize="12"
-                                       Foreground="{DynamicResource MutedBrush}"
-                                       TextWrapping="Wrap"
-                                       Margin="0,10,0,0" />
-                            <Grid Margin="0,4,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBox x:Name="GlobalRestoreDirectoryBox"
-                                         Style="{StaticResource InputTextBox}"
-                                         Grid.Column="0"
-                                         IsReadOnly="True"
-                                         TextWrapping="NoWrap" />
-                                <Button x:Name="GlobalBrowseRestoreButton"
-                                        Grid.Column="1"
-                                        Content="{DynamicResource Static.Global.Browse}"
-                                        Click="OnGlobalBrowseRestore"
-                                        Style="{StaticResource SecondaryButton}"
-                                        Margin="8,0,0,0" />
-                            </Grid>
-                            <WrapPanel Margin="0,10,0,0">
-                                <Button x:Name="GlobalPrepareRestoreButton"
-                                        Content="{DynamicResource Static.Global.PrepareRestore}"
-                                        Click="OnGlobalPrepareRestoreAction"
-                                        Style="{StaticResource PrimaryButton}"
-                                        Margin="0,0,8,8" />
-                            </WrapPanel>
+                            <StackPanel x:Name="GlobalRestoreSourceInputs">
+                                <TextBlock Text="{DynamicResource Static.Global.RestoreDirectoryLabel}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource MutedBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,10,0,0" />
+                                <Grid Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="GlobalRestoreDirectoryBox"
+                                             Style="{StaticResource InputTextBox}"
+                                             Grid.Column="0"
+                                             IsReadOnly="True"
+                                             TextWrapping="NoWrap" />
+                                    <Button x:Name="GlobalBrowseRestoreButton"
+                                            Grid.Column="1"
+                                            Content="{DynamicResource Static.Global.Browse}"
+                                            Click="OnGlobalBrowseRestore"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Margin="8,0,0,0" />
+                                </Grid>
+                                <WrapPanel Margin="0,10,0,0">
+                                    <Button x:Name="GlobalPrepareRestoreButton"
+                                            Content="{DynamicResource Static.Global.PrepareRestore}"
+                                            Click="OnGlobalPrepareRestoreAction"
+                                            Style="{StaticResource PrimaryButton}"
+                                            Margin="0,0,8,8" />
+                                </WrapPanel>
+                            </StackPanel>
                             <TextBlock x:Name="GlobalRestoreSummaryText"
                                        Text="{DynamicResource Dynamic.Global.NoRestorePlan}"
                                        FontSize="12"
                                        Foreground="{DynamicResource MutedBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,0,0,8" />
-                            <CheckBox x:Name="GlobalRestoreConfirmCheck"
-                                      Style="{StaticResource RiskCheckBox}"
-                                      IsChecked="False"
-                                      Checked="OnGlobalRestoreConsentChanged"
-                                      Unchecked="OnGlobalRestoreConsentChanged"
-                                      Margin="0,10,0,10">
-                                <TextBlock Text="{DynamicResource Static.Global.RestoreConsent}"
-                                           TextWrapping="Wrap"
-                                           FontSize="13" />
-                            </CheckBox>
-                            <WrapPanel>
-                                <Button x:Name="GlobalRestoreButton"
-                                        Content="{DynamicResource Static.Global.RestoreButton}"
-                                        Click="OnGlobalRestoreAction"
-                                        Style="{StaticResource PrimaryButton}"
-                                        IsEnabled="False"
-                                        Margin="0,0,8,8" />
-                            </WrapPanel>
+                            <StackPanel x:Name="GlobalRestoreConfirmation">
+                                <CheckBox x:Name="GlobalRestoreConfirmCheck"
+                                          Style="{StaticResource RiskCheckBox}"
+                                          IsChecked="False"
+                                          Checked="OnGlobalRestoreConsentChanged"
+                                          Unchecked="OnGlobalRestoreConsentChanged"
+                                          Margin="0,10,0,10">
+                                    <TextBlock Text="{DynamicResource Static.Global.RestoreConsent}"
+                                               TextWrapping="Wrap"
+                                               FontSize="13" />
+                                </CheckBox>
+                                <WrapPanel>
+                                    <Button x:Name="GlobalRestoreButton"
+                                            Content="{DynamicResource Static.Global.RestoreButton}"
+                                            Click="OnGlobalRestoreAction"
+                                            Style="{StaticResource PrimaryButton}"
+                                            IsEnabled="False"
+                                            Margin="0,0,8,8" />
+                                </WrapPanel>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 
@@ -3754,10 +3807,8 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- 离线升级视图同样占满主体三列；可见性只由 ApplyFunctionView() 决定。 -->
             <local:OfflineUpgradeView x:Name="OfflineUpgradePanel"
-                                      Grid.Column="0"
-                                      Grid.ColumnSpan="3"
+                                      Grid.Column="2"
                                       Visibility="Collapsed" />
 
             <!--
@@ -4673,6 +4724,24 @@
                             Style="{StaticResource PrimaryButton}"
                             Margin="10,0,0,0"
                             Visibility="Collapsed" />
+                </StackPanel>
+
+                <StackPanel x:Name="AuxiliaryWorkflowButtons"
+                            Grid.Column="3"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed">
+                    <Button x:Name="AuxiliaryWorkflowPreviousButton"
+                            Content="{DynamicResource Static.Previous}"
+                            Tag="-1"
+                            Click="OnAuxiliaryWorkflowShift"
+                            Style="{StaticResource SecondaryButton}" />
+                    <Button x:Name="AuxiliaryWorkflowNextButton"
+                            Content="{DynamicResource Static.Next}"
+                            Tag="1"
+                            Click="OnAuxiliaryWorkflowShift"
+                            Style="{StaticResource PrimaryButton}"
+                            Margin="10,0,0,0" />
                 </StackPanel>
             </Grid>
         </Border>

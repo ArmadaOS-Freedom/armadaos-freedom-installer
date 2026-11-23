@@ -30,6 +30,71 @@ public sealed class UiTextTests
         RegexOptions.CultureInvariant);
 
     [Fact]
+    public void ScreenshotConnectTimeout_RawErrorIsMaskedForDisplayButKeptInRawFormat()
+    {
+        const string raw = "No EDL endpoint for serial TEST123 appeared within 90 seconds.";
+        var message = new UiMessage("Dynamic.Global.Status.ConnectFailed", new TimeoutException(raw));
+        var text = new UiText(UiText.ChineseLanguage);
+
+        var chineseDisplay = text.FormatForDisplay(message);
+        Assert.Contains("连接失败", chineseDisplay);
+        Assert.Contains("90 秒", chineseDisplay);
+        Assert.Contains("9008", chineseDisplay);
+        Assert.DoesNotContain("TEST123", chineseDisplay);
+        Assert.DoesNotContain(raw, chineseDisplay);
+        Assert.Contains(raw, text.Format(message));
+
+        text.SetLanguage(UiText.EnglishLanguage);
+        var englishDisplay = text.FormatForDisplay(message);
+        Assert.Contains("Connect failed", englishDisplay);
+        Assert.Contains("90 seconds", englishDisplay);
+        Assert.DoesNotContain(raw, englishDisplay);
+        Assert.DoesNotContain("TEST123", englishDisplay);
+        Assert.Contains(raw, text.Format(message));
+    }
+
+    [Fact]
+    public void NestedArgumentUiMessage_DisplayKeepsPathAndMasksUnknownProseButRawFormatPreservesIt()
+    {
+        const string unknownRawProse = "vendor driver stack trace 0xDEADBEEF should stay raw only";
+        const string localPath = "C:\\Backups\\tablet-2024-06-01";
+        var inner = new UiMessage("Dynamic.InternalInstall.Backup.Failed", unknownRawProse, localPath);
+        var message = new UiMessage("Dynamic.Diagnostics.Failed", inner);
+        var text = new UiText(UiText.ChineseLanguage);
+
+        var chineseDisplay = text.FormatForDisplay(message);
+        Assert.Contains(localPath, chineseDisplay);
+        Assert.DoesNotContain(unknownRawProse, chineseDisplay);
+        Assert.Contains(localPath, text.Format(message));
+        Assert.Contains(unknownRawProse, text.Format(message));
+
+        text.SetLanguage(UiText.EnglishLanguage);
+        var englishDisplay = text.FormatForDisplay(message);
+        Assert.Contains(localPath, englishDisplay);
+        Assert.DoesNotContain(unknownRawProse, englishDisplay);
+        Assert.Contains(localPath, text.Format(message));
+        Assert.Contains(unknownRawProse, text.Format(message));
+    }
+
+    [Fact]
+    public void AlreadyLocalizedTypedFailure_InMaskedSlot_UsesItsOwnUiMessageInBothLanguages()
+    {
+        var unauthorized = new UiMessage("Dynamic.Global.Error.UnauthorizedAdb");
+        var message = new UiMessage("Dynamic.Diagnostics.Failed", unauthorized);
+        var text = new UiText(UiText.ChineseLanguage);
+
+        var chineseDisplay = text.FormatForDisplay(message);
+        var chineseUnauthorized = new UiText(UiText.ChineseLanguage).FormatForDisplay(unauthorized);
+        Assert.Contains(chineseUnauthorized, chineseDisplay);
+
+        text.SetLanguage(UiText.EnglishLanguage);
+        var englishDisplay = text.FormatForDisplay(message);
+        var englishUnauthorized = new UiText(UiText.EnglishLanguage).FormatForDisplay(unauthorized);
+        Assert.Contains(englishUnauthorized, englishDisplay);
+        Assert.NotEqual(chineseUnauthorized, englishUnauthorized);
+    }
+
+    [Fact]
     public void InternalInstallPreparationFailure_MessageIsLocalizedInBothLanguages()
     {
         var exception = Assert.Throws<InternalInstallWorkDiskSpaceException>(

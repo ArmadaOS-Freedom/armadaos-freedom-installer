@@ -10,8 +10,23 @@ namespace FreedomInstaller.App;
 public partial class MainWindow
 {
     private InternalBackupSet? _internalInstallRecoverySource;
+    private BoardRecoveryExtraction? _internalInstallTemporaryRecoveryExtraction;
     private string? _boardRecoveryAttemptManifest;
     private string? _boardRecoveryDiscoveredDirectory;
+    private bool _userdataUninstallUseBoardBackup = true;
+
+    private string? SelectedUserdataUninstallPcBackup => _userdataUninstallUseBoardBackup ? null : _bootMaintenanceOriginalDirectory;
+
+    private string?[] SharedBackupProtectedSourceDirectories => IsModernUserdataUninstallMode
+        ? new[] { SelectedUserdataUninstallPcBackup }
+        : new[] { _bootMaintenanceOriginalDirectory, _bootMaintenanceProjectDirectory };
+
+    private void ClearUserdataUninstallRecoverySource()
+    {
+        _internalInstallRecoverySource?.Dispose();
+        _internalInstallRecoverySource = null;
+        _boardRecoveryAttemptManifest = null;
+    }
 
     private static string DefaultRecoveryOutputDirectory()
     {
@@ -57,9 +72,12 @@ public partial class MainWindow
                         catch { tools.Dispose(); throw; }
                     }
                     // 修复模式不使用 PC 原厂来源：始终优先板内恢复材料，再由自动回滚捕获建立来源。
-                    if (!IsRepairInstallationMode && !string.IsNullOrWhiteSpace(_bootMaintenanceOriginalDirectory))
+                    var activeExplicitDirectory = IsModernUserdataUninstallMode
+                        ? SelectedUserdataUninstallPcBackup
+                        : _bootMaintenanceOriginalDirectory;
+                    if (!IsRepairInstallationMode && !string.IsNullOrWhiteSpace(activeExplicitDirectory))
                     {
-                        var chosen = UninstallBackupDirectorySelection.Resolve(_bootMaintenanceOriginalDirectory);
+                        var chosen = UninstallBackupDirectorySelection.Resolve(activeExplicitDirectory);
                         if (chosen.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || chosen.DirectoryPath is null)
                             throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
                         await BindUninstallRecoveryIdentityAsync(client, chosen.DirectoryPath, token);
@@ -89,12 +107,27 @@ public partial class MainWindow
                         BoardRecoveryExtraction? extraction = null;
                         try
                         {
-                            extraction = await BoardRecoveryBackup.ReadDirectoryAsync(client, parent, TemporaryWorkRoot, token);
+                            // Uninstall always performs a fresh real board read; never reuse a retained PC copy
+                            // left behind by a previous failed attempt.
+                            extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
+                                client,
+                                IsModernUserdataUninstallMode ? TemporaryWorkRoot : parent,
+                                TemporaryWorkRoot,
+                                token,
+                                allowRetainedCopy: !IsModernUserdataUninstallMode);
                             if (extraction is not null)
                             {
                                 await BindUninstallRecoveryIdentityAsync(client, extraction.DirectoryPath, token);
-                                extraction.Retain();
-                                source = extraction.DirectoryPath;
+                                if (IsModernUserdataUninstallMode)
+                                {
+                                    AdoptTemporaryRecoveryExtraction(extraction);
+                                    extraction = null;
+                                }
+                                else
+                                {
+                                    extraction.Retain();
+                                }
+                                source = extraction?.DirectoryPath ?? _internalInstallTemporaryRecoveryExtraction?.DirectoryPath;
                             }
                             else
                             {
@@ -125,7 +158,7 @@ public partial class MainWindow
                             throw new InvalidOperationException(T("Dynamic.BootMaintenance.Repair.NeedAndroidIdentity"));
                         }
 
-                        var selected = _bootMaintenanceOriginalDirectory
+                        var selected = activeExplicitDirectory
                             ?? PickExistingDirectory(null, "Dynamic.RecoverySource.PickOriginal");
                         if (selected is null) throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
                         var selection = UninstallBackupDirectorySelection.Resolve(selected);
@@ -133,6 +166,10 @@ public partial class MainWindow
                             ? selection.DirectoryPath : throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
                         await BindUninstallRecoveryIdentityAsync(client, source!, token);
                         _bootMaintenanceOriginalDirectory = source;
+                        if (IsModernUserdataUninstallMode)
+                        {
+                            _userdataUninstallUseBoardBackup = false;
+                        }
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -177,9 +214,12 @@ public partial class MainWindow
     private async Task<InternalBackupSet> GetBoardFirstRecoverySourceAsync(
         InternalBackupSet current, string durableParent, CancellationToken token)
     {
-        if (IsModernUserdataUninstallMode && !string.IsNullOrWhiteSpace(_bootMaintenanceOriginalDirectory))
+        if (IsModernUserdataUninstallMode && !_userdataUninstallUseBoardBackup)
         {
-            var selection = UninstallBackupDirectorySelection.Resolve(_bootMaintenanceOriginalDirectory);
+            var selectedPc = SelectedUserdataUninstallPcBackup;
+            if (string.IsNullOrWhiteSpace(selectedPc))
+                throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+            var selection = UninstallBackupDirectorySelection.Resolve(selectedPc);
             if (selection.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || selection.DirectoryPath is null)
                 throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
             if (_internalInstallRecoverySource is { } explicitCached
@@ -199,19 +239,32 @@ public partial class MainWindow
         }
         if (_internalInstallRecoverySource is { } cached)
         {
-            BoardRecoveryBackup.ValidateSourceForReuse(current, cached);
-            return cached;
+            try
+            {
+                BoardRecoveryBackup.ValidateSourceForReuse(current, cached);
+                return cached;
+            }
+            catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonException or FormatException or InvalidDataException)
+            {
+                // Auto cached lease is stale: discard it without touching the actual user directory,
+                // clear discovery state and fall through to a fresh read.
+                cached.Dispose();
+                _internalInstallRecoverySource = null;
+                _boardRecoveryDiscoveredDirectory = null;
+                _boardRecoveryAttemptManifest = null;
+                AppendLocalizedLog(M("Dynamic.RawValue", $"{error.GetType().FullName}: {error.Message}"));
+            }
         }
         var client = _internalInstallEdlClient ?? throw new InvalidOperationException("No active EDL connection.");
         if (_boardRecoveryDiscoveredDirectory is { } discovered)
         {
-            _boardRecoveryAttemptManifest = current.ManifestSha256;
             try
             {
                 var discoveredBackup = await InternalInstallBackup.OpenRecoveryAsync(client, discovered, token: token);
                 try { BoardRecoveryBackup.ValidateSourceForReuse(current, discoveredBackup); }
                 catch { discoveredBackup.Dispose(); throw; }
                 _internalInstallRecoverySource = discoveredBackup;
+                _boardRecoveryAttemptManifest = current.ManifestSha256;
                 AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", discoveredBackup.DirectoryPath));
                 return discoveredBackup;
             }
@@ -224,14 +277,23 @@ public partial class MainWindow
         }
         if (_boardRecoveryAttemptManifest != current.ManifestSha256)
         {
-            _boardRecoveryAttemptManifest = current.ManifestSha256;
             AppendLocalizedLog(M("Dynamic.RecoverySource.ReadingBoard"));
             try
             {
-                var board = await BoardRecoveryBackup.ReadAsync(client, current, durableParent, TemporaryWorkRoot, token);
+                var board = await BoardRecoveryBackup.ReadAsync(
+                    client,
+                    current,
+                    IsModernUserdataUninstallMode ? TemporaryWorkRoot : durableParent,
+                    TemporaryWorkRoot,
+                    token,
+                    allowRetainedCopy: !IsModernUserdataUninstallMode,
+                    adoptTemporaryExtraction: IsModernUserdataUninstallMode
+                        ? AdoptTemporaryRecoveryExtraction
+                        : null);
                 if (board is not null)
                 {
                     _internalInstallRecoverySource = board;
+                    _boardRecoveryAttemptManifest = current.ManifestSha256;
                     AppendLocalizedLog(M("Dynamic.RecoverySource.BoardReady", board.DirectoryPath));
                     return board;
                 }
@@ -243,7 +305,7 @@ public partial class MainWindow
             }
         }
 
-        var selected = _bootMaintenanceOriginalDirectory;
+        var selected = IsModernUserdataUninstallMode ? null : _bootMaintenanceOriginalDirectory;
         if (string.IsNullOrWhiteSpace(selected))
             selected = PickExistingDirectory(null, "Dynamic.RecoverySource.PickOriginal");
         token.ThrowIfCancellationRequested();
@@ -256,7 +318,35 @@ public partial class MainWindow
         try { BoardRecoveryBackup.ValidateSourceForReuse(current, recovery); }
         catch { recovery.Dispose(); throw; }
         _internalInstallRecoverySource = recovery;
+        if (IsModernUserdataUninstallMode)
+        {
+            _bootMaintenanceOriginalDirectory = recovery.DirectoryPath;
+            _userdataUninstallUseBoardBackup = false;
+        }
         AppendLocalizedLog(M("Dynamic.RecoverySource.PcReady", recovery.DirectoryPath));
         return recovery;
+    }
+
+    private void AdoptTemporaryRecoveryExtraction(BoardRecoveryExtraction extraction)
+    {
+        ArgumentNullException.ThrowIfNull(extraction);
+        // The failed lease still backs _internalInstallRecoverySource, so release that reference before
+        // dropping the old temporary lease but never discard a lease that a valid plan still uses.
+        var previousExtraction = _internalInstallTemporaryRecoveryExtraction;
+        _internalInstallTemporaryRecoveryExtraction = extraction;
+        if (previousExtraction is not null && !ReferenceEquals(previousExtraction, extraction))
+        {
+            _internalInstallRecoverySource?.Dispose();
+            _internalInstallRecoverySource = null;
+            previousExtraction.Dispose();
+        }
+    }
+
+    private void ReleaseTemporaryRecoveryLease()
+    {
+        _internalInstallTemporaryRecoveryExtraction?.Dispose();
+        _internalInstallTemporaryRecoveryExtraction = null;
+        _boardRecoveryAttemptManifest = null;
+        _boardRecoveryDiscoveredDirectory = null;
     }
 }

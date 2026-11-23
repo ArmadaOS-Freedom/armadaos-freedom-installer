@@ -496,7 +496,7 @@ public partial class MainWindow : Window
 
                 if (_internalInstallBackup is null)
                 {
-                    await BackupInternalInstallCoreAsync(useBoardBackup: _internalInstallBoardBackupDetected);
+                    await BackupInternalInstallCoreAsync();
                 }
 
                 if (_internalInstallBackup is null || !HasCheckedInternalInstallDevice) return;

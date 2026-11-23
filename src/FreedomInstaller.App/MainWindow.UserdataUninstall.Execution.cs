@@ -217,7 +217,6 @@ public partial class MainWindow
             return;
         }
 
-        _userdataUninstallExecuteAttempted = true;
         _userdataUninstallOperationActive = true;
         BootMaintenanceProgressBar.IsIndeterminate = true;
 
@@ -233,6 +232,7 @@ public partial class MainWindow
                         string.Empty,
                         true);
                     request = request with { ConfirmationId = UninstallWorkflow.ConfirmationFor(request) };
+                    _workSession?.ProtectRecovery();
 
                     var progress = new Progress<UninstallStage>(stage =>
                     {
@@ -251,6 +251,8 @@ public partial class MainWindow
                     SetModernUserdataUninstallExitStatus(
                         M("Dynamic.UserdataUninstall.Runtime.Active", M(UserdataUninstallStageKey(UninstallStage.Preflight))));
 
+                    // 保护恢复完成后、真正触达后端前，标记「已尝试」。
+                    _userdataUninstallExecuteAttempted = true;
                     var result = await UninstallWorkflow.RunAsync(request, backend, progress, token);
                     _userdataUninstallLastResult = result;
                     _userdataUninstallDisplayStage = result.Stage;
@@ -340,8 +342,17 @@ public partial class MainWindow
                 }
                 catch (Exception exception)
                 {
-                    // 其他意外异常：结果未知，保留现场与证据，绝不复位、绝不重试。
-                    _userdataUninstallExecutionUnknown = true;
+                    // 尚未触达后端的预写失败：显示既有的预写失败提示并保留 retry；
+                    // 已提交后端后才视为结果未知，保留现场与证据，绝不复位、绝不重试。
+                    if (!_userdataUninstallExecuteAttempted)
+                    {
+                        SetModernUserdataUninstallExitStatus(M("Dynamic.UserdataUninstall.Runtime.PrewriteFailed"));
+                    }
+                    else
+                    {
+                        _userdataUninstallExecutionUnknown = true;
+                    }
+
                     AppendLocalizedLog(M(
                         "Dynamic.RawValue",
                         $"{exception.GetType().FullName}: {exception.Message}"));

@@ -46,8 +46,8 @@ public partial class MainWindow
         ApplyWindowLanguage();
     }
 
-    /// <summary>按当前语言取一条文案；未知键原样返回，便于立刻发现漏登记的键。</summary>
-    internal string T(string key, params object?[] args) => _uiText.Get(key, args);
+    /// <summary>按当前语言取一条面向界面的文案；未知键原样返回，便于立刻发现漏登记的键。</summary>
+    internal string T(string key, params object?[] args) => _uiText.GetForDisplay(key, args);
 
     /// <summary>登记一条文案（键 + 参数快照），返回值可直接交给 <see cref="AppendLocalizedLog"/>。</summary>
     internal UiMessage M(string key, params object?[] args) => new(key, args ?? Array.Empty<object?>());
@@ -187,7 +187,7 @@ public partial class MainWindow
             _localizedProperties[slot] = new LocalizedProperty(apply, message);
         }
 
-        apply(_uiText.Format(message));
+        apply(_uiText.FormatForDisplay(message));
     }
 
     private void RerenderLocalizedMessages()
@@ -251,7 +251,7 @@ public partial class MainWindow
 
         internal void Update(UiMessage message) => Message = message;
 
-        internal void Render(UiText text) => Apply(text.Format(Message));
+        internal void Render(UiText text) => Apply(text.FormatForDisplay(Message));
     }
 
     /// <summary>一行日志：固定的时间戳 + 可重渲染的消息。</summary>

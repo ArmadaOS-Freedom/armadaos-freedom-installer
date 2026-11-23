@@ -140,7 +140,7 @@ public partial class MainWindow
             }
 
             // 已有真实 9008 会话时走 9008 修复备份；否则走共享备份核心。
-            await BackupInternalInstallCoreAsync(useBoardBackup: false);
+            await BackupInternalInstallCoreAsync();
 
             if (!IsRepairInstallationMode
                 || _internalInstallStep != 2
@@ -563,8 +563,8 @@ public partial class MainWindow
             return;
         }
 
-        // 进入真实执行：先立起「已尝试」旗标，再发起唯一一次 ExecuteAsync。
-        _bootMaintenanceExecuteAttempted = true;
+        // 进入真实执行：先立起「活跃中」旗标；「已尝试」旗标在真实 ExecuteAsync 发起前才置位，
+        // 以便区分尚未触达后端的预写失败与已提交后端。
         _bootMaintenanceOperationActive = true;
         _bootMaintenanceProgressTerminal = false;
         RefreshBootMaintenanceActions();
@@ -586,6 +586,9 @@ public partial class MainWindow
         {
             try
             {
+                _workSession?.ProtectRecovery();
+                // 保护恢复完成后、真正触达后端前，标记「已尝试」。
+                _bootMaintenanceExecuteAttempted = true;
                 var result = await backend.ExecuteAsync(confirmationId, executionProgress, token);
                 _bootMaintenanceLastResult = result;
             }

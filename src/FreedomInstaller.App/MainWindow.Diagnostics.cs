@@ -78,10 +78,20 @@ public partial class MainWindow
     /// <summary>
     /// 记录最近一次诊断失败：<paramref name="fullDetail"/> 存入完整上下文供导出脱敏使用，
     /// <paramref name="displayDetail"/> 只用于面板首行展示。
+    /// <paramref name="attemptBootFiles"/> 仅在失败备份发布尝试快照时非空；
+    /// 其余调用一律省略或传 null 并清除旧尝试快照。
     /// </summary>
-    private void RecordDiagnosticFailure(UiMessage stage, string? fullDetail, string? displayDetail)
+    private void RecordDiagnosticFailure(
+        UiMessage stage,
+        string? fullDetail,
+        string? displayDetail,
+        IReadOnlyList<DiagnosticBootFile>? attemptBootFiles = null)
     {
         _diagnosticLastFailureFullDetail = string.IsNullOrWhiteSpace(fullDetail) ? null : fullDetail;
+        // 每次失败都先清除上一轮尝试快照；只有显式传入的失败备份快照得以保留。
+        _diagnosticAttemptBootEvidence = attemptBootFiles is { Count: > 0 }
+            ? new List<DiagnosticBootFile>(attemptBootFiles).AsReadOnly()
+            : null;
         var firstLine = FirstLine(displayDetail);
         if (DiagnosticFailureText is not null)
             SetText(DiagnosticFailureText, "Dynamic.Diagnostics.Failure", stage, firstLine);
@@ -97,6 +107,7 @@ public partial class MainWindow
     private void ClearDiagnosticFailure()
     {
         _diagnosticLastFailureFullDetail = null;
+        _diagnosticAttemptBootEvidence = null;
         if (DiagnosticFailureText is not null)
         {
             _localizedProperties.Remove((DiagnosticFailureText, "Text"));
@@ -308,9 +319,10 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
+            AppendLocalizedLog(M("Dynamic.RawValue", ex.ToString()));
             if (DiagnosticExportResultText is not null)
             {
-                SetText(DiagnosticExportResultText, "Dynamic.Diagnostics.Failed", FirstLine(ex.Message));
+                SetText(DiagnosticExportResultText, "Dynamic.Diagnostics.Failed", ex);
                 DiagnosticExportResultText.Visibility = Visibility.Visible;
             }
         }

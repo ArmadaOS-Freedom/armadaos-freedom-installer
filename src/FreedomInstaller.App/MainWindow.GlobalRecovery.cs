@@ -129,7 +129,12 @@ public partial class MainWindow
             return;
         }
 
+        bool sameActiveMode = _showingGlobalRecovery && _globalRecoveryMode == mode;
         _globalRecoveryMode = mode;
+        if (!sameActiveMode)
+        {
+            ResetAuxiliaryWorkflowStep();
+        }
         ResumeGlobalRecoveryPage();
     }
 
@@ -172,13 +177,8 @@ public partial class MainWindow
         GlobalRestoreTitleText.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
         GlobalBackupLeadText.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
         GlobalRestoreLeadText.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
-        GlobalOutputSection.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
-        GlobalBackupCard.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
-        GlobalRestoreCard.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
-        GlobalAndroidConnectionGuide.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
         GlobalAutoDetectText.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
         GlobalPowerText.Visibility = backup ? Visibility.Visible : Visibility.Collapsed;
-        GlobalManualEdlGuide.Visibility = backup ? Visibility.Collapsed : Visibility.Visible;
         GlobalConnectButton.SetResourceReference(
             ContentControl.ContentProperty,
             backup ? "Static.Global.Connect" : "Static.Global.RestoreConnect");
@@ -219,6 +219,7 @@ public partial class MainWindow
 
         _globalRecoveryMode = GlobalRecoveryMode.Restore;
         _showingEnvironment = false;
+        ResetAuxiliaryWorkflowStep();
         ResumeGlobalRecoveryPage();
     }
 
@@ -420,14 +421,7 @@ public partial class MainWindow
                 && (!writesAttempted || _globalRestoreSucceeded);
         }
 
-        // 本页唯一的返回入口：有受保护现场时不可用。
-        if (GlobalBackHomeButton is not null)
-        {
-            GlobalBackHomeButton.IsEnabled = !busy && !HasGlobalRecoveryProtectedState;
-            GlobalBackHomeButton.SetResourceReference(
-                ContentControl.ContentProperty,
-                EnvironmentIsReady ? "Static.Global.BackHome" : "Static.Environment.Title");
-        }
+        RefreshAuxiliaryWorkflowNavigation();
     }
 
     // ---------- 视图回调闸门 ----------

@@ -49,8 +49,24 @@ public partial class MainWindow
         var requestedRoot = _workSession is null ? _manualWorkRoot : _workDirectory?.RootPath;
         try
         {
+            bool canSweep = _workSession is null;
+            string? sweepRoot = canSweep
+                ? (string.IsNullOrWhiteSpace(requestedRoot)
+                    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "ArmadaOS Freedom", "Work")
+                    : requestedRoot)
+                : null;
             var result = await System.Threading.Tasks.Task.Run(
-                () => InstallerWorkDirectory.Resolve(requestedRoot), cancellationToken);
+                () =>
+                {
+                    if (sweepRoot is not null) InstallerWorkSession.SweepAbandoned(sweepRoot);
+                    var resolved = InstallerWorkDirectory.Resolve(requestedRoot);
+                    if (sweepRoot is not null
+                        && !string.Equals(Path.GetFullPath(resolved.RootPath), Path.GetFullPath(sweepRoot), StringComparison.OrdinalIgnoreCase)
+                        && InstallerWorkSession.SweepAbandoned(resolved.RootPath) > 0)
+                        resolved = InstallerWorkDirectory.Resolve(resolved.RootPath);
+                    return resolved;
+                }, cancellationToken);
             if (_closed) return;
             cancellationToken.ThrowIfCancellationRequested();
             _workDirectory = result;
@@ -137,10 +153,16 @@ public partial class MainWindow
 
     private void CleanWorkFilesOnClose(bool preserveRecovery)
     {
-        if (_workSession is null || preserveRecovery || _internalInstallOperationActive
-            || _userdataUninstallOperationActive || _bootMaintenanceOperationActive) return;
+        var session = _workSession;
+        if (session is null) return;
         try
         {
+            if (preserveRecovery || _internalInstallOperationActive
+                || _userdataUninstallOperationActive || _bootMaintenanceOperationActive)
+            {
+                session.Complete(true);
+                return;
+            }
             // Closing an idle window releases file leases only; it sends no device command.
             _userdataUninstallBackend?.Dispose();
             _userdataUninstallMenu?.Dispose();
@@ -154,12 +176,16 @@ public partial class MainWindow
             _internalInstallBackup?.Dispose();
             _internalInstallRecoverySource?.Dispose();
             _internalInstallEdlTools?.Dispose();
-            _workSession.Complete(false);
+            session.Complete(false);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             // Keep the owned directory when a lease cannot be released or a receipt cannot be saved.
             System.Diagnostics.Trace.WriteLine("Installer work cleanup: " + exception.Message);
+        }
+        finally
+        {
+            session.Dispose();
         }
     }
 }

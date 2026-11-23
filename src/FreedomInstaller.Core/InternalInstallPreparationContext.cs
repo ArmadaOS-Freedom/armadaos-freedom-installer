@@ -905,6 +905,21 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 string sourceSlot = sourceSlots[slot];
                 inactiveTargets.TryGetValue(slot, out EdlRawInactiveSlotBackup? inactiveTarget);
 
+                VerifiedEdlFile? recoveryBoot = null;
+                if (artifactFacts.BoardSummary is null && contract.BootRecipe.UsesArmadaBoot && sourceSlot == slot && artifactSet.RecoveryBackup is { } recovery
+                    && recovery.Files.ContainsKey("boot_" + slot)
+                    && recovery.Files.TryGetValue("vendor_boot_" + slot, out EdlCapturedRegion? archivedVendorBoot)
+                    && recovery.Files.TryGetValue("init_boot_" + slot, out EdlCapturedRegion? archivedInitBoot)
+                    && backupFacts.Files.TryGetValue("vendor_boot_" + slot, out EdlCapturedRegion? liveVendorBoot)
+                    && backupFacts.Files.TryGetValue("init_boot_" + slot, out EdlCapturedRegion? liveInitBoot)
+                    && SameSha(archivedVendorBoot.Sha256, liveVendorBoot.Sha256)
+                    && archivedVendorBoot.Length == liveVendorBoot.Length
+                    && SameSha(archivedInitBoot.Sha256, liveInitBoot.Sha256)
+                    && archivedInitBoot.Length == liveInitBoot.Length)
+                {
+                    recoveryBoot = Claim(recovery.Files, "boot_" + slot);
+                }
+
                 try
                 {
                     EdlRawBuiltBoot built = await EdlRawBootBuilder
@@ -919,7 +934,10 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                                 contract,
                                 ownAssets.Tools,
                                 evidenceDirectory,
-                                inactiveTarget),
+                                inactiveTarget)
+                            {
+                                ReinstallRecoveryBoot = recoveryBoot,
+                            },
                             services.CommandRunner,
                             cancellationToken)
                         .ConfigureAwait(false);

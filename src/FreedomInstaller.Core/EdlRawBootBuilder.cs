@@ -242,8 +242,18 @@ public static partial class EdlRawBootBuilder
 
             // Base export: the existing reader recovers the source-slot Android kernel and writes it once.
             string baseImagePath = Path.Combine(child, BaseImageFileName);
-            InternalSlotMaterial material = await InternalSlotMaterialReader
-                .AnalyzeAndExportBaseAsync(
+            InternalSlotMaterial material = await (request.ReinstallRecoveryBoot is { } recoveryBoot
+                ? InternalSlotMaterialReader.AnalyzeAndExportReinstallBaseAsync(
+                    sourceSlot,
+                    request.CurrentBoot,
+                    request.VendorBoot,
+                    request.InitBoot,
+                    request.Abl,
+                    request.XblConfig,
+                    recoveryBoot,
+                    baseImagePath,
+                    token)
+                : InternalSlotMaterialReader.AnalyzeAndExportBaseAsync(
                     sourceSlot,
                     request.CurrentBoot,
                     request.VendorBoot,
@@ -251,7 +261,7 @@ public static partial class EdlRawBootBuilder
                     request.Abl,
                     request.XblConfig,
                     baseImagePath,
-                    token)
+                    token))
                 .ConfigureAwait(false);
 
             var baseClaim = new VerifiedEdlFile(baseImagePath, material.BaseImageLength, material.BaseImageSha256);

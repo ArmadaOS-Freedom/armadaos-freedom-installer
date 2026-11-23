@@ -22,8 +22,8 @@ internal sealed record UiMessage(string Key, params object?[] Arguments);
 /// </summary>
 internal sealed class LocalizedInvalidOperationException : InvalidOperationException
 {
-    public LocalizedInvalidOperationException(UiMessage message, string? diagnostic = null)
-        : base(diagnostic ?? message.Key)
+    public LocalizedInvalidOperationException(UiMessage message, string? diagnostic = null, Exception? innerException = null)
+        : base(diagnostic ?? message.Key, innerException)
     {
         UserMessage = message;
     }
@@ -158,7 +158,50 @@ internal sealed class UiText
     /// An unknown key returns the key; invalid placeholders return the unformatted catalog text.
     /// </summary>
     internal string Get(string key, params object?[] args) =>
-        string.IsNullOrEmpty(key) ? string.Empty : FormatKey(key, args, 0);
+        string.IsNullOrEmpty(key) ? string.Empty : FormatKey(key, args, 0, false);
+
+    /// <summary>
+    /// Resolves <paramref name="key"/> for the visible UI surface. In display mode
+    /// <see cref="DisplayErrorArgumentMask(string)"/> marks arguments that carry diagnostic
+    /// values; those are rendered as a localized semantic message instead of being shown verbatim.
+    /// </summary>
+    internal string GetForDisplay(string key, params object?[] args) =>
+        string.IsNullOrEmpty(key) ? string.Empty : FormatKey(key, args, 0, true);
+
+    /// <summary>
+    /// Maps a raw or untyped value flowing to the visible surface onto a localized semantic message.
+    /// Already-localized messages are passed through; null or blank values become a neutral fallback.
+    /// </summary>
+    internal static UiMessage DisplayError(object? value)
+    {
+        if (value is LocalizedInvalidOperationException localized)
+            value = localized.UserMessage;
+        if (value is UiMessage message)
+        {
+            if (message.Key == "Dynamic.RawValue" || message.Key == "Dynamic.OfflineUpdate.Value")
+                return new UiMessage("Dynamic.ErrorDetail.Generic");
+            return message;
+        }
+        var text = value is Exception exception ? exception.Message : value as string;
+        if (!string.IsNullOrEmpty(text))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(text, @"\ANo EDL endpoint for serial \S+ appeared within ([0-9]+(?:[.,][0-9]+)?) seconds\.\z");
+            if (match.Success)
+                return new UiMessage("Dynamic.ErrorDetail.EdlTimeout", match.Groups[1].Value);
+            if (text.StartsWith("requires-compatible-bootloader:", StringComparison.Ordinal) || text.StartsWith("blocked-locked-g4-first-install-firmware:", StringComparison.Ordinal))
+                return new UiMessage("Dynamic.ErrorDetail.Compatibility");
+        }
+        var key = value switch
+        {
+            TimeoutException => "Timeout",
+            UnauthorizedAccessException or System.Security.SecurityException => "Security",
+            FileNotFoundException or DirectoryNotFoundException => "FileNotFound",
+            OperationCanceledException => "Canceled",
+            null => "Unknown",
+            _ => "Generic",
+        };
+        return new UiMessage("Dynamic.ErrorDetail." + key);
+    }
 
     /// <summary>
     /// Maps a preparation failure to a localizable message. Known cases (disk space, the four
@@ -247,9 +290,16 @@ internal sealed class UiText
 
     /// <summary>Resolves a message, including nested <see cref="UiMessage"/> arguments.</summary>
     internal string Format(UiMessage message) =>
-        message is null ? string.Empty : FormatKey(message.Key, message.Arguments, 0);
+        message is null ? string.Empty : FormatKey(message.Key, message.Arguments, 0, false);
 
-    private string FormatKey(string key, object?[]? args, int depth)
+    /// <summary>
+    /// Resolves a message for the visible UI surface: diagnostic-value positions are replaced with
+    /// localized semantic text, while paths, numbers, model names and IDs pass through unchanged.
+    /// </summary>
+    internal string FormatForDisplay(UiMessage message) =>
+        message is null ? string.Empty : FormatKey(message.Key, message.Arguments, 0, true);
+
+    private string FormatKey(string key, object?[]? args, int depth, bool display)
     {
         var format = ResolveFormat(key);
         if (args is null || args.Length == 0)
@@ -257,10 +307,24 @@ internal sealed class UiText
             return format;
         }
 
+        var mask = DisplayErrorArgumentMask(key);
         var resolved = new object?[args.Length];
         for (var index = 0; index < args.Length; index++)
         {
-            resolved[index] = ResolveArgument(args[index], depth);
+            var argument = args[index];
+            if (index < 32 && (mask & (1 << index)) != 0)
+            {
+                if (display)
+                {
+                    argument = DisplayError(argument);
+                }
+                else if (argument is Exception exception)
+                {
+                    argument = exception.Message;
+                }
+            }
+
+            resolved[index] = ResolveArgument(argument, depth, display);
         }
 
         try
@@ -274,10 +338,118 @@ internal sealed class UiText
         }
     }
 
-    private object? ResolveArgument(object? argument, int depth) =>
-        argument is UiMessage message && depth < MaxFormatDepth
-            ? FormatKey(message.Key, message.Arguments, depth + 1)
-            : argument;
+    private object? ResolveArgument(object? argument, int depth, bool display)
+    {
+        if (argument is UiMessage message)
+        {
+            if (depth < MaxFormatDepth)
+            {
+                return FormatKey(message.Key, message.Arguments, depth + 1, display);
+            }
+
+            return display ? ResolveFormat("Dynamic.ErrorDetail.Generic") : message;
+        }
+
+        return argument;
+    }
+
+    private static int DisplayErrorArgumentMask(string key) => key switch
+    {
+        "Dynamic.Diagnostics.Failed" or
+        "Dynamic.Global.Status.ConnectFailed" or
+        "Dynamic.Global.Status.RestorePrepareFailed" or
+        "Dynamic.Global.Status.RestoreNotStarted" or
+        "Dynamic.Global.Status.BackupFailed" or
+        "Dynamic.Global.Status.RestoreUncertain" or
+        "Dynamic.Global.Status.ResetUnknown" or
+        "Dynamic.InternalInstall.Capacity.StatusWorkRootFailed" or
+        "Dynamic.InternalInstall.Capacity.ImportFailed" or
+        "Dynamic.InternalInstall.Capacity.Invalid" or
+        "Dynamic.InternalInstall.Capacity.RangeFailed" or
+        "Dynamic.InternalInstall.Capacity.PlanFailed" or
+        "Dynamic.InternalInstall.Capacity.PackageCleanupFailed" or
+        "Dynamic.InternalInstall.Capacity.ArtifactCleanupFailed" or
+        "Dynamic.InternalInstall.Prepared.ReleaseFailed" or
+        "Dynamic.InternalInstall.Prepared.CompatibilityRequired" or
+        "Dynamic.InternalInstall.Execution.Acceptance.Failed" or
+        "Dynamic.InternalInstall.Execution.PrewriteFailed" or
+        "Dynamic.InternalInstall.Check.Failed" or
+        "Dynamic.InternalInstall.Check.ReturnUnconfirmed" or
+        "Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceUnavailable" or
+        "Dynamic.InternalInstall.Backup.Failed" or
+        "Dynamic.InternalInstall.Backup.ExistingFailed" or
+        "Dynamic.InternalInstall.Exit.ProofFailed" or
+        "Dynamic.InternalInstall.Exit.ResetUnknown" or
+        "Dynamic.InternalInstall.Exit.ReturnUnconfirmed" or
+        "Dynamic.InternalInstall.Exit.Mismatch" or
+        "Dynamic.Capacity.NoteRangeFailed" or
+        "Dynamic.Capacity.NotePlanFailed" or
+        "Dynamic.ToolsStatus.PrepareFailed" or
+        "Dynamic.DeviceHint.IdentityFailed" or
+        "Dynamic.Layout.Unavailable" or
+        "Dynamic.Layout.InvalidResponse" or
+        "Dynamic.Layout.ReadFailed" or
+        "Dynamic.Uninstall.StatusPlanFailed" or
+        "Dynamic.Uninstall.NoteRecordFailed" or
+        "Dynamic.UninstallFlow.Maintenance.StatusAndroidReadFailed" or
+        "Dynamic.UninstallFlow.Maintenance.WorkRootCreateFailed" or
+        "Dynamic.UninstallFlow.Maintenance.StatusBootFailed" or
+        "Dynamic.UninstallFlow.Maintenance.StatusStartIncomplete" or
+        "Dynamic.UninstallFlow.Maintenance.StatusPortsFailed" or
+        "Dynamic.UninstallFlow.Maintenance.StatusConnectFailed" or
+        "Dynamic.Package.StatusCleanupFailed" or
+        "Dynamic.Progress.Failed" or
+        "Dynamic.UninstallFlow.Input.RecoveryFailed" or
+        "Dynamic.UninstallFlow.Input.Failed" or
+        "Dynamic.UninstallFlow.Inspect.Invalid" or
+        "Dynamic.UninstallFlow.Transaction.StatusQueryFailed" or
+        "Dynamic.UninstallFlow.Transaction.StatusError" or
+        "Dynamic.UninstallFlow.Run.FailedBeforeWrite" or
+        "Dynamic.UninstallFlow.Run.FailedAfterWrite" or
+        "Dynamic.UninstallFlow.Run.Uncertain" or
+        "Dynamic.UninstallFlow.Verify.Failed" or
+        "Dynamic.UninstallFlow.Edl.Failed" or
+        "Dynamic.UninstallFlow.EdlRestore.PrepareFailed" or
+        "Dynamic.UninstallFlow.EdlRestore.Run.Uncertain" or
+        "Dynamic.UninstallFlow.EdlRestore.Run.ResetUnconfirmed" or
+        "Dynamic.UninstallFlow.EdlVerify.Failed" or
+        "Dynamic.UninstallFlow.EdlVerify.Pending" or
+        "Dynamic.UserdataUninstall.Status.PrepareFailureDetail" or
+        "Dynamic.RecoverySource.BoardInvalid" or
+        "Dynamic.RecoverySource.Failed" or
+        "Dynamic.Environment.WorkFailed" or
+        "Dynamic.OfflineUpdate.StateFailed" or
+        "Dynamic.OfflineUpdate.ErrorReceiptFlagBlocked" or
+        "Dynamic.OfflineUpdate.ErrorHostKeyRejected" or
+        "Dynamic.OfflineUpdate.ErrorPasswordAuthRejected" or
+        "Dynamic.OfflineUpdate.ErrorUpdateComponentsMissing" or
+        "Dynamic.OfflineUpdate.ErrorSudoUnavailable" or
+        "Dynamic.OfflineUpdate.ErrorConnectTimeout" or
+        "Dynamic.OfflineUpdate.ErrorConnectFailed" or
+        "Dynamic.OfflineUpdate.ErrorUsbConnection" or
+        "Dynamic.OfflineUpdate.ErrorSavedSessionsUnavailable" or
+        "Dynamic.OfflineUpdate.StateSavedSessionsUnavailable" or
+        "Dynamic.OfflineUpdate.PairingCopyFailed" or
+        "Dynamic.OfflineUpdate.StateCompletionFailed" or
+        "Dynamic.OfflineUpdate.StateCompletionMismatch" or
+        "Dynamic.OfflineUpdate.StateCompletionUnverified" or
+        "Dynamic.OfflineUpdate.ErrorBootstrapFailed" or
+        "Dynamic.OfflineUpdate.StatePreflightFailed" or
+        "Dynamic.OfflineUpdate.ErrorPreflightFailed" => 1,
+        "Dynamic.Diagnostics.Failure" or
+        "Dynamic.Package.StatusRejectedForModel" or
+        "Dynamic.UninstallFlow.Transaction.StatusFailed" or
+        "Dynamic.UninstallFlow.Transaction.StatusRecoveryFailed" or
+        "Dynamic.UninstallFlow.EdlRestore.Run.FailedAfterWrite" or
+        "Dynamic.UninstallFlow.EdlRestore.Run.FailedBeforeWrite" or
+        "Dynamic.UserdataUninstall.Status.SourceInvalid" or
+        "Dynamic.OfflineUpdate.StateRestartRejected" => 2,
+        "Dynamic.InternalInstall.Exit.ResetUnknownUnconfirmed" => 3,
+        "Dynamic.OfflineUpdate.StateDamagedSessionRecord" or
+        "Dynamic.UserdataUninstall.Runtime.StockRestoreFailed" => 4,
+        "Dynamic.InternalInstall.Execution.FailureDetails" => 8,
+        _ => 0,
+    };
 
     private string ResolveFormat(string key)
     {

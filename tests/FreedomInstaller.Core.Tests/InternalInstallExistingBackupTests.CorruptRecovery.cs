@@ -44,6 +44,7 @@ namespace FreedomInstaller.Core.Tests
                         Assert.Equal(expectedPickerCalls, shell.PickerCallCount);
                         Assert.Equal(setup.OriginalManifest, resolved.ManifestSha256);
                         Assert.Equal(setup.OriginalDirectory, resolved.DirectoryPath, ignoreCase: true);
+                        Assert.False(shell.BoardBackupSelected);
                         Assert.Contains(shell.TestLog, m => m == "Dynamic.RecoverySource.BoardInvalid");
                     }
                     else if (scenario == "null-picker")
@@ -51,12 +52,14 @@ namespace FreedomInstaller.Core.Tests
                         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => shell.ResolveAsync(setup.Current, setup.DurableParent));
                         Assert.Equal("Dynamic.RecoverySource.NeedOriginal", ex.Message);
                         Assert.Equal(expectedPickerCalls, shell.PickerCallCount);
+                        Assert.True(shell.BoardBackupSelected);
                         Assert.Contains(shell.TestLog, m => m == "Dynamic.RecoverySource.BoardInvalid");
                     }
                     else
                     {
                         await Assert.ThrowsAsync<InvalidDataException>(() => shell.ResolveAsync(setup.Current, setup.DurableParent));
                         Assert.Equal(expectedPickerCalls, shell.PickerCallCount);
+                        Assert.True(shell.BoardBackupSelected);
                         Assert.Contains(shell.TestLog, m => m == "Dynamic.RecoverySource.BoardInvalid");
                     }
                 }
