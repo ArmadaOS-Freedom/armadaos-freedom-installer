@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.LogicalTree;
 using FreedomInstaller.App;
 using FreedomInstaller.Core;
 
@@ -77,6 +78,21 @@ internal sealed class Localization
     }
 
     internal void Set(TextBlock target, string key, params object?[] args) => Set(target, new UiMessage(key, args));
+
+    /// <summary>
+    /// Stops tracking every text inside <paramref name="root"/> (call before removing those rows from the window),
+    /// so rebuilt lists do not keep their old rows alive and a language switch does not reformat detached rows.
+    /// </summary>
+    internal void Forget(Control root)
+    {
+        var detached = _texts.Keys
+            .Where(text => ReferenceEquals(text, root) || text.GetLogicalAncestors().Contains(root))
+            .ToList();
+        foreach (var text in detached)
+        {
+            _texts.Remove(text);
+        }
+    }
 
     /// <summary>
     /// Creates a translated log row, appends it to <paramref name="pane"/> and keeps that pane at

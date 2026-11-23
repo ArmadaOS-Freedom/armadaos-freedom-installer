@@ -263,19 +263,39 @@ class MacUninstallParityTests(unittest.TestCase):
         ]
         positions = [prepare.index(name) for name in order]
         self.assertEqual(positions, sorted(positions))
-        execute = mac[mac.index("private async Task ExecuteUninstallAsync"):]
-        positions = [execute.index(name) for name in (
-            "UninstallWorkflow.ConfirmationFor(",
-            "UninstallWorkflow.RunAsync(",
-            "UninstallStockBootRestoration.RestoreAfterUninstallAsync(",
-            "client.ResetAsync(",
-        )]
-        self.assertEqual(positions, sorted(positions))
+        # Only the body of ExecuteUninstallAsync: a reset elsewhere (for example on leaving the page) must not
+        # stand in for the one after a successful uninstall.
+        start = mac.index("private async Task ExecuteUninstallAsync")
+        execute = mac[start:mac.index("\n    private ", start + 1)]
+        confirmation = execute.index("UninstallWorkflow.ConfirmationFor(")
+        run = execute.index("UninstallWorkflow.RunAsync(")
+        self.assertLess(confirmation, run)
+        # The two outcomes are alternatives: the stock branch restores and returns without a reset of its own,
+        # the keep-project branch sends exactly one reset.
+        stock_branch = execute.index("if (capturedRestoreStock)", run)
+        restore = execute.index("UninstallStockBootRestoration.RestoreAfterUninstallAsync(", stock_branch)
+        stock_return = execute.index("return;", restore)
+        self.assertNotIn("client.ResetAsync(", execute[stock_branch:stock_return])
+        self.assertEqual(1, execute.count("client.ResetAsync("))
+        self.assertGreater(execute.index("client.ResetAsync("), stock_return)
 
     def test_write_route_gate_is_the_wpf_one(self):
         # TB710FU stays held back by Core's write-route gate at the same entry points; no Mac-only gate.
         mac = _code(MAC_CODE)
         self.assertGreaterEqual(mac.count("DeviceModelRoutes.IsWriteRoutePending("), 3)
+        # The 9008 detection branch refuses a pending model before attaching to it: the guard must not be
+        # negated and must throw before GlobalEdlBinding.Attach. (Which models are pending, TB710FU yes and
+        # TB322FC / TB323FU no, is covered by Core's DeviceModelRoutesTests.)
+        guard = re.search(
+            r"if \(DeviceModelRoutes\.IsWriteRoutePending\(profile\.Model\)\)\s*\{\s*throw new InvalidOperationException\(\s*"
+            r'T\("Dynamic\.Model\.RoutePendingInEdl"',
+            mac,
+        )
+        self.assertIsNotNone(guard)
+        self.assertLess(guard.start(), mac.index("GlobalEdlBinding.Attach(", guard.start()))
+        self.assertNotIn("!DeviceModelRoutes.IsWriteRoutePending(profile.Model)", mac)
+        core = (ROOT / "src" / "FreedomInstaller.Core" / "DeviceModelRoutes.cs").read_text(encoding="utf-8")
+        self.assertIn("string.Equals(model, Tb710fuModel, StringComparison.OrdinalIgnoreCase)", core)
         self.assertIn("Dynamic.Model.RoutePendingInEdl", mac)
         self.assertNotIn("IsInstallRoutePending", mac)
         self.assertNotIn('"TB710FU"', mac)

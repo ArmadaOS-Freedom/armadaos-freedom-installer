@@ -516,7 +516,9 @@ public partial class MainWindow
     {
         var prepared = _bootMaintenanceBackend?.Prepared;
 
+        _l.Forget(BootMaintenanceSlotsPanel);
         BootMaintenanceSlotsPanel.Children.Clear();
+        _l.Forget(BootMaintenanceRegionsHost);
         BootMaintenanceRegionsHost.Children.Clear();
 
         if (prepared is null)

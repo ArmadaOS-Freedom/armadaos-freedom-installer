@@ -1639,6 +1639,13 @@
                                   IsEnabled="False"
                                   IsVisible="False" />
 
+                        <!-- 默认按钮就是完整检查（会进 Fastboot）：说明放在按钮前；平板已在 9008 时隐藏。 -->
+                        <TextBlock x:Name="UninstallCheckFastbootHint"
+                                   Text="{DynamicResource Dynamic.Shared.AdvancedCheckWarning}"
+                                   Classes="CaptionText"
+                                   TextWrapping="Wrap"
+                                   Margin="0,12,0,0" />
+
                         <WrapPanel Margin="0,12,0,0">
                             <Button x:Name="UninstallCheckButton"
                                     Click="OnCheckUninstallDevice"

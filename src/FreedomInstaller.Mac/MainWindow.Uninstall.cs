@@ -46,6 +46,8 @@ public partial class MainWindow
     private EdlClient? _uninstallEdlClient;
     private bool _uninstallEntryAttempted;
     private string? _uninstallBackupParent;
+    // 快照父目录是按所选恢复来源自动推导的（来源的上一级）：换来源时要一起清掉，不能继续用旧来源所在的卷。
+    private bool _uninstallBackupParentFromSource;
     private InternalBackupSet? _uninstallBackup;
     private BootMaintenanceHistoricalIdentity? _uninstallHistoricalIdentity;
 
@@ -354,10 +356,13 @@ public partial class MainWindow
     }
 
     /// <summary>9008 路线使用专门的识别文案；卸载默认走完整自动检查，使用内部自动重启文案。</summary>
-    private void RenderUninstallCheckButton() =>
+    private void RenderUninstallCheckButton()
+    {
         SetText(
             UninstallCheckButtonText,
             _uninstallAlreadyEdl ? "Dynamic.BootMaintenance.CheckEdl" : "Static.InternalInstall.Check.Button");
+        UninstallCheckFastbootHint.IsVisible = !_uninstallAlreadyEdl;
+    }
 
     private void RenderUninstallPower() => SetText(UninstallPowerText, PowerMessage(_uninstallPower));
 
@@ -379,7 +384,9 @@ public partial class MainWindow
     /// </summary>
     private void RenderUninstallConfirmPage()
     {
+        _l.Forget(UninstallSlotsPanel);
         UninstallSlotsPanel.Children.Clear();
+        _l.Forget(UninstallRegionsHost);
         UninstallRegionsHost.Children.Clear();
 
         var backend = _uninstallBackend;
@@ -941,6 +948,11 @@ public partial class MainWindow
             }
         }
 
+        if (!ReferenceEquals(parent, _uninstallBackupParent))
+        {
+            _uninstallBackupParentFromSource = false;
+        }
+
         _uninstallBackupParent = parent;
         _uninstallDeviceOperationActive = true;
         try
@@ -1171,12 +1183,9 @@ public partial class MainWindow
         var entry = _uninstallEdlEntry;
         var reuse = existingClient is not null && _uninstallEdlTools is not null && entry is not null;
 
-        if (!reuse && _uninstallEntryAttempted)
-        {
-            // 进入 9008 的结果尚未确认：不允许第二次自动进入，也不允许假装没有发生。
-            SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.EntryUnconfirmed"));
-            return;
-        }
+        // 上一次进入 9008 的结果尚未确认时（安装流程同样处理）：平板已在 9008 就只按第 1 步的身份等待同一个端点、
+        // 不再发进入命令；不在 9008 就走下面的正常路径——先重新读取安卓身份并与第 1 步逐项比对，一致才再进入。
+        var resumeUnconfirmedEntry = !reuse && _uninstallEntryAttempted;
 
         var selectedIdentity = storedAndroid.Identity;
 
@@ -1256,47 +1265,68 @@ public partial class MainWindow
                             return;
                         }
 
-                        SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.Reproving"));
-
-                        // 模式切换前重新读取真实安卓身份与 SoC 序列号，并与第 1 步的结果逐项比对。
-                        var freshIdentity = await transport.ReadAdbIdentityAsync(expected.Identity.Serial, token);
-                        var freshAndroid = await new MaintenanceEntry(transport.AdbPath, transport.FastbootPath, _runner)
-                            .ReadAndroidAsync(freshIdentity, token);
-
-                        if (!UninstallAndroidMatches(expected, freshAndroid)
-                            || !profile.SupportsIdentity(freshAndroid.Identity))
+                        if (resumeUnconfirmedEntry && (await ReadEdlPresentAsync(token)).Count > 0)
                         {
-                            loaded.Dispose();
+                            // 平板已在 9008：安卓无法再问，端点的 USB 序列号必须等于第 1 步读到的 SoC 序列号；
+                            // 这里不发送任何命令，端点不同或不唯一立即失败。
+                            _uninstallEdlTools = loaded;
                             pendingTools = null;
-                            acceptProgress = false;
-                            InvalidateUninstallCheckFromMismatch();
-                            SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.IdentityMismatch"));
-                            return;
-                        }
+                            SetText(UninstallPrepareStatusText, M("Dynamic.Mac.Backup.AlreadyInEdl", expected.SocSerial));
+                            var waited = await Task.Run(
+                                () => new EdlEntry(transport.AdbPath, _runner, Discovery)
+                                    .WaitForPresentAsync(expected, loaded.Profile, token),
+                                token);
 
-                        // 已有采样时才在进入 9008 之前刷新一次；没有采样就不凭空补一个。
-                        if (_uninstallPower is not null)
+                            _uninstallEdlEntry = waited;
+                            activeClient = new EdlClient(loaded, waited, _runner, Discovery);
+                            _uninstallEdlClient = activeClient;
+                            AppendUninstallLog(M("Dynamic.Mac.Backup.AlreadyInEdlLog", waited.BusSerialHex));
+                            AppendUninstallLog(M("Dynamic.RawValue", $"9008: {waited.Endpoint.DeviceInstanceId}  SN {waited.BusSerialHex}"));
+                        }
+                        else
                         {
-                            _uninstallPower = await CapturePowerAsync(transport.AdbPath, freshIdentity.Serial, token);
-                            RenderUninstallPower();
+                            SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.Reproving"));
+
+                            // 模式切换前重新读取真实安卓身份与 SoC 序列号，并与第 1 步的结果逐项比对。
+                            var freshIdentity = await transport.ReadAdbIdentityAsync(expected.Identity.Serial, token);
+                            var freshAndroid = await new MaintenanceEntry(transport.AdbPath, transport.FastbootPath, _runner)
+                                .ReadAndroidAsync(freshIdentity, token);
+
+                            if (!UninstallAndroidMatches(expected, freshAndroid)
+                                || !profile.SupportsIdentity(freshAndroid.Identity))
+                            {
+                                loaded.Dispose();
+                                pendingTools = null;
+                                acceptProgress = false;
+                                InvalidateUninstallCheckFromMismatch();
+                                SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.IdentityMismatch"));
+                                return;
+                            }
+
+                            // 已有采样时才在进入 9008 之前刷新一次；没有采样就不凭空补一个。
+                            if (_uninstallPower is not null)
+                            {
+                                _uninstallPower = await CapturePowerAsync(transport.AdbPath, freshIdentity.Serial, token);
+                                RenderUninstallPower();
+                            }
+
+                            // 工具链先落到字段：进入 9008 之后即使失败也保留现场供诊断。
+                            _uninstallEdlTools = loaded;
+                            pendingTools = null;
+
+                            _uninstallEntryAttempted = true;
+                            SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.EnteringEdl"));
+
+                            // 整个流程只会在这里真实进入一次 9008，不自动重试；显式传入刚核对过的可信配置。
+                            var entered = await Task.Run(
+                                () => new EdlEntry(transport.AdbPath, _runner, Discovery).EnterAsync(freshAndroid, loaded.Profile, token),
+                                token);
+
+                            _uninstallEdlEntry = entered;
+                            activeClient = new EdlClient(loaded, entered, _runner, Discovery);
+                            _uninstallEdlClient = activeClient;
+                            AppendUninstallLog(M("Dynamic.RawValue", $"9008: {entered.Endpoint.DeviceInstanceId}  SN {entered.BusSerialHex}"));
                         }
-
-                        // 工具链先落到字段：进入 9008 之后即使失败也保留现场供诊断。
-                        _uninstallEdlTools = loaded;
-                        pendingTools = null;
-
-                        _uninstallEntryAttempted = true;
-                        SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.EnteringEdl"));
-
-                        // 整个流程只会在这里真实进入一次 9008，不自动重试；显式传入刚核对过的可信配置。
-                        var entered = await Task.Run(
-                            () => new EdlEntry(transport.AdbPath, _runner, Discovery).EnterAsync(freshAndroid, loaded.Profile, token),
-                            token);
-
-                        _uninstallEdlEntry = entered;
-                        activeClient = new EdlClient(loaded, entered, _runner, Discovery);
-                        _uninstallEdlClient = activeClient;
-                        AppendUninstallLog(M("Dynamic.RawValue", $"9008: {entered.Endpoint.DeviceInstanceId}  SN {entered.BusSerialHex}"));
                     }
                     else
                     {
@@ -1536,10 +1566,18 @@ public partial class MainWindow
             return; // 用户取消或选择无效：完整保留现有状态。
         }
 
-        if (!string.Equals(directory, _uninstallOriginalDirectory, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(directory, _uninstallOriginalDirectory, StringComparison.Ordinal))
         {
             // 更换来源后，旧来源不能再保持已接受：只释放备份只读对象，绝不释放仍有效的客户端 / 工具链 / 会话。
             ReleaseUninstallBackupObject();
+
+            // 按旧来源推导出的快照父目录也作废（旧来源可能在只读卷上）；下次准备按新来源重新推导。
+            // 9008 会话保留，重试不会再重启平板。
+            if (_uninstallBackupParentFromSource)
+            {
+                _uninstallBackupParent = null;
+                _uninstallBackupParentFromSource = false;
+            }
         }
 
         _uninstallOriginalDirectory = directory;
@@ -1734,11 +1772,14 @@ public partial class MainWindow
         var capturedReclaimBackup = _uninstallReclaimBackup;
         var selectedOriginal = _uninstallOriginalDirectory;
         var workParent = _uninstallBackupParent;
+        var workParentFromSource = _uninstallBackupParentFromSource;
         if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
         {
+            workParentFromSource = false;
             if (!string.IsNullOrWhiteSpace(selectedOriginal) && Directory.Exists(selectedOriginal))
             {
                 workParent = Directory.GetParent(Path.GetFullPath(selectedOriginal))?.FullName;
+                workParentFromSource = !string.IsNullOrWhiteSpace(workParent);
             }
 
             if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
@@ -1766,6 +1807,7 @@ public partial class MainWindow
         // 先作废上一次未写入的只读准备；再写入推导出的真实工作父目录。
         InvalidateUninstallPreparation();
         _uninstallBackupParent = workParent;
+        _uninstallBackupParentFromSource = workParentFromSource;
 
         // 尚无真实当前状态快照时，先等待与「开始备份」完全同一条流水线（不嵌套任何忙碌范围）。
         if (_uninstallBackup is null)
@@ -1990,7 +2032,7 @@ public partial class MainWindow
             }
 
             if (_uninstallRecoverySource is { } explicitCached
-                && string.Equals(explicitCached.DirectoryPath, selection.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                && string.Equals(explicitCached.DirectoryPath, selection.DirectoryPath, StringComparison.Ordinal))
             {
                 BoardRecoveryBackup.ValidateSourceForReuse(current, explicitCached);
                 return explicitCached;
@@ -2657,7 +2699,9 @@ public partial class MainWindow
                 SetUninstallExitStatus(M("Dynamic.UserdataUninstall.Exit.Probing"));
                 try
                 {
-                    await Task.Run(() => client.ProbeAsync(0, false, CancellationToken.None), token);
+                    // 首次 Sahara 证明还没拿到（例如第一次探测在加载器启动前就失败）时必须用首次探测，
+                    // 否则 EdlClient 直接拒绝，重插线也无法重试（与维护流程的退出相同）。
+                    await Task.Run(() => client.ProbeAsync(0, initialLoader: !client.HasInitialSaharaProof, CancellationToken.None), token);
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
