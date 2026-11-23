@@ -29,6 +29,7 @@ public enum UninstallStage
     VerifyAndroid,
     AwaitingAndroidBootAcceptance,
     AwaitingFactoryReset,
+    AwaitingAndroidBoot,
 }
 
 /// <summary>
@@ -697,8 +698,11 @@ public static class UninstallWorkflow
             return new UninstallResult(false, stage, dataMayBeErased, Array.Empty<string>(), UserdataError(error));
         }
 
-        SafeReport(progress, UninstallStage.AwaitingFactoryReset);
-        return new UninstallResult(true, UninstallStage.AwaitingFactoryReset, true, Array.Empty<string>(), null);
+        UninstallStage successStage = backend is EdlUninstallBackend { UsesDirectAndroidDataErase: true }
+            ? UninstallStage.AwaitingAndroidBoot
+            : UninstallStage.AwaitingFactoryReset;
+        SafeReport(progress, successStage);
+        return new UninstallResult(true, successStage, true, Array.Empty<string>(), null);
     }
 
     /// <summary>Business preflight for the userdata-only request; a message means "reject".</summary>

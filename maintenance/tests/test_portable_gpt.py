@@ -705,6 +705,27 @@ class PortableGptContractTests(unittest.TestCase):
                 with self.assertRaises(portable_gpt.GptError):
                     portable_gpt.make_factory_reset_bcb(candidate)
 
+    def test_04_factory_reset_bcb_source_preservation_and_rejection(self) -> None:
+        source = bytearray(2048)
+        source[0:32] = b"bootonce-bootloader".ljust(32, b"\x00")
+        source[32] = 0x5A
+        source[64] = 0x00
+        source[832] = 0xA5
+        sentinel = bytes(source)
+        expected = bytes(32) + sentinel[32:]
+        for label, candidate in {"empty": bytes(32) + sentinel[32:], "bootonce": sentinel}.items():
+            with self.subTest(case=label):
+                before = bytearray(candidate)
+                result = portable_gpt.make_factory_reset_bcb(candidate, queue_recovery=False)
+                self.assertEqual(bytearray(candidate), before)
+                self.assertEqual(result, expected)
+                self.assertEqual(result[64:832], bytes(768))
+        rejected = bytearray(2048)
+        rejected[0:32] = b"bootonce-bootloader".ljust(32, b"\x00")
+        rejected[64] = 1
+        with self.assertRaises(portable_gpt.GptError):
+            portable_gpt.make_factory_reset_bcb(rejected, queue_recovery=False)
+
     def test_03_ota_message_safety(self) -> None:
         completed_map = (
             (0, "completed"),

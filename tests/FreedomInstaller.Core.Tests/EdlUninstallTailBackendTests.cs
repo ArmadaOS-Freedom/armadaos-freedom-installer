@@ -149,7 +149,7 @@ public sealed class EdlUninstallTailBackendTests : IClassFixture<EdlClientToolch
             context.Client, context.Client.Toolchain, context.Client.Binding,
             new UninstallGptAssets(context.OriginalPrimaryPath, context.OriginalBackupPath),
             context.CaseDirectory, context.Wrapper, null, null, null, null,
-            CancellationToken.None, null, false })!;
+            CancellationToken.None, null, false, false })!;
         var request = Assert.Single(context.Wrapper.CapturedGptRequests);
         Assert.False(request.GetProperty("reclaimBoardBackup").GetBoolean());
         Assert.Equal(new long[] { 4, 5 }, backend.Inputs.Plan.RemovedPartitionNumbers);

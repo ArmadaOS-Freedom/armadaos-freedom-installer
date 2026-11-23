@@ -498,6 +498,14 @@ public sealed class InternalInstallServices
     public string AdbPath { get; }
 
     /// <summary>
+    /// Opt-in for the WPF direct Android-erase matcher. Default false; the production host never sets it.
+    /// The WPF entry sets it from <c>entry.AndroidIdentity.Identity.Model/Firmware</c> only when the app
+    /// build embedded the paired private AssemblyMetadata. Enabling it here only allows context preparation
+    /// to attempt the direct-erase plan; it never executes I/O and user confirmation still guards Write/Execute.
+    /// </summary>
+    public bool UseDirectAndroidDataErase { get; init; }
+
+    /// <summary>
     /// Invoked after BindBackup and DetermineDirectSourceSlotsAsync have both returned
     /// successfully and before the direct ABL/AVB chain gate. Any failure in that subsequent
     /// gate is then diagnosable against a verified-source snapshot. Init-only; may run on a

@@ -76,6 +76,17 @@ public sealed record EdlWriteEvidence(
     ProcessResult Command);
 
 /// <summary>
+/// Evidence of one acknowledged sector erase. <see cref="Command"/> is the single Firehose erase
+/// invocation; the result only establishes that the erase command was acknowledged, never that the
+/// sectors were verified or read back.
+/// </summary>
+internal sealed record EdlEraseEvidence(
+    EdlGeometry Geometry,
+    long StartSector,
+    long SectorCount,
+    ProcessResult Command);
+
+/// <summary>
 /// Evidence of one accepted reset. <see cref="CommandAccepted"/> means the Firehose power command was sent
 /// and acknowledged; it does not mean Android booted or Recovery was entered.
 /// </summary>
@@ -830,6 +841,178 @@ public sealed class EdlClient
             file.Length,
             file.Sha256.ToUpperInvariant(),
             result);
+    }
+
+    internal async Task<EdlEraseEvidence> EraseAsync(
+        int lun,
+        long startSector,
+        long sectorCount,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ValidateLun(lun);
+        RequireSessionAndGeometry(lun);
+        EdlGeometry geometry = _geometryByLun[lun];
+
+        if (startSector < 0)
+        {
+            throw new InvalidOperationException("The erase start sector must not be negative.");
+        }
+
+        if (sectorCount <= 0)
+        {
+            throw new InvalidOperationException("The erase sector count must be positive.");
+        }
+
+        if ((ulong)sectorCount > uint.MaxValue)
+        {
+            throw new InvalidOperationException(
+                $"The erase sector count {sectorCount} exceeds the Firehose unsigned 32-bit sector limit.");
+        }
+
+        if (startSector > uint.MaxValue)
+        {
+            throw new InvalidOperationException(
+                $"The erase start sector {startSector} exceeds the Firehose unsigned 32-bit LBA limit.");
+        }
+
+        if (sectorCount - 1 > uint.MaxValue - startSector)
+        {
+            throw new InvalidOperationException(
+                "The erase range end exceeds the Firehose unsigned 32-bit LBA limit.");
+        }
+
+        long lastSector = CheckedAdd(startSector, sectorCount - 1, "The erase sector range overflows.");
+        if (startSector >= geometry.TotalSectors || lastSector >= geometry.TotalSectors)
+        {
+            throw new InvalidOperationException(
+                $"The erase range {startSector}..{lastSector} is beyond LUN {lun}'s {geometry.TotalSectors} sectors.");
+        }
+
+        long byteCount = CheckedMultiply(sectorCount, geometry.SectorSize, "The erase byte count overflows.");
+        string expectedSerial = EnsureCurrentEndpointIdentity();
+
+        ProcessCommand command = new(
+            Toolchain.ClientPath,
+            BuildArguments(
+                "erase-sector",
+                Invariant(startSector),
+                Invariant(sectorCount),
+                "--lun",
+                Invariant(lun),
+                "--expected-bus-serial",
+                expectedSerial,
+                "--expected-sector-size",
+                Invariant(geometry.SectorSize)),
+            ByteDependentTimeout(byteCount, WriteTimeout));
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProcessResult result;
+        try
+        {
+            result = await _runner.RunAsync(command, cancellationToken).ConfigureAwait(false);
+            ValidateEraseResult(result, geometry, lun, startSector, sectorCount, expectedSerial);
+        }
+        catch (Exception exception)
+        {
+            ClearSessionProof();
+            throw new IOException(
+                $"erase-sector outcome unknown: the command was invoked for LUN {lun} but its result could " +
+                "not be established.",
+                exception);
+        }
+
+        return new EdlEraseEvidence(geometry, startSector, sectorCount, result);
+    }
+
+    private static void ValidateEraseResult(
+        ProcessResult result,
+        EdlGeometry geometry,
+        int lun,
+        long startSector,
+        long sectorCount,
+        string expectedSerial)
+    {
+        string[] lines = SplitLines(result);
+        ThrowIfCommandFailed(result, lines);
+        ThrowIfHardError(lines);
+        ReadSelectedBusSerial(lines, expectedSerial);
+
+        string[] normalized = lines
+            .Select(line => Regex.Replace(
+                line.Trim(),
+                @"^(?:[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} )?(?:\[(?:DEBUG|INFO|TRACE|MESSAGE)\]\s*)?",
+                string.Empty))
+            .ToArray();
+
+        string sectorSizeMarker = FormattableString.Invariant(
+            $"Using sector size: {geometry.SectorSize} bytes for LUN {lun}.");
+        if (Array.FindIndex(normalized, body => body == sectorSizeMarker) < 0)
+        {
+            throw new InvalidOperationException(
+                "The erase did not report the expected sector size for the target LUN.");
+        }
+
+        string attemptMarker = FormattableString.Invariant(
+            $"Attempting to erase {sectorCount} sectors starting at LBA {startSector} on LUN {lun}...");
+        int attempts = normalized.Count(body => body == attemptMarker);
+        if (attempts != 1)
+        {
+            throw new InvalidOperationException(
+                $"The erase did not report exactly one matching attempt line (observed {attempts}).");
+        }
+
+        const string ackMarker = "Erase command ACKed.";
+        int acks = normalized.Count(body => body == ackMarker);
+        if (acks != 1)
+        {
+            throw new InvalidOperationException(
+                $"The erase did not report exactly one full acknowledgement (observed {acks}).");
+        }
+
+        string successPrefix = FormattableString.Invariant(
+            $"Successfully erased {sectorCount} sectors in ");
+        const string successSuffix = "s.";
+        int successes = normalized.Count(body =>
+        {
+            if (!body.StartsWith(successPrefix, StringComparison.Ordinal) ||
+                !body.EndsWith(successSuffix, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            string duration = body[successPrefix.Length..^successSuffix.Length];
+            return duration.Length > 0 && duration.All(c => char.IsDigit(c) || c == '.' || c == ',');
+        });
+
+        if (successes != 1)
+        {
+            throw new InvalidOperationException(
+                $"The erase did not report exactly one successful completion (observed {successes}).");
+        }
+
+        int attemptIndex = Array.FindIndex(normalized, body => body == attemptMarker);
+        int ackIndex = Array.FindIndex(normalized, body => body == ackMarker);
+        int successIndex = Array.FindIndex(normalized, body =>
+        {
+            if (!body.StartsWith(successPrefix, StringComparison.Ordinal) ||
+                !body.EndsWith(successSuffix, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            string duration = body[successPrefix.Length..^successSuffix.Length];
+            return duration.Length > 0 && duration.All(c => char.IsDigit(c) || c == '.' || c == ',');
+        });
+
+        if (attemptIndex < 0 || ackIndex < 0 || successIndex < 0 ||
+            !(attemptIndex < ackIndex && ackIndex < successIndex))
+        {
+            throw new InvalidOperationException(
+                "The erase attempt, acknowledgement, and success lines were not all present in order.");
+        }
     }
 
     /// <summary>

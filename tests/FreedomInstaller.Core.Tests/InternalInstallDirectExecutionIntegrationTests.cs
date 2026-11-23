@@ -147,6 +147,83 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
         }
     }
 
+    [Theory]
+    [InlineData(null, true, false)]
+    [InlineData(16L, false, false)]
+    [InlineData(32L, true, false)]
+    [InlineData(32L, true, true)]
+    public async Task Direct_flow_erases_android_sectors_for_null_or_32GiB_when_enabled(long? androidGiB, bool shouldErase, bool faultMetadata)
+    {
+        var android = new ReadOnlyAndroidResponder();
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _toolchain.Toolchain, _rawShared, "a", android, reinstallAndroidGiB: androidGiB, useDirectAndroidDataErase: true);
+
+        string model = session.Package.DeviceModel;
+        android.ConfigureFacts(session.Backend.Prepared, session.Artifacts, model);
+
+        IB001FakeEdlRunner runner = session.EdlRunner;
+        runner.PayloadOverride = read =>
+        {
+            if (read.SectorCount == 1
+                && read.FilePath.EndsWith("-readback.bin", StringComparison.Ordinal)
+                && read.FilePath.Contains("android-erase-", StringComparison.Ordinal))
+            {
+                byte[] bytes = new byte[4096];
+                if (faultMetadata && Path.GetFileName(read.FilePath) == "metadata-start-readback.bin")
+                {
+                    bytes[0] = 1;
+                }
+
+                return bytes;
+            }
+
+            return null;
+        };
+
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            prepared.ConfirmationId, userdataEraseConfirmed: true, progress: null);
+
+        if (faultMetadata)
+        {
+            Assert.Equal(InternalInstallOutcome.UnknownWriteOutcome, result.Outcome);
+            Assert.Equal(InternalInstallWriteState.Unknown, result.WriteState);
+            Assert.Equal(0, runner.ResetCount);
+            Assert.Equal(2, runner.Commands.Count(c => c.Arguments[0] == "erase-sector"));
+            return;
+        }
+
+        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.Equal(1, runner.ResetCount);
+
+        ProcessCommand[] eraseCommands = runner.Commands.Where(c => c.Arguments[0] == "erase-sector").ToArray();
+        if (!shouldErase)
+        {
+            Assert.Empty(eraseCommands);
+        }
+        else
+        {
+            GptPartition metadata = session.Artifacts.PostGpt.Partitions.Single(p => p.Name == "metadata");
+            GptPartition userdata = session.Artifacts.PostGpt.Partitions.Single(p => p.Name == "userdata");
+            Assert.Equal(2, eraseCommands.Length);
+            Assert.Equal(userdata.StartSector, long.Parse(eraseCommands[0].Arguments[1], CultureInfo.InvariantCulture));
+            Assert.Equal(userdata.SectorCount, long.Parse(eraseCommands[0].Arguments[2], CultureInfo.InvariantCulture));
+            Assert.Equal(metadata.StartSector, long.Parse(eraseCommands[1].Arguments[1], CultureInfo.InvariantCulture));
+            Assert.Equal(metadata.SectorCount, long.Parse(eraseCommands[1].Arguments[2], CultureInfo.InvariantCulture));
+        }
+
+        string[] names = runner.Commands.Select(c => c.Arguments[0]).ToArray();
+        Assert.True(Array.LastIndexOf(names, "erase-sector") < Array.IndexOf(names, "reset"));
+        foreach (IB001Write write in runner.Writes.Where(w =>
+                     w.Lun == session.Backup.Files["misc"].Lun &&
+                     w.StartSector == session.Backup.Files["misc"].StartSector))
+        {
+            string text = Encoding.ASCII.GetString(File.ReadAllBytes(write.FilePath));
+            Assert.DoesNotContain("boot-recovery", text);
+            Assert.DoesNotContain("--wipe_data", text);
+        }
+    }
+
     [Fact]
     public async Task Direct_overwrite_admits_signed_ArmadaBoot_media_and_preserves_Android()
     {

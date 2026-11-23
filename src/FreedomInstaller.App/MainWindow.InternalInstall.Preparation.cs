@@ -94,6 +94,7 @@ public partial class MainWindow
         {
             // 快照在后台线程发布，回调只用 Volatile.Write，不触碰 UI/Dispatcher。
             DiagnosticBootSourcesVerified = () => PublishDiagnosticBootEvidence(backup, package, artifacts),
+            UseDirectAndroidDataErase = AndroidDataErasePreview.Matches(entry.AndroidIdentity.Identity.Model, entry.AndroidIdentity.Identity.Firmware),
         };
 
         if (_ready)

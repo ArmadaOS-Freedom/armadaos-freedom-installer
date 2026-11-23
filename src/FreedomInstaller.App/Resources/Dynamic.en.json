@@ -190,6 +190,7 @@
   "Dynamic.UserdataUninstall.Runtime.Stage.ReclaimAndroidSpace": "Restoring Android space",
   "Dynamic.UserdataUninstall.Runtime.Stage.InitializeAndroid": "Initializing Android",
   "Dynamic.UserdataUninstall.Runtime.Stage.AwaitingFactoryReset": "Awaiting factory reset",
+  "Dynamic.UserdataUninstall.Runtime.Stage.AwaitingAndroidBoot": "Awaiting Android boot",
   "Dynamic.UserdataUninstall.Runtime.Active": "Running: {0}...",
   "Dynamic.UserdataUninstall.Runtime.Resetting": "All writes and verification finished; sending one reset request. Keep the connection and power...",
   "Dynamic.UserdataUninstall.Runtime.ResetUnknown": "Write verification finished, but the reset request was not acknowledged. Keep the backup and the current scene; do not repeat the operation.",
