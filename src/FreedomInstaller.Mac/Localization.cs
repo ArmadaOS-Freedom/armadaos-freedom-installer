@@ -32,7 +32,7 @@ internal sealed class Localization
 
     internal bool IsEnglish => _text.IsEnglish;
 
-    internal string T(string key, params object?[] args) => _text.Get(key, args);
+    internal string T(string key, params object?[] args) => _text.GetForDisplay(key, args);
 
     internal string Format(UiMessage message) => _text.Format(message);
 
@@ -58,7 +58,7 @@ internal sealed class Localization
 
         foreach (var (target, message) in _texts)
         {
-            target.Text = _text.Format(message);
+            target.Text = _text.FormatForDisplay(message);
         }
 
         foreach (var rows in _logRows.Values)
@@ -73,7 +73,7 @@ internal sealed class Localization
     internal void Set(TextBlock target, UiMessage message)
     {
         _texts[target] = message;
-        target.Text = _text.Format(message);
+        target.Text = _text.FormatForDisplay(message);
     }
 
     internal void Set(TextBlock target, string key, params object?[] args) => Set(target, new UiMessage(key, args));

@@ -431,6 +431,12 @@ public partial class MainWindow
                         backend?.Dispose();
                         menu?.Dispose();
                         original?.Dispose();
+                        if (IsModernUserdataUninstallMode)
+                        {
+                            _internalInstallRecoverySource?.Dispose();
+                            _internalInstallRecoverySource = null;
+                            ReleaseTemporaryRecoveryLease();
+                        }
                     }
                 }
             });

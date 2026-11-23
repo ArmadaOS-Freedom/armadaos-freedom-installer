@@ -29,8 +29,11 @@ public sealed partial class InternalInstallExistingBackupTests
     private const int ChainAlignmentSectors = 256;
     private const string LinuxDataGuid = "0FC63DAF-8483-4772-8E79-3D69D8477DE4";
 
-    [Fact]
-    public async Task ReadAgain_second_session_borrows_the_retained_directory_without_a_new_archive_capture()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReadAgain_second_session_borrows_the_retained_directory_without_a_new_archive_capture(
+        bool allowRetainedCopy)
     {
         const string Name =
             nameof(ReadAgain_second_session_borrows_the_retained_directory_without_a_new_archive_capture);
@@ -68,24 +71,42 @@ public sealed partial class InternalInstallExistingBackupTests
         {
             string scratch = _fixture.NewCaseDirectory(Name + "-second-scratch");
             using (InternalBackupSet? borrowed = await BoardRecoveryBackup.ReadAsync(
-                       second.Client, second.Current, material.DurableParent, scratch))
+                       second.Client,
+                       second.Current,
+                       material.DurableParent,
+                       scratch,
+                       allowRetainedCopy: allowRetainedCopy))
             {
                 Assert.NotNull(borrowed);
                 InternalBackupSet borrowedSet = borrowed!;
-                Assert.Equal(directory, borrowedSet.DirectoryPath, StringComparer.OrdinalIgnoreCase);
-                Assert.Equal(manifestPath, borrowedSet.ManifestPath, StringComparer.OrdinalIgnoreCase);
-                Assert.Equal(manifestSha256, borrowedSet.ManifestSha256, StringComparer.OrdinalIgnoreCase);
+                if (allowRetainedCopy)
+                {
+                    Assert.Equal(directory, borrowedSet.DirectoryPath, StringComparer.OrdinalIgnoreCase);
+                    Assert.Equal(manifestPath, borrowedSet.ManifestPath, StringComparer.OrdinalIgnoreCase);
+                    Assert.Equal(manifestSha256, borrowedSet.ManifestSha256, StringComparer.OrdinalIgnoreCase);
+                }
+                else
+                {
+                    Assert.NotEqual(directory, borrowedSet.DirectoryPath, StringComparer.OrdinalIgnoreCase);
+                    Assert.True(Directory.Exists(borrowedSet.DirectoryPath));
+                    Assert.Equal(manifestSha256, borrowedSet.ManifestSha256, StringComparer.OrdinalIgnoreCase);
+                    Assert.Contains(second.Runner.Reads, read =>
+                        read.Lun == 0 && read.StartSector == second.ArchiveStart && read.SectorCount == second.ArchiveSectors);
+                }
                 Assert.Equal(51, borrowedSet.Files.Count);
 
-                // The second session proves the archive with a 64 KiB header read, never with the whole capture.
-                AssertRetainedArchiveWasNotCapturedAgain(second.Runner, second.ArchiveStart, second.ArchiveSectors);
+                if (allowRetainedCopy)
+                {
+                    // The second session proves the archive with a 64 KiB header read, never with the whole capture.
+                    AssertRetainedArchiveWasNotCapturedAgain(second.Runner, second.ArchiveStart, second.ArchiveSectors);
+                }
                 Assert.Empty(second.Runner.Writes);
                 Assert.Equal(0, second.Runner.ResetCount);
             }
         }
 
         // Disposing the borrowed set releases only its locks: the retained directory and its files stay.
-        Assert.Single(Directory.GetDirectories(material.DurableParent, "board-recovery-*"));
+        Assert.Equal(allowRetainedCopy ? 1 : 2, Directory.GetDirectories(material.DurableParent, "board-recovery-*").Length);
         Assert.True(File.Exists(manifestPath));
         Assert.True(File.Exists(Path.Combine(directory, "misc.bin")));
         Assert.Equal(manifestSha256, HashFile(manifestPath), StringComparer.OrdinalIgnoreCase);

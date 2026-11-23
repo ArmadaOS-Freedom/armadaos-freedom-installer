@@ -59,6 +59,50 @@ public sealed class InstallerWorkSessionTests
     }
 
     [Fact]
+    public void ConfirmedOrAbandonedUniqueBackupAllowsLaterSweep()
+    {
+        string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string confirmedPath, abandonedPath;
+        {
+            using var session = new InstallerWorkSession(root);
+            confirmedPath = session.DirectoryPath;
+            File.WriteAllText(Path.Combine(confirmedPath, "recovery.img"), "confirmed");
+            session.ConfirmRecoveryBackup(session.BeginRecoveryBackup());
+        }
+        {
+            using var session = new InstallerWorkSession(root);
+            abandonedPath = session.DirectoryPath;
+            File.WriteAllText(Path.Combine(abandonedPath, "recovery.img"), "abandoned");
+            session.AbandonRecoveryBackup(session.BeginRecoveryBackup());
+        }
+        int swept = InstallerWorkSession.SweepAbandoned(root);
+        Assert.Equal(2, swept);
+        Assert.False(Directory.Exists(confirmedPath));
+        Assert.False(Directory.Exists(abandonedPath));
+        try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+    }
+
+    [Fact]
+    public void CompletedBackupDoesNotRemoveExplicitRecoveryProtection()
+    {
+        string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string sessionPath;
+        {
+            using var session = new InstallerWorkSession(root);
+            sessionPath = session.DirectoryPath;
+            File.WriteAllText(Path.Combine(sessionPath, "recovery.img"), "keep");
+            session.ProtectRecovery();
+            session.ConfirmRecoveryBackup(session.BeginRecoveryBackup());
+        }
+        int swept = InstallerWorkSession.SweepAbandoned(root);
+        Assert.Equal(0, swept);
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(sessionPath, "recovery.img")));
+        Directory.Delete(root, recursive: true);
+    }
+
+    [Fact]
     public void UnknownAndRepeatedConfirmDoNotClearOtherAttempt()
     {
         string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
@@ -171,6 +215,82 @@ public sealed class InstallerWorkSessionTests
         Assert.False(Directory.Exists(work.DirectoryPath));
         Assert.Equal("keep", File.ReadAllText(Path.Combine(backup, "boot.bin")));
         Assert.False(Directory.Exists(Path.Combine(work.RecordsDirectory, "external")));
+    }
+
+    [Fact]
+    public void SweepAbandonedCleansCrashedUnprotectedSessionKeepsReports()
+    {
+        string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string backup = Path.Combine(root, "user-backup");
+        Directory.CreateDirectory(backup);
+        File.WriteAllText(Path.Combine(backup, "boot_a.bin"), "selected-backup");
+        string sessionPath;
+        string recordsPath;
+        {
+            using var session = new InstallerWorkSession(root);
+            sessionPath = session.DirectoryPath;
+            recordsPath = session.RecordsDirectory;
+            File.WriteAllBytes(Path.Combine(sessionPath, "large-dummy.bin"), new byte[1024 * 1024]);
+            File.WriteAllText(Path.Combine(sessionPath, "verification.json"), "crash receipt");
+            // Simulate abrupt process exit: release lease without Complete().
+        }
+        Assert.True(Directory.Exists(sessionPath));
+        int swept = InstallerWorkSession.SweepAbandoned(root);
+        Assert.Equal(1, swept);
+        Assert.False(Directory.Exists(sessionPath));
+        Assert.Equal("crash receipt", File.ReadAllText(Path.Combine(recordsPath, "verification.json")));
+        Assert.Equal("selected-backup", File.ReadAllText(Path.Combine(backup, "boot_a.bin")));
+    }
+
+    [Fact]
+    public void SweepAbandonedKeepsLiveLeasedSession()
+    {
+        string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        using var session = new InstallerWorkSession(root);
+        File.WriteAllText(Path.Combine(session.DirectoryPath, "data.bin"), "live");
+        int swept = InstallerWorkSession.SweepAbandoned(root);
+        Assert.Equal(0, swept);
+        Assert.True(File.Exists(Path.Combine(session.DirectoryPath, "data.bin")));
+        session.Complete(false);
+    }
+
+    [Fact]
+    public void SweepAbandonedKeepsProtectedAndUntrackedDirectories()
+    {
+        string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string protectedPath;
+        {
+            using var protectedSession = new InstallerWorkSession(root);
+            protectedSession.ProtectRecovery();
+            protectedPath = protectedSession.DirectoryPath;
+            File.WriteAllText(Path.Combine(protectedPath, "recovery.img"), "keep");
+        }
+        string untracked = Path.Combine(root, "sessions", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(untracked);
+        File.WriteAllText(Path.Combine(untracked, "old.bin"), "legacy");
+        int swept = InstallerWorkSession.SweepAbandoned(root);
+        Assert.Equal(0, swept);
+        Assert.True(File.Exists(Path.Combine(protectedPath, "recovery.img")));
+        Assert.True(File.Exists(Path.Combine(untracked, "old.bin")));
+        Directory.Delete(untracked, true);
+    }
+
+    [Fact]
+    public void SweepAbandonedIgnoresMissingRootAndUserBackups()
+    {
+        string root = Path.Combine(Environment.GetEnvironmentVariable("TEST_ARTIFACT_ROOT")!, Guid.NewGuid().ToString("N"));
+        Assert.Equal(0, InstallerWorkSession.SweepAbandoned(Path.Combine(root, "absent")));
+        Directory.CreateDirectory(root);
+        using var session = new InstallerWorkSession(root);
+        string backup = Path.Combine(root, "user-backup");
+        Directory.CreateDirectory(backup);
+        File.WriteAllText(Path.Combine(backup, "manifest.json"), "keep");
+        InstallerWorkSession.SweepAbandoned(root);
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(backup, "manifest.json")));
+        Assert.True(Directory.Exists(session.DirectoryPath));
     }
 
 }

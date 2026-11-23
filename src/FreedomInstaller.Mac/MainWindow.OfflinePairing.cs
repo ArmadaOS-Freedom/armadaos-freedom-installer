@@ -120,8 +120,9 @@ public partial class MainWindow
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
             await MessageDialog.ShowAsync(this, T("Static.OfflineUpdate.Title"),
-                T("Dynamic.OfflineUpdate.PairingCopyFailed", ex.Message), T("Dynamic.Mac.Dialog.Ok"));
+                T("Dynamic.OfflineUpdate.PairingCopyFailed", ex), T("Dynamic.Mac.Dialog.Ok"));
         }
     }
 
@@ -169,7 +170,7 @@ public partial class MainWindow
         }
         catch (OfflineUpdateSshManagedException ex)
         {
-            throw new InvalidOperationException(T(OfflineManagedFailureKey(ex.Reason), ex.Message), ex);
+            throw new LocalizedInvalidOperationException(M(OfflineManagedFailureKey(ex.Reason), ex.Message), ex.Message, ex);
         }
         finally
         {

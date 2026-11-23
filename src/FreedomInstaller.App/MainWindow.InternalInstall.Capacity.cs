@@ -277,8 +277,9 @@ public partial class MainWindow
                 or NotSupportedException
                 or ArgumentException)
             {
+                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
                 SetInternalInstallCapacityPackageStatus(
-                    M("Dynamic.InternalInstall.Capacity.StatusWorkRootFailed", exception.Message));
+                    M("Dynamic.InternalInstall.Capacity.StatusWorkRootFailed", exception));
                 return;
             }
 
@@ -325,7 +326,7 @@ public partial class MainWindow
         {
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
-                M("Dynamic.InternalInstall.Capacity.ImportFailed", exception.Message));
+                M("Dynamic.InternalInstall.Capacity.ImportFailed", exception));
             RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
         }
         catch (Exception exception)
@@ -333,7 +334,7 @@ public partial class MainWindow
             // 其余失败同样如实显示；不保留「正在导入」的旧文字，也不伪造成功。
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
-                M("Dynamic.InternalInstall.Capacity.ImportFailed", exception.Message));
+                M("Dynamic.InternalInstall.Capacity.ImportFailed", exception));
             RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
         }
         finally
@@ -567,13 +568,14 @@ public partial class MainWindow
         {
             _internalInstallAllocation = null;
             _internalInstallAndroidGiB = 0;
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Capacity"), exception.Message);
             if (_ready)
             {
                 SetText(InternalInstallCapacityTotalText, "Dynamic.RawValue", UnknownValue);
                 SetText(InternalInstallCapacityAndroidText, "Dynamic.RawValue", UnknownValue);
                 SetText(InternalInstallCapacityLinuxText, "Dynamic.RawValue", UnknownValue);
                 SetInternalInstallCapacityStatus(
-                    M("Dynamic.InternalInstall.Capacity.PlanFailed", exception.Message));
+                    M("Dynamic.InternalInstall.Capacity.PlanFailed", exception));
             }
 
             return false;
