@@ -954,7 +954,9 @@ public partial class MainWindow
                 "Dynamic.InternalInstall.Execution.WithFailureDetails",
                 preparedSummaryMessage,
                 M(
-                    "Dynamic.InternalInstall.Prepared.Abl188InstallMode",
+                    prepared.AblReplacementKind == "tb710fu-279"
+                        ? "Dynamic.InternalInstall.Prepared.Tb710fuAblInstallMode"
+                        : "Dynamic.InternalInstall.Prepared.Abl188InstallMode",
                     string.Join(", ", prepared.Abl188ReplacementSlots)));
         }
 

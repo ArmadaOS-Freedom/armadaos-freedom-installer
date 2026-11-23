@@ -408,6 +408,8 @@ public sealed class InternalInstallPrepared
 
         internal IReadOnlyList<string> Abl188ReplacementSlots = Array.Empty<string>();
 
+        internal string? AblReplacementKind;
+
         internal string PackageFingerprint = string.Empty;
 
         internal string PackageBindingSha256 = string.Empty;
@@ -466,6 +468,7 @@ public sealed class InternalInstallPrepared
         FastbootLockState = state.FastbootLockState;
         BootTrustMode = state.BootTrustMode;
         Abl188ReplacementSlots = new List<string>(state.Abl188ReplacementSlots).AsReadOnly();
+        AblReplacementKind = state.AblReplacementKind;
 
         PackageFingerprint = state.PackageFingerprint;
         PackageBindingSha256 = state.PackageBindingSha256;
@@ -533,10 +536,16 @@ public sealed class InternalInstallPrepared
     public InternalInstallBootTrustMode BootTrustMode { get; }
 
     /// <summary>
-    /// The a/b slots whose ABL is replaced by the pinned TB322FC AOSP-capable 188 loader. Empty
-    /// for every route that writes no ABL.
+    /// The a/b slots whose ABL is replaced by the model's pinned AOSP-capable loader (TB322FC 188,
+    /// TB710FU 279; see <see cref="AblReplacementKind"/>). Empty for every route that writes no ABL.
     /// </summary>
     public IReadOnlyList<string> Abl188ReplacementSlots { get; }
+
+    /// <summary>
+    /// The pinned loader written into <see cref="Abl188ReplacementSlots"/>: "tb322fc-188" or "tb710fu-279".
+    /// Null for every route that writes no ABL.
+    /// </summary>
+    public string? AblReplacementKind { get; }
 
     /// <summary>Fingerprint of the selected package.</summary>
     public string PackageFingerprint { get; }

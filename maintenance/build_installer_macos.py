@@ -55,6 +55,7 @@ _PROPERTY_NAMES = (
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
     "BundledTb322fcAbl188",
+    "BundledTb710fuAospAbl",
     "BundledPlatformToolsArchive",
 )
 
@@ -173,6 +174,9 @@ def prepare(repo_root, work_dir, manifest_path=None):
         "BundledGblRowEfi": str(Path(fetched["gblRow"]).resolve()),
         "BundledTb322fcAbl188": str(
             (repo_root / "vendor" / "qualcomm" / "g4" / "abl_aosp_capable.img").resolve()
+        ),
+        "BundledTb710fuAospAbl": str(
+            (repo_root / "vendor" / "qualcomm" / "tb710fu" / "abl_aosp_capable.img").resolve()
         ),
         # Step 1 needs adb and fastboot; the window extracts this archive on first use instead of asking the
         # user to install platform-tools.

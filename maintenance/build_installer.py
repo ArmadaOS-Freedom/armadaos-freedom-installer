@@ -64,6 +64,7 @@ _PROPERTY_NAMES = (
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
     "BundledTb322fcAbl188",
+    "BundledTb710fuAospAbl",
 )
 
 # Optional paired legacy inputs: embedded only when supplied.  A single-file
@@ -1055,6 +1056,9 @@ def prepare(repo_root, work_dir, manifest_path=None,
         "BundledGblRowEfi": str(Path(fetched["gblRow"]).resolve()),
         "BundledTb322fcAbl188": str(
             (repo_root / "vendor" / "qualcomm" / "g4" / "abl_aosp_capable.img").resolve()
+        ),
+        "BundledTb710fuAospAbl": str(
+            (repo_root / "vendor" / "qualcomm" / "tb710fu" / "abl_aosp_capable.img").resolve()
         ),
     }
     inputs.update(offline_inputs)

@@ -362,6 +362,7 @@
   "Dynamic.InternalInstall.Prepared.GblInstallMode": "Installation method: without unlocking the bootloader",
   "Dynamic.InternalInstall.Prepared.AospPreservedInstallMode": "Install mode: only boot is written (signed with the AOSP test key); vbmeta, vbmeta_system and recovery stay unchanged.",
   "Dynamic.InternalInstall.Prepared.Abl188InstallMode": "Install mode: AOSP re-sign plus the AOSP-capable 188 ABL (slots replaced: {0}). This is a test build and it modifies the ABL; keep the original A/B ABL backups and 9008 recovery capability.",
+  "Dynamic.InternalInstall.Prepared.Tb710fuAblInstallMode": "Install mode: stock 495 is signed with Lenovo's key, so vbmeta, vbmeta_system, recovery and boot are re-signed with the AOSP key and the AOSP-capable 279 ABL is written (slots replaced: {0}). This is a test build and it modifies the ABL; keep the original A/B ABL backups and 9008 recovery capability.",
   "Dynamic.InternalInstall.Execution.Stage.Prepared": "Preparation complete",
   "Dynamic.InternalInstall.Execution.Stage.Revalidating": "Rechecking the device and install inputs",
   "Dynamic.InternalInstall.Execution.Stage.WritingMaintenanceBoot": "Writing the new maintenance boot",

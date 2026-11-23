@@ -722,25 +722,33 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             // failures in that gate are diagnosable. Direct installs only; nothing else changed.
             services.DiagnosticBootSourcesVerified?.Invoke();
 
-            // A locked TB322FC is classified from the effective (primary) AVB key of its live ABL. Slots
-            // whose primary key is AOSP keep their ABL; only slots whose primary key is not AOSP use the
-            // pinned 188 loader. A secondary AOSP blob alone is not acceptance.
-            // The asset is staged lazily, so an all-AOSP source never needs the optional build input. A null
-            // proof leaves every existing path as is, and the boot-only route never reads ABL evidence it
+            // A model on the AOSP-preserving boot-only route (TB710FU) keeps it while every selected source root
+            // already is the AOSP key. A source with an OEM root (Lenovo's stock TB710FU ZUXOS 1.5.04.495) leaves
+            // that route for the full AOSP re-sign below, which the pinned AOSP-capable ABL makes acceptable.
+            bool preservedProfile = UsesPreservedAospChain(profile.Model);
+            bool preservedRoute = preservedProfile
+                && !await AnyDirectSourceRootIsOemAsync(sourceSlots, backupFacts, cancellationToken).ConfigureAwait(false);
+
+            // A locked model with a pinned AOSP-capable ABL (TB322FC 188, TB710FU 279) is classified from the
+            // effective (primary) AVB key of its live ABL. Slots whose primary key is AOSP keep their ABL; only
+            // slots whose primary key is not AOSP use the pinned loader. A secondary AOSP blob alone is not
+            // acceptance. The asset is staged lazily, so an all-AOSP source never needs the optional build input.
+            // A null proof leaves every existing path as is, and the boot-only route never reads ABL evidence it
             // would not use.
-            if (!UsesPreservedAospChain(profile.Model))
+            if (!preservedRoute)
             {
-                Func<CancellationToken, Task<VerifiedEdlFile?>>? tb322fcAbl188Provider = null;
-                if (profile.Model == "TB322FC"
+                Func<CancellationToken, Task<VerifiedEdlFile?>>? pinnedAblProvider = null;
+                PinnedAospAbl? pinnedAbl = PinnedAospAbl.ForModel(profile.Model);
+                if (pinnedAbl is not null
                     && deviceCheck.FastbootLockState == BootloaderState.Locked
-                    && Tb322fcAbl188Assets.IsBundled)
+                    && pinnedAbl.IsBundled)
                 {
-                    tb322fcAbl188Provider = async token =>
+                    pinnedAblProvider = async token =>
                     {
-                        VerifiedEdlFile staged = await Tb322fcAbl188Assets
+                        VerifiedEdlFile staged = await pinnedAbl
                             .StageAsync(evidenceDirectory, token)
                             .ConfigureAwait(false);
-                        HoldStagedAsset("tb322fc-abl-188", staged, claims, token);
+                        HoldStagedAsset(Path.GetFileNameWithoutExtension(pinnedAbl.StagedFileName), staged, claims, token);
                         return staged;
                     };
                 }
@@ -750,7 +758,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                         backup,
                         deviceCheck.FastbootLockState,
                         sourceSlots,
-                        tb322fcAbl188Provider,
+                        pinnedAblProvider,
                         cancellationToken)
                     .ConfigureAwait(false);
 
@@ -767,13 +775,23 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             // here. A null result is the old AOSP eligibility only, and that path keeps its exact signed-root
             // preparation below.
             IReadOnlyList<string>? preservedAvbRoles = null;
-            if (UsesPreservedAospChain(profile.Model))
+            if (preservedRoute)
             {
                 // Boot-only route: the original AVB metadata stays untouched, so neither the GBL gate nor the
                 // AOSP re-sign roots apply; only the root and boot chain keys are authenticated, and the original
                 // device captures read those roots again.
                 preservedAvbRoles = await RequireDirectPreservedAospChainAsync(sourceSlots, backupFacts, cancellationToken)
                     .ConfigureAwait(false);
+            }
+            else if (preservedProfile && directAblProof is null)
+            {
+                // An OEM root on a model without a GBL route: only the pinned AOSP-capable ABL could make the
+                // resigned chain acceptable, and this run has no such proof.
+                throw new InvalidOperationException(
+                    "requires-compatible-bootloader: a " + profile.Model + " source vbmeta root is not the AOSP signing "
+                    + "key, and no AOSP-capable ABL proof applies (the bootloader must be locked and this build "
+                    + "must embed " + (PinnedAospAbl.ForModel(profile.Model)?.BuildProperty ?? "the pinned ABL")
+                    + "). No partitions were written.");
             }
             else if (directAblProof is null)
             {
@@ -2130,6 +2148,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         state.Firmware = _binding.AndroidIdentity.Identity.Firmware!;
         state.FastbootLockState = _fastbootLockState;
         state.BootTrustMode = DirectBootTrustMode;
+        state.AblReplacementKind = _directAblReplacements.Count == 0 ? null : RequireDirectPinnedAbl().Kind;
         state.Abl188ReplacementSlots = new List<string>(
             _directAblReplacements.Keys
                 .Select(role => role.StartsWith("abl_", StringComparison.Ordinal) ? role[4..] : role)
@@ -4604,12 +4623,13 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     private void WriteDirectAbl188Confirmation(Utf8JsonWriter json)
     {
+        PinnedAospAbl asset = RequireDirectPinnedAbl();
         json.WriteStartObject("ablCompatibility");
-        json.WriteString("kind", "tb322fc-188");
+        json.WriteString("kind", asset.Kind);
         json.WriteString("reason", "locked-oem-root-aosp-resign-requires-aosp-capable-abl");
-        json.WriteString("sourceFirmware", Tb322fcAbl188Assets.SourceFirmware);
-        json.WriteNumber("imageLength", Tb322fcAbl188Assets.ImageLength);
-        json.WriteString("imageSha256", Tb322fcAbl188Assets.ImageSha256);
+        json.WriteString("sourceFirmware", asset.SourceFirmware);
+        json.WriteNumber("imageLength", asset.ImageLength);
+        json.WriteString("imageSha256", asset.ImageSha256);
 
         json.WriteStartArray("replacements");
         foreach (string role in _directAblReplacements.Keys.OrderBy(role => role, StringComparer.Ordinal))
@@ -4626,6 +4646,12 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         json.WriteEndArray();
         json.WriteEndObject();
     }
+
+    /// <summary>The pinned AOSP-capable ABL of this preparation's model; only valid when ABL is replaced.</summary>
+    private PinnedAospAbl RequireDirectPinnedAbl() =>
+        PinnedAospAbl.ForModel(_binding.AndroidIdentity.Identity.Model)
+        ?? throw new InvalidOperationException(
+            "direct-abl-binding: model " + _binding.AndroidIdentity.Identity.Model + " has no pinned AOSP-capable ABL.");
 
     private static void WriteDirectImage(Utf8JsonWriter json, string name, EdlRawImage image)
     {
