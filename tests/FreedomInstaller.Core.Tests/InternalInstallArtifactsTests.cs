@@ -269,6 +269,25 @@ public sealed class InternalInstallArtifactsTests
             (IReadOnlyDictionary<int, GptTable>)new Dictionary<int, GptTable> { [0] = original });
 
         BoardRecoveryBackup.ValidateLun0Layout("TB322FC", "TEST", postTable, backupSet);
+
+        var unrecorded = new GptPartition(
+            postTable.Partitions.Max(p => p.Number) + 1,
+            "vendor_unrecorded",
+            backup.TypeGuid,
+            Guid.NewGuid().ToString(),
+            postTable.LastUsableSector,
+            1,
+            0);
+        var modifiedLiveTable = new GptTable(
+            postTable.DeviceId,
+            postTable.SectorSize,
+            postTable.DiskBytes,
+            postTable.DiskGuid,
+            postTable.FirstUsableSector,
+            postTable.LastUsableSector,
+            postTable.Partitions.Append(unrecorded).ToArray(),
+            postTable.SourceFingerprint);
+        Assert.Throws<InvalidDataException>(() => BoardRecoveryBackup.ValidateLun0Layout("TB322FC", "TEST", modifiedLiveTable, backupSet));
     }
 
     [Theory]

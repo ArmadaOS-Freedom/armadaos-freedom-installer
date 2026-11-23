@@ -190,10 +190,8 @@ public static partial class BoardRecoveryBackup
                 throw new InvalidDataException("Recovery material does not contain a factory userdata layout.");
             foreach (var now in currentLun0.Partitions)
             {
-                var nowEnd = checked(now.StartSector + now.SectorCount);
-                if (nowEnd <= userdata.StartSector || now.StartSector >= archivedEnd) continue;
-                if (now.Number == userdata.Number) continue;
                 if (now.Name is "ARMADA_BOOT" or "ARMADA_ROOT" or "ARMADA_BACKUP") continue;
+                if (original.Partitions.Any(p => p.Number == now.Number)) continue;
                 throw new InvalidDataException("Recovery material does not match the current vendor partitions.");
             }
         }
