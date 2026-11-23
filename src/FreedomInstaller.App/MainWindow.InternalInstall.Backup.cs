@@ -378,7 +378,7 @@ public partial class MainWindow
     /// 真实只读备份的唯一实现（原「开始备份」正文）：已有 9008 会话时严格复用同一客户端与工具链；
     /// 没有会话时先加载并校验工具链、重新确认同一台平板，然后只自动进入一次 9008。
     /// </summary>
-    private async System.Threading.Tasks.Task BackupInternalInstallCoreAsync(bool useBoardBackup = false)
+    private async System.Threading.Tasks.Task BackupInternalInstallCoreAsync()
     {
         // 共享谓词：安装与维护都从这里发起（全新）备份；维护受保护状态拒绝。
         if (!_ready || _busy || _internalInstallOperationActive || !UsesSharedDevicePreparationPages)
@@ -432,16 +432,11 @@ public partial class MainWindow
         // 绝不要求、也不写入用户选择的备份位置；绝不回退到系统临时目录或触发目录选择。
         var internalAutoBranch = IsInternalInstallMode;
         string? parent = internalAutoBranch ? null : _internalInstallBackupParent;
-        if (useBoardBackup)
-        {
-            if (!internalAutoBranch || !_internalInstallBoardBackupDetected) return;
-        }
 
         // 共享模式只允许全新备份；内部安装也不再提供交互式复用已有备份，
         // 复用模式（及其已有备份目录）只保留给来自旧内部安装流程的显式状态，
         // 但内部自动分支一律按全新临时会话处理。
         var useExisting = !internalAutoBranch
-            && !useBoardBackup
             && !IsSharedNonInternalDeviceMode
             && _internalInstallBackupUseExisting;
         var existingDirectory = _internalInstallBackupExistingDirectory;
@@ -725,7 +720,7 @@ public partial class MainWindow
                             return;
                         }
 
-                        if (internalAutoBranch && !useBoardBackup && !useExisting
+                        if (internalAutoBranch && !useExisting
                             && profile.Model == "TB323FU"
                             && _internalInstallDeviceCheck is { FastbootLockState: BootloaderState.Locked, CurrentSlot: "a" or "b" } checkedSlot)
                         {
@@ -823,20 +818,16 @@ public partial class MainWindow
                         // 该令牌与本次读取的实际生命周期绑定，成功时转移，失败/取消时放弃。
                         pending = _workSession?.BeginRecoveryBackup();
                         var prepared = await TryPrepareInternalRecoverySnapshotAsync(
-                            activeClient, parentPath, useBoardBackup, progress, token);
+                            activeClient, parentPath, progress, token);
                         recoveredSourceStatus = prepared.SourceStatus;
                         set = prepared.Snapshot;
                     }
                     else set = null;
                     if (set is null)
                     {
-                        if (IsRepairInstallationMode && IsBootMaintenanceMode && !useBoardBackup && !useExisting)
+                        if (IsRepairInstallationMode && IsBootMaintenanceMode && !useExisting)
                         {
                             set = await CaptureRepairCurrentAsync(activeClient, parentPath, progress, token);
-                        }
-                        else if (useBoardBackup)
-                        {
-                            throw new InvalidDataException(T("Dynamic.RecoverySource.BoardMissing"));
                         }
                         else set = useExisting
                             ? await InternalInstallBackup.OpenExistingAsync(
@@ -1006,14 +997,13 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// 内部安装自动分支：先尝试从平板读取既有恢复目录；真正不存在且未要求板备份时为 null，
-    /// 让调用方回退到首次安装流程。已知失败或格式错误转为已校验的电脑目录选择。
+    /// 内部安装自动分支：先尝试从平板读取既有恢复目录；已校验的出厂 GPT 返回 null，
+    /// 让首次安装捕获新的备份，无效归档转为已校验的电脑目录回退。
     /// </summary>
     private async Task<(InternalBackupSet? Snapshot, UiMessage? SourceStatus)>
         TryPrepareInternalRecoverySnapshotAsync(
             EdlClient activeClient,
             string parentPath,
-            bool useBoardBackup,
             IProgress<InternalBackupProgress>? progress,
             CancellationToken token)
     {
@@ -1026,15 +1016,12 @@ public partial class MainWindow
                 try
                 {
                     extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
-                        activeClient, parentPath, TemporaryWorkRoot, token, allowRetainedCopy: false);
+                        activeClient, parentPath, TemporaryWorkRoot, token, allowRetainedCopy: false,
+                        validateInternalInstallLayout: true);
                     if (extraction is null)
                     {
-                        if (!useBoardBackup)
-                        {
-                            return (null, null);
-                        }
-                        AppendLocalizedLog(M("Dynamic.RecoverySource.BoardMissing"));
-                        _rejectedInternalBoardClient = activeClient;
+                        // 权威判定为出厂（无内部安装布局）：直接走正常首次安装流程。
+                        return (null, null);
                     }
                     else
                     {

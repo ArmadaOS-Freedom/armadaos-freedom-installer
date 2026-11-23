@@ -14,14 +14,18 @@ internal sealed partial class InternalInstallPreparationContext
 
     private async Task PrepareLauncherDefaultsAsync(EdlClient edl, CancellationToken ct)
     {
-        if (!_package.EdlRawContract.BootRecipe.UsesArmadaBoot || _boardSummary is null)
+        var original = _originalTables[0];
+        GptPartition? backup = InternalInstallLauncherDefaults.FindInstalledBackupPartition(
+            _package.EdlRawContract.BootRecipe.UsesArmadaBoot,
+            original);
+        if (backup is null)
         {
             return;
         }
 
-        long sectorSize = _geometries[0].SectorSize;
-        long start = _allocation.BackupStartSector;
-        long count = _allocation.BackupSectorCount;
+        long sectorSize = original.SectorSize;
+        long start = backup.StartSector;
+        long count = backup.SectorCount;
 
         string headerPath = Path.Combine(_evidenceDirectory, "launcher-defaults-header-" + Guid.NewGuid().ToString("N") + ".bin");
         EdlReadEvidence header = await edl.ReadAsync(0, start, 65536 / sectorSize, headerPath, ct).ConfigureAwait(false);
@@ -29,7 +33,7 @@ internal sealed partial class InternalInstallPreparationContext
         string tailPath = Path.Combine(_evidenceDirectory, "launcher-defaults-tail-" + Guid.NewGuid().ToString("N") + ".bin");
         EdlReadEvidence tail = await edl.ReadAsync(0, start + count - (65536 / sectorSize), 65536 / sectorSize, tailPath, ct).ConfigureAwait(false);
 
-        Guid uuid = Guid.Parse(_backupPartition.PartUuid);
+        Guid uuid = Guid.Parse(backup.PartUuid);
         _launcherDefaults = InternalInstallLauncherDefaults.PlanFromReads(
             header,
             tail,
@@ -74,15 +78,11 @@ internal sealed partial class InternalInstallPreparationContext
             return;
         }
 
-        long sectorSize = _geometries[0].SectorSize;
-        long start = _allocation.BackupStartSector;
-        long count = _allocation.BackupSectorCount;
-
         string headerPath = Path.Combine(_evidenceDirectory, "launcher-defaults-verify-header-" + Guid.NewGuid().ToString("N") + ".bin");
-        EdlReadEvidence header = await edl.ReadAsync(0, start, 65536 / sectorSize, headerPath, ct).ConfigureAwait(false);
+        EdlReadEvidence header = await edl.ReadAsync(0, _launcherDefaults.BeforeHeader.StartSector, _launcherDefaults.BeforeHeader.SectorCount, headerPath, ct).ConfigureAwait(false);
 
         string tailPath = Path.Combine(_evidenceDirectory, "launcher-defaults-verify-tail-" + Guid.NewGuid().ToString("N") + ".bin");
-        EdlReadEvidence tail = await edl.ReadAsync(0, start + count - (65536 / sectorSize), 65536 / sectorSize, tailPath, ct).ConfigureAwait(false);
+        EdlReadEvidence tail = await edl.ReadAsync(0, _launcherDefaults.BeforeTail.StartSector, _launcherDefaults.BeforeTail.SectorCount, tailPath, ct).ConfigureAwait(false);
 
         if (!SameSha(header.Sha256, _launcherDefaults.BeforeHeader.Sha256) || header.Length != _launcherDefaults.BeforeHeader.Length)
         {

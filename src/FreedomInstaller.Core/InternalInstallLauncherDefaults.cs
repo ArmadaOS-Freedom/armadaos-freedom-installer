@@ -14,6 +14,12 @@ internal static class InternalInstallLauncherDefaults
     private const long SlotCount = 3L;
     private const int RecoveryCompareOffset = 12288;
 
+    internal static GptPartition? FindInstalledBackupPartition(bool usesArmadaBoot, GptTable original)
+    {
+        if (!usesArmadaBoot) return null;
+        return InternalPartitionPlanner.FindInstalledLinuxLayout(original)?.Backup;
+    }
+
     internal static LauncherDefaultsPlan? PlanFromReads(
         EdlReadEvidence headerRead,
         EdlReadEvidence tailRead,
@@ -60,6 +66,8 @@ internal static class InternalInstallLauncherDefaults
             throw new InvalidOperationException("Tail file SHA256 does not match evidence.");
 
         InternalInstallArtifacts.BoardArchiveHeader header = InternalInstallArtifacts.ParseBoardArchiveHeader(headerBytes, model);
+        if (header.SchemaVersion == 2)
+            return null;
         if (header.SchemaVersion != 3)
             throw new InvalidDataException(
                 $"Retained ARMADA_BACKUP schema {header.SchemaVersion} is not supported; a compatible schema-3 backup is required before ARMADA_BOOT reinstall.");

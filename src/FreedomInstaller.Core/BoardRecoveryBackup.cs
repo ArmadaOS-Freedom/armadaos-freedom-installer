@@ -23,7 +23,7 @@ public static partial class BoardRecoveryBackup
     /// </summary>
     public static async Task<BoardRecoveryExtraction?> ReadDirectoryAsync(
         EdlClient client, string durableParent, string temporaryParent, CancellationToken token = default,
-        bool allowRetainedCopy = true)
+        bool allowRetainedCopy = true, bool validateInternalInstallLayout = false)
     {
         RequireParent(durableParent);
         RequireParent(temporaryParent);
@@ -41,10 +41,12 @@ public static partial class BoardRecoveryBackup
                 await File.ReadAllBytesAsync(primary.FilePath, token).ConfigureAwait(false),
                 await File.ReadAllBytesAsync(secondary.FilePath, token).ConfigureAwait(false),
                 geometry.SectorSize, checked(geometry.TotalSectors * (long)geometry.SectorSize));
-            var partition = FindRecoveryPartition(
-                table,
-                "Multiple recovery partitions were found.",
-                "The recovery partition has invalid identity or size.");
+            var partition = validateInternalInstallLayout
+                ? SelectInternalInstallBackupPartition(table)
+                : FindRecoveryPartition(
+                    table,
+                    "Multiple recovery partitions were found.",
+                    "The recovery partition has invalid identity or size.");
             if (partition is null) return null;
             var borrowed = allowRetainedCopy
                 ? await TryBorrowDirectoryAsync(
@@ -211,6 +213,24 @@ public static partial class BoardRecoveryBackup
             || checked(partition.StartSector + partition.SectorCount) > checked(table.LastUsableSector + 1))
             throw new InvalidDataException(invalidMessage);
         return partition;
+    }
+
+    /// <summary>
+    /// Selects the recovery backup partition for the internal install flow from the planner's GPT view.
+    /// Returns null for a positively identified stock GPT. Unsupported or partial layouts surface as
+    /// <see cref="NotSupportedException"/> before any archive read.
+    /// </summary>
+    private static GptPartition? SelectInternalInstallBackupPartition(GptTable table)
+    {
+        try
+        {
+            return InternalPartitionPlanner.FindInstalledLinuxLayout(table)?.Backup
+                ?? InternalPartitionPlanner.FindReusableBackup(table);
+        }
+        catch (InvalidOperationException error)
+        {
+            throw new NotSupportedException(error.Message, error);
+        }
     }
 
     internal static async Task<string> ExtractAsync(

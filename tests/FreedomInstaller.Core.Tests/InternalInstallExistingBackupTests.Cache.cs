@@ -146,7 +146,7 @@ public sealed partial class InternalInstallExistingBackupTests
         {
             string scratch = _fixture.NewCaseDirectory(Name + "-second-scratch");
             using (BoardRecoveryExtraction borrowed = (await BoardRecoveryBackup.ReadDirectoryAsync(
-                       second.Client, material.DurableParent, scratch))!)
+                       second.Client, material.DurableParent, scratch, validateInternalInstallLayout: true))!)
             {
                 Assert.Equal(directory, borrowed.DirectoryPath, StringComparer.OrdinalIgnoreCase);
                 AssertRetainedArchiveWasNotCapturedAgain(second.Runner, second.ArchiveStart, second.ArchiveSectors);
@@ -161,6 +161,30 @@ public sealed partial class InternalInstallExistingBackupTests
         Assert.Single(Directory.GetDirectories(material.DurableParent, "board-recovery-*"));
         Assert.Empty(second.Runner.Writes);
         Assert.Equal(0, second.Runner.ResetCount);
+    }
+
+    [Fact]
+    public async Task ReadDirectoryForInstall_StockGptReturnsNoBackup()
+    {
+        const string Name = nameof(ReadDirectoryForInstall_StockGptReturnsNoBackup);
+        string sourceDirectory = _fixture.NewCaseDirectory(Name + "-sources");
+        IReadOnlyDictionary<string, VerifiedEdlFile> sources = CreateDirectSources(sourceDirectory);
+        IB001SyntheticDevice device = IB001SyntheticDevice.CreateDirect(
+            _fixture.NewCaseDirectory(Name + "-backing"), sources);
+        var runner = new IB001FakeEdlRunner(device);
+        runner.EmitGeometryOnSingleSectorRead = true;
+        var client = NewClient(runner, NewBinding());
+        await client.ProbeAsync(0, initialLoader: true);
+        string durableParent = _fixture.NewCaseDirectory(Name + "-durable");
+        string scratch = _fixture.NewCaseDirectory(Name + "-scratch");
+
+        BoardRecoveryExtraction? extraction = await BoardRecoveryBackup.ReadDirectoryAsync(
+            client, durableParent, scratch, allowRetainedCopy: false, validateInternalInstallLayout: true);
+
+        Assert.Null(extraction);
+        Assert.Empty(runner.Writes);
+        Assert.Equal(0, runner.ResetCount);
+        Assert.DoesNotContain(runner.Reads, read => read.SectorCount == BoardArchiveBytes / 4096);
     }
 
     [Theory]

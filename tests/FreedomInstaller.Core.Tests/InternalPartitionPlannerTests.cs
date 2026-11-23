@@ -266,6 +266,63 @@ public sealed class InternalPartitionPlannerTests
         }
     }
 
+    // ---------------------------------------------------------------- launcher defaults backup selection
+
+    [Fact]
+    public void FindInstalledBackupPartition_LegacyPackage_ReturnsNull()
+    {
+        GptTable table = G4InstalledTable("ARMADA_BOOT", "ARMADA_ROOT", "ARMADA_BACKUP");
+
+        GptPartition? backup = InternalInstallLauncherDefaults.FindInstalledBackupPartition(false, table);
+
+        Assert.Null(backup);
+    }
+
+    [Fact]
+    public void FindInstalledBackupPartition_RetainedBackupWithoutBootAndRoot_ReturnsNull()
+    {
+        const long backupStart = 133660672;
+        const long backupSectors = 524288;
+        GptTable table = G4Table(
+            Part(2, "userdata", G4UserdataStart, backupStart - G4UserdataStart),
+            Part(5, "ARMADA_BACKUP", backupStart, backupSectors));
+
+        GptPartition? backup = InternalInstallLauncherDefaults.FindInstalledBackupPartition(true, table);
+
+        Assert.Null(backup);
+    }
+
+    [Fact]
+    public void FindInstalledBackupPartition_FactoryNoArmada_ReturnsNull()
+    {
+        GptPartition? backup = InternalInstallLauncherDefaults.FindInstalledBackupPartition(
+            true,
+            G4Table(Part(2, "userdata", G4UserdataStart, G4UserdataCount)));
+
+        Assert.Null(backup);
+    }
+
+    [Fact]
+    public void FindInstalledBackupPartition_CompleteLayout_ReturnsExactBackupPartition()
+    {
+        GptTable table = G4InstalledTable("ARMADA_BOOT", "ARMADA_ROOT", "ARMADA_BACKUP");
+
+        GptPartition? backup = InternalInstallLauncherDefaults.FindInstalledBackupPartition(true, table);
+
+        Assert.NotNull(backup);
+        Assert.Same(table.Partitions.Single(p => p.Name == "ARMADA_BACKUP"), backup);
+    }
+
+    [Fact]
+    public void FindInstalledBackupPartition_PartialLayoutMissingBackup_Throws()
+    {
+        GptTable complete = G4InstalledTable("ARMADA_BOOT", "ARMADA_ROOT", "ARMADA_BACKUP");
+        GptTable table = G4Table(complete.Partitions.Where(p => p.Name != "ARMADA_BACKUP").ToArray());
+
+        Assert.Throws<InvalidOperationException>(() =>
+            InternalInstallLauncherDefaults.FindInstalledBackupPartition(true, table));
+    }
+
     // ---------------------------------------------------------------- exact aligned minimum
 
     [Fact]
