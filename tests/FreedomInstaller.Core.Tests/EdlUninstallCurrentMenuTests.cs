@@ -277,6 +277,63 @@ public sealed class EdlUninstallCurrentMenuTests
 
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task QualcommUninstall_CompletesBothBootChoices_DirectErase(bool restoreStock, bool reclaimBoardBackup)
+    {
+        using Harness h = await PrepareAsync(qualcomm: true, stockOnly: restoreStock, directErase: true, reclaimBoardBackup: reclaimBoardBackup);
+        BootMaintenancePrepared? expected = null;
+        if (restoreStock)
+        {
+            var history = await BootMaintenanceBackend.ReadHistoricalIdentityAsync(h.Current.DirectoryPath);
+            using var stock = await BootMaintenanceBackend.CreatePreparedFromEdlAsync(
+                MaintenanceMode.RestoreStock, history, h.Client, h.Current,
+                new BootMaintenanceSources(OriginalBackupDirectory: h.Original.DirectoryPath),
+                h.Runner, h.CaseDirectory);
+            expected = stock.Prepared;
+        }
+
+        UninstallResult result = await RunWorkflowAsync(h);
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(UninstallStage.AwaitingAndroidBoot, result.Stage);
+        Assert.Equal(0, h.Ib.ResetCount);
+
+        ProcessCommand[] eraseCommands = h.Ib.Commands.Where(c => c.Arguments[0] == "erase-sector").ToArray();
+        Assert.Equal(2, eraseCommands.Length);
+        GptPartition userdata = h.OriginalTable.Partitions.Single(p => p.Name == "userdata");
+        GptPartition metadata = h.Current.Tables[0].Partitions.Single(p => p.Name == "metadata");
+        long userdataCount = reclaimBoardBackup ? userdata.SectorCount : h.BackupSpec.StartSector - userdata.StartSector;
+        Assert.Equal(userdata.StartSector, long.Parse(eraseCommands[0].Arguments[1], CultureInfo.InvariantCulture));
+        Assert.Equal(userdataCount, long.Parse(eraseCommands[0].Arguments[2], CultureInfo.InvariantCulture));
+        Assert.Equal("0", eraseCommands[0].Arguments[4]);
+        Assert.Equal(metadata.StartSector, long.Parse(eraseCommands[1].Arguments[1], CultureInfo.InvariantCulture));
+        Assert.Equal(metadata.SectorCount, long.Parse(eraseCommands[1].Arguments[2], CultureInfo.InvariantCulture));
+        Assert.Equal("0", eraseCommands[1].Arguments[4]);
+
+        var misc = h.Current.Files["misc"];
+        var miscWrite = h.Ib.Writes.Last(w => w.StartSector == misc.StartSector && w.Lun == misc.Lun);
+        byte[] miscBytes = await File.ReadAllBytesAsync(miscWrite.FilePath);
+        Assert.All(miscBytes.Take(32), b => Assert.Equal(0, b));
+        Assert.All(miscBytes.Skip(64).Take(832 - 64), b => Assert.Equal(0, b));
+
+        if (restoreStock)
+        {
+            BootMaintenanceResult restored = await UninstallStockBootRestoration.RestoreAfterUninstallAsync(
+                result, expected!, h.Client, h.Original.DirectoryPath, h.Runner, h.CaseDirectory);
+            Assert.Equal(BootMaintenanceOutcome.Completed, restored.Outcome);
+            Assert.Equal(InternalInstallWriteState.AllVerified, restored.WriteState);
+        }
+        else
+        {
+            await h.Client.ResetAsync();
+        }
+
+        Assert.Equal(1, h.Ib.ResetCount);
+    }
+
+    [Theory]
     [InlineData(false, "a", false)]
     [InlineData(true, "a", false)]
     [InlineData(false, "b", false)]
@@ -416,7 +473,7 @@ public sealed class EdlUninstallCurrentMenuTests
         return result;
     }
 
-    internal async Task<Harness> PrepareAsync(bool qualcomm = false, string currentSlot = "a", bool stockOnly = false, bool initializedBFromA = false)
+    internal async Task<Harness> PrepareAsync(bool qualcomm = false, string currentSlot = "a", bool stockOnly = false, bool initializedBFromA = false, bool directErase = false, bool reclaimBoardBackup = true)
     {
         string caseDirectory = _toolchain.NewCaseDirectory(
             nameof(EdlUninstallCurrentMenuTests) + "-" + Guid.NewGuid().ToString("N"));
@@ -534,10 +591,14 @@ public sealed class EdlUninstallCurrentMenuTests
 
             // Expected factory geometry: remove all three project partitions and reclaim their space.
             var expectedPostPartitions = new List<GptPartitionSpec>(currentPartitions);
+            if (!reclaimBoardBackup)
+            {
+                expectedPostPartitions.Add(backupSpec);
+            }
             expectedPostPartitions.Add(new GptPartitionSpec(
                 originalUserdata.Number, originalUserdata.Name, originalUserdata.TypeGuid,
                 originalUserdata.PartUuid, originalUserdata.StartSector,
-                originalUserdata.SectorCount, originalUserdata.Attributes));
+                reclaimBoardBackup ? originalUserdata.SectorCount : backupStart - originalUserdata.StartSector, originalUserdata.Attributes));
 
             GptImage currentImage = new(
                 originalTable.SectorSize,
@@ -631,6 +692,7 @@ public sealed class EdlUninstallCurrentMenuTests
 
             // ---- composite runner: python+gpt goes to the EB tail wrapper, everything else to IB001 ----
             var ib = new IB001FakeEdlRunner(device, enableWrites: true);
+            if (directErase) ib.PayloadOverride = read => read.SectorCount==1 && read.FilePath.EndsWith("-readback.bin",StringComparison.Ordinal) && read.FilePath.Contains("android-erase-",StringComparison.Ordinal) ? new byte[4096] : null;
             EbScenario scenario = EbScenario.Create(_toolchain.Toolchain);
             var innerEb = new EbRunner(_toolchain.Toolchain, scenario.Content);
             var tail = new TailGptInterceptRunner(
@@ -664,7 +726,7 @@ public sealed class EdlUninstallCurrentMenuTests
                 backend = await EdlUninstallBackend.CreatePreparedForStockRestoreAsync(
                     currentClient, _toolchain.Toolchain, currentClient.Binding,
                     UninstallGptAssets.FromVerifiedBackup(original), current, stock.Prepared,
-                    Path.Combine(caseDirectory, "evidence"), composite);
+                    Path.Combine(caseDirectory, "evidence"), composite, reclaimBoardBackup: reclaimBoardBackup, useDirectAndroidDataErase: directErase);
                 Assert.Equal(0, backend.MenuWriteCount);
             }
             else
@@ -676,7 +738,7 @@ public sealed class EdlUninstallCurrentMenuTests
                 backend = await EdlUninstallBackend.CreatePreparedAsync(
                     currentClient, _toolchain.Toolchain, currentClient.Binding,
                     UninstallGptAssets.FromVerifiedBackup(original), current, menu, slotFacts.CurrentSlot,
-                    Path.Combine(caseDirectory, "evidence"), composite);
+                    Path.Combine(caseDirectory, "evidence"), composite, reclaimBoardBackup: reclaimBoardBackup, useDirectAndroidDataErase: directErase);
             }
             owned.Add(backend);
 

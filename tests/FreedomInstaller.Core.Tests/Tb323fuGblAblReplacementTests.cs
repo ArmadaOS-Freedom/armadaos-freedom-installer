@@ -263,17 +263,19 @@ public sealed class Tb323fuGblAblReplacementTests
 
         Assert.Equal(11 + expectedWriteSlotOrder.Length, writes.Count);
         AssertFullWrite(writes[7], session.Backup.Files["efisp"]);
-        AssertFullWrite(writes[8], session.Backup.Files["boot_b"]);
-        AssertFullWrite(writes[9], session.Backup.Files["boot_a"]);
 
         for (int index = 0; index < expectedWriteSlotOrder.Length; index++)
         {
             string slot = expectedWriteSlotOrder[index];
             EdlCapturedRegion targetAbl = session.Backup.Files["abl_" + slot];
-            IB001Write ablWrite = writes[10 + index];
+            IB001Write ablWrite = writes[8 + index];
             AssertFullWrite(ablWrite, targetAbl);
             Assert.Equal(Tb323fuAbl088Assets.ImageSha256, ablWrite.Sha256, ignoreCase: true);
         }
+
+        int bootBIndex = 8 + expectedWriteSlotOrder.Length;
+        AssertFullWrite(writes[bootBIndex], session.Backup.Files["boot_b"]);
+        AssertFullWrite(writes[bootBIndex + 1], session.Backup.Files["boot_a"]);
 
         if (!slotAIncompatible)
         {
@@ -343,9 +345,91 @@ public sealed class Tb323fuGblAblReplacementTests
         Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
         Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
         Assert.Equal(12, session.EdlRunner.Writes.Count);
-        AssertFullWrite(session.EdlRunner.Writes[10], session.Backup.Files["abl_a"]);
-        Assert.Equal(Tb323fuAbl088Assets.ImageSha256, session.EdlRunner.Writes[10].Sha256, ignoreCase: true);
+        AssertFullWrite(session.EdlRunner.Writes[7], session.Backup.Files["efisp"]);
+        AssertFullWrite(session.EdlRunner.Writes[8], session.Backup.Files["abl_a"]);
+        Assert.Equal(Tb323fuAbl088Assets.ImageSha256, session.EdlRunner.Writes[8].Sha256, ignoreCase: true);
+        AssertFullWrite(session.EdlRunner.Writes[9], session.Backup.Files["boot_b"]);
+        AssertFullWrite(session.EdlRunner.Writes[10], session.Backup.Files["boot_a"]);
+        AssertBcbWrite(session.EdlRunner.Writes[11], session.Backup.Files["misc"]);
         Assert.DoesNotContain(session.EdlRunner.Writes, write => OverlapsRegion(write, session.Backup.Files["abl_b"]));
+    }
+
+    [Fact]
+    public async Task LockedTb323fu_BootOnlyInactiveSlotB_DowngradesSlotAFirstThenPopulatesSlotBBoot()
+    {
+        if (!Tb323fuAbl088Assets.IsBundled)
+        {
+            return;
+        }
+
+        string caseDir = _g5.NewCaseDirectory(nameof(LockedTb323fu_BootOnlyInactiveSlotB_DowngradesSlotAFirstThenPopulatesSlotBBoot));
+        VerifiedEdlFile incompatibleAblA = WriteDeterministicFile(
+            caseDir,
+            "abl-a-055.img",
+            Tb323fuAbl088Assets.ImageLength,
+            0x37);
+        VerifiedEdlFile xbl = WriteVerifiedFile(caseDir, "xbl-gen5.elf", BuildSyntheticGen5XblConfig());
+
+        using var source = new GblDirectSourceFixture(
+            region: "PRC",
+            mismatchParentBootChild: false,
+            androidTextOffset: null,
+            customAbl: incompatibleAblA,
+            customXbl: xbl);
+
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _g5.Toolchain,
+            _raw,
+            currentSlot: "a",
+            zeroSlot: "b",
+            bootOnlyInactiveB: true,
+            avbSourceKind: DirectAvbSourceKind.Oem,
+            observedFastbootLockState: BootloaderState.Locked,
+            gblSources: source);
+
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+        Assert.Equal(InternalInstallBootTrustMode.GblPreserveOem, prepared.BootTrustMode);
+        Assert.Equal(new[] { "a" }, prepared.GblAblReplacementSlots);
+        Assert.Equal("a", prepared.AvbSlots["b"].SourceSlot);
+        Assert.True(prepared.AvbSlots["b"].NonbootableSystem);
+        Assert.Equal("a", prepared.SlotMaterials["b"].Slot);
+        Assert.Equal(
+            Tb323fuAbl088Assets.ImageSha256,
+            prepared.SlotMaterials["a"].SourceSha256["abl"],
+            ignoreCase: true);
+        Assert.Equal(
+            Tb323fuAbl088Assets.ImageSha256,
+            prepared.SlotMaterials["b"].SourceSha256["abl"],
+            ignoreCase: true);
+        Assert.NotEqual(
+            prepared.CurrentBootSha256["a"],
+            prepared.CurrentBootSha256["b"],
+            StringComparer.OrdinalIgnoreCase);
+        Assert.Empty(session.EdlRunner.Writes);
+
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            prepared.ConfirmationId,
+            userdataEraseConfirmed: true);
+
+        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
+        Assert.Equal(new[] { "b", "a" }, result.VerifiedSlots);
+        Assert.Equal(1, session.EdlRunner.ResetCount);
+
+        var writes = session.EdlRunner.Writes;
+        Assert.Equal(12, writes.Count);
+        AssertFullWrite(writes[7], session.Backup.Files["efisp"]);
+        AssertFullWrite(writes[8], session.Backup.Files["abl_a"]);
+        Assert.Equal(Tb323fuAbl088Assets.ImageSha256, writes[8].Sha256, ignoreCase: true);
+        AssertFullWrite(writes[9], session.Backup.Files["boot_b"]);
+        AssertFullWrite(writes[10], session.Backup.Files["boot_a"]);
+        AssertBcbWrite(writes[11], session.Backup.Files["misc"]);
+        Assert.NotEqual(session.Backup.Files["boot_b"].Sha256, writes[9].Sha256, StringComparer.OrdinalIgnoreCase);
+
+        foreach (string role in new[] { "vendor_boot_b", "init_boot_b", "abl_b", "xbl_config_b", "vbmeta_b", "vbmeta_system_b", "recovery_b" })
+        {
+            Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files[role]));
+        }
     }
 
     [Fact]
@@ -508,6 +592,8 @@ public sealed class Tb323fuGblAblReplacementTests
         Assert.Equal(new[] { "b" }, verifiedAblSlots);
         var writes = session.EdlRunner.Writes;
         AssertFullWrite(writes[^1], ablA);
+        Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files["boot_b"]));
+        Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files["boot_a"]));
         Assert.DoesNotContain(writes, write => OverlapsRegion(write, misc));
         Assert.Equal(0, session.EdlRunner.ResetCount);
 

@@ -54,6 +54,21 @@ public sealed class UiTextTests
     }
 
     [Fact]
+    public void LinuxAlreadyInstalled_WarningText_IsExactInBothLanguages()
+    {
+        var chinese = new UiText(UiText.ChineseLanguage);
+        var english = new UiText(UiText.EnglishLanguage);
+        var message = new UiMessage("Dynamic.Global.Error.LinuxAlreadyInstalled");
+
+        Assert.Equal(
+            "此平板已经安装过Linux，无法进行安卓9008 备份。",
+            chinese.FormatForDisplay(message));
+        Assert.Equal(
+            "This tablet already has Linux installed, so Android 9008 backup cannot be performed.",
+            english.FormatForDisplay(message));
+    }
+
+    [Fact]
     public void NestedArgumentUiMessage_DisplayKeepsPathAndMasksUnknownProseButRawFormatPreservesIt()
     {
         const string unknownRawProse = "vendor driver stack trace 0xDEADBEEF should stay raw only";

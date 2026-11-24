@@ -461,6 +461,9 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         string? ablFixturePath = null,
         long? reinstallAndroidGiB = null,
         string? mediaPath = null,
+        bool bootOnlyInactiveB = false,
+        bool keepInactiveRecovery = false,
+        bool useDirectAndroidDataErase = false,
         IReadOnlyDictionary<string, VerifiedEdlFile>? sourceOverrides = null)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
@@ -595,7 +598,10 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                     inactiveTarget.WriteByteAt(0, 4096 + 17, 0x01);
                 }
 
-                sources["boot_" + zeroSlot] = inactiveTarget.Boot;
+                if (!bootOnlyInactiveB)
+                {
+                    sources["boot_" + zeroSlot] = inactiveTarget.Boot;
+                }
                 sources["vendor_boot_" + zeroSlot] = inactiveTarget.VendorBoot;
                 sources["init_boot_" + zeroSlot] = inactiveTarget.InitBoot;
                 sources["abl_" + zeroSlot] = inactiveTarget.Abl;
@@ -636,6 +642,25 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
             IReadOnlyDictionary<string, VerifiedEdlFile> originalAvbSources = gblSources is null
                 ? avbSources!.Sources
                 : gblSources.AvbSources;
+            if (bootOnlyInactiveB)
+            {
+                byte[] zeroVbmeta = new byte[4096];
+                string zeroVbmetaPath = Path.Combine(root, "vbmeta-zero-4096.bin");
+                File.WriteAllBytes(zeroVbmetaPath, zeroVbmeta);
+                string zeroVbmetaSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(zeroVbmeta));
+                var zeroVbmetaFile = new VerifiedEdlFile(zeroVbmetaPath, 4096, zeroVbmetaSha);
+                var inactiveAvbSources = new Dictionary<string, VerifiedEdlFile>(originalAvbSources, StringComparer.Ordinal)
+                {
+                    ["vbmeta_b"] = zeroVbmetaFile,
+                    ["vbmeta_system_b"] = zeroVbmetaFile,
+                };
+                if (!keepInactiveRecovery)
+                {
+                    inactiveAvbSources["recovery_b"] = zeroVbmetaFile;
+                }
+                originalAvbSources = inactiveAvbSources;
+            }
+
             string originalRootKey = gblSources is null
                 ? avbSources!.OriginalRootKeySha256
                 : gblSources.ParentPublicKeySha256;
@@ -645,7 +670,7 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
             IB001SyntheticDevice device = IB001SyntheticDevice.CreateDirect(
                 deviceDirectory,
                 sources,
-                gblSources is null ? avbSources!.Sources : gblSources.AvbSources,
+                originalAvbSources,
                 gblSources?.EfispSource,
                 gen5: IsG5Model(toolchain.Model));
 
@@ -816,7 +841,10 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 recoveryBackup: factoryRecovery);
 
             EdlEntry entry = new(TestAdbPath, router, discovery);
-            var services = new InternalInstallServices(entry, router, discovery, TestAdbPath);
+            var services = new InternalInstallServices(entry, router, discovery, TestAdbPath)
+            {
+                UseDirectAndroidDataErase = useDirectAndroidDataErase
+            };
 
             string evidenceParent = Path.Combine(root, "evidence");
             Directory.CreateDirectory(evidenceParent);

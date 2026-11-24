@@ -160,7 +160,8 @@ internal sealed partial class InternalInstallPreparationContext
         EdlRawBootTools tools,
         ICommandRunner runner,
         string evidenceDirectory,
-        CancellationToken ct)
+        CancellationToken ct,
+        VerifiedEdlFile? effectiveSourceAblA = null)
     {
         ArgumentNullException.ThrowIfNull(profileId);
         ArgumentNullException.ThrowIfNull(files);
@@ -187,7 +188,7 @@ internal sealed partial class InternalInstallPreparationContext
                 Claim(files, "boot_a"),
                 Claim(files, "vendor_boot_a"),
                 Claim(files, "init_boot_a"),
-                Claim(files, "abl_a"),
+                effectiveSourceAblA ?? Claim(files, "abl_a"),
                 Claim(files, "xbl_config_a"),
                 Claim(files, "boot_b"),
                 Claim(files, "vendor_boot_b"),

@@ -3,4 +3,7 @@ namespace QCEDL.CLI.Core;
 /// <summary>
 /// Represents basic storage geometry information exposed by different backends.
 /// </summary>
-internal readonly record struct StorageGeometry(uint SectorSize, ulong? TotalSectors);
+internal readonly record struct StorageGeometry(uint SectorSize, ulong? TotalSectors)
+{
+    public bool SectorSizeVerified { get; init; }
+}

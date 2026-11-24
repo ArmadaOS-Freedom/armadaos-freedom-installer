@@ -73,6 +73,17 @@
                       Value="$(BundledOfflineUpdaterVersion)" />
   </ItemGroup>
 
+  <!-- Internal-install direct Android-erase opt-in: the WPF app enables the direct matcher
+       only when the private MSBuild property pair is supplied. The two properties must be
+       present together and produce paired AssemblyMetadata; a lone or blank value embeds
+       nothing and the production default stays unchanged. -->
+  <ItemGroup Condition="'$(DirectAndroidEraseModel)' != '' and '$(DirectAndroidEraseBuildFingerprint)' != ''">
+    <AssemblyMetadata Include="DirectAndroidEraseModel"
+                      Value="$(DirectAndroidEraseModel)" />
+    <AssemblyMetadata Include="DirectAndroidEraseBuildFingerprint"
+                      Value="$(DirectAndroidEraseBuildFingerprint)" />
+  </ItemGroup>
+
   <!-- Bundled platform-tools: only embedded when the build supplies an existing archive.
        The archive must be the official platform-tools-windows.zip; it is never downloaded here. -->
   <ItemGroup Condition="'$(BundledPlatformToolsArchive)' != '' and Exists('$(BundledPlatformToolsArchive)')">

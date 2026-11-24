@@ -185,7 +185,73 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
                 initBoot,
                 abl,
                 xblConfig,
-                cancellationToken),
+                cancellationToken,
+                true),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Proves the inactive slot B for the fixed TB323FU profile where the source is slot 'a' and the
+    /// target is slot 'b'. The four companion captures (vendor_boot, init_boot, abl, xbl_config) must be
+    /// complete zero-filled files and the current_boot is proven only by its claimed length and SHA-256
+    /// without interpreting its contents. The caller remains responsible for the live slot A lock,
+    /// the original GPT and zero B AVB companion checks.
+    /// </summary>
+    internal static Task<EdlRawInactiveSlotBackup> VerifyBootOnlyInactiveBAsync(
+        string profileId,
+        VerifiedEdlFile currentBoot,
+        VerifiedEdlFile vendorBoot,
+        VerifiedEdlFile initBoot,
+        VerifiedEdlFile abl,
+        VerifiedEdlFile xblConfig,
+        CancellationToken cancellationToken)
+    {
+        EdlDeviceProfile profile = RequireProfile(profileId);
+
+        if (!string.Equals(profile.Model, "TB323FU", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("profile model must be exactly TB323FU.", nameof(profileId));
+        }
+
+        if (currentBoot is null)
+        {
+            throw new ArgumentNullException(nameof(currentBoot));
+        }
+
+        if (vendorBoot is null)
+        {
+            throw new ArgumentNullException(nameof(vendorBoot));
+        }
+
+        if (initBoot is null)
+        {
+            throw new ArgumentNullException(nameof(initBoot));
+        }
+
+        if (abl is null)
+        {
+            throw new ArgumentNullException(nameof(abl));
+        }
+
+        if (xblConfig is null)
+        {
+            throw new ArgumentNullException(nameof(xblConfig));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return Task.Run(
+            () => VerifyCore(
+                profile,
+                "a",
+                "b",
+                currentBoot,
+                vendorBoot,
+                initBoot,
+                abl,
+                xblConfig,
+                cancellationToken,
+                false),
             cancellationToken);
     }
 
@@ -330,16 +396,17 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
         VerifiedEdlFile initBoot,
         VerifiedEdlFile abl,
         VerifiedEdlFile xblConfig,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireZeroBoot)
     {
         var opened = new List<FileStream>(5);
         try
         {
-            FileStream boot = OpenZeroLease(opened, "current_boot", currentBoot, cancellationToken);
-            FileStream vendor = OpenZeroLease(opened, "vendor_boot", vendorBoot, cancellationToken);
-            FileStream init = OpenZeroLease(opened, "init_boot", initBoot, cancellationToken);
-            FileStream ablStream = OpenZeroLease(opened, "abl", abl, cancellationToken);
-            FileStream xblStream = OpenZeroLease(opened, "xbl_config", xblConfig, cancellationToken);
+            FileStream boot = OpenVerifiedLease(opened, "current_boot", currentBoot, cancellationToken, requireZeroBoot);
+            FileStream vendor = OpenVerifiedLease(opened, "vendor_boot", vendorBoot, cancellationToken, true);
+            FileStream init = OpenVerifiedLease(opened, "init_boot", initBoot, cancellationToken, true);
+            FileStream ablStream = OpenVerifiedLease(opened, "abl", abl, cancellationToken, true);
+            FileStream xblStream = OpenVerifiedLease(opened, "xbl_config", xblConfig, cancellationToken, true);
 
             return new EdlRawInactiveSlotBackup(
                 profile,
@@ -371,11 +438,12 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
     /// Opens one plain read lease and proves in a single bounded pass that the bytes are zero, that the
     /// observed length equals the claim and that the SHA-256 of the same bytes equals the claim.
     /// </summary>
-    private static FileStream OpenZeroLease(
+    private static FileStream OpenVerifiedLease(
         List<FileStream> opened,
         string role,
         VerifiedEdlFile claim,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireZero)
     {
         string fullPath = RequirePlainFile(claim.Path, role);
 
@@ -413,7 +481,7 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
             throw new InvalidDataException(role + " length differs from its claim");
         }
 
-        ScanZeroAndHash(stream, claim, role, cancellationToken);
+        ScanZeroAndHash(stream, claim, role, cancellationToken, requireZero);
         return stream;
     }
 
@@ -421,7 +489,8 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
         FileStream stream,
         VerifiedEdlFile claim,
         string role,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireZero)
     {
         stream.Position = 0;
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -436,7 +505,7 @@ public sealed class EdlRawInactiveSlotBackup : IDisposable
                 break;
             }
 
-            if (!IsAllZero(buffer, read))
+            if (requireZero && !IsAllZero(buffer, read))
             {
                 throw new InvalidDataException(role + " is not a factory-uninitialized zero-filled slot");
             }

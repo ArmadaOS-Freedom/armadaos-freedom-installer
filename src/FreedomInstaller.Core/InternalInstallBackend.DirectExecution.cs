@@ -72,7 +72,7 @@ public sealed partial class InternalInstallBackend
         await _context.VerifyLauncherDefaultsAsync(_initialEdl, after: false, ct).ConfigureAwait(false);
         _context.EnsureDirectExecutionSpace(includeOriginalCapture: false);
 
-        if (!_context.AndroidDataErase)
+        if (!_context.AndroidDataErase || _context.DirectAndroidErase is not null)
         {
             EdlCapturedRegion pendingMisc = RequireCapturedRegion("misc");
             int pendingUnitBytes = CheckedWriteUnitBytes(pendingMisc.SectorSize);
@@ -316,8 +316,9 @@ public sealed partial class InternalInstallBackend
             .ConfigureAwait(false);
 
         // On the GBL-preserving route the efisp runtime region is the eighth device write: after the four GPT
-        // regions, the board archive and the two Linux images, and still before both boot candidates, the misc
-        // overlay and the reset. The AOSP-resigned route has no runtime region and writes nothing here.
+        // regions, the board archive and the two Linux images, and still before any replaced 088 ABL, both boot
+        // candidates, the misc overlay and the reset. The AOSP-resigned route has no runtime region and writes
+        // nothing here.
         if (gblRuntime != null)
         {
             await WriteExecutionRegionAsync(
@@ -326,6 +327,30 @@ public sealed partial class InternalInstallBackend
                     InternalInstallStage.WritingGblRuntime,
                     null,
                     gblRuntime,
+                    true,
+                    progress,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        // On the GBL-preserving route any replaced TB323FU 088 ABL is written whole and read back in the
+        // fixed b, a slot order immediately after efisp and before overwriting boot_b and boot_a, so the
+        // efisp-capable loader is durable on flash before any GBL boot wrapper lands. When slot b is empty,
+        // only slot a is in gblAblRegions, so slot a is downgraded before boot_b is populated from slot a.
+        foreach (InternalArtifactRegion region in gblAblRegions)
+        {
+            string? slot = region.Role.EndsWith("_a", StringComparison.Ordinal)
+                ? "a"
+                : region.Role.EndsWith("_b", StringComparison.Ordinal)
+                    ? "b"
+                    : null;
+
+            await WriteExecutionRegionAsync(
+                    _initialEdl,
+                    run,
+                    InternalInstallStage.WritingGblAbl,
+                    slot,
+                    region,
                     true,
                     progress,
                     ct)
@@ -354,29 +379,6 @@ public sealed partial class InternalInstallBackend
                 progress,
                 ct)
             .ConfigureAwait(false);
-
-        // On the GBL-preserving route any replaced TB323FU 088 ABL is written whole and read back in the
-        // fixed b, a slot order after efisp and both preserved boot candidates, and before misc, launcher
-        // settings and reset. The list is empty on every non-GBL route and whenever live ABLs load efisp.
-        foreach (InternalArtifactRegion region in gblAblRegions)
-        {
-            string? slot = region.Role.EndsWith("_a", StringComparison.Ordinal)
-                ? "a"
-                : region.Role.EndsWith("_b", StringComparison.Ordinal)
-                    ? "b"
-                    : null;
-
-            await WriteExecutionRegionAsync(
-                    _initialEdl,
-                    run,
-                    InternalInstallStage.WritingGblAbl,
-                    slot,
-                    region,
-                    true,
-                    progress,
-                    ct)
-                .ConfigureAwait(false);
-        }
 
         // Every mandatory AVB metadata region of the AOSP-resigned route is written whole and read back over the
         // same initial session, in the frozen prepared order, before the misc overlay and the reset. The list is
@@ -421,7 +423,8 @@ public sealed partial class InternalInstallBackend
 
         // A preserved ARMADA_BOOT layout skips misc entirely; a preserved legacy layout may still clear
         // an existing installer BCB. The explicit AndroidDataErase decision must accompany every call.
-        if (_context.AndroidDataErase || !_context.Package.EdlRawContract.BootRecipe.UsesArmadaBoot)
+        if (_context.DirectAndroidErase is null
+            && (_context.AndroidDataErase || !_context.Package.EdlRawContract.BootRecipe.UsesArmadaBoot))
         {
             await WriteFreshMiscAsync(_initialEdl, run, progress, ct, androidDataErase: _context.AndroidDataErase).ConfigureAwait(false);
         }
@@ -451,6 +454,25 @@ public sealed partial class InternalInstallBackend
         {
             run.MarkVerificationUnproven();
             throw;
+        }
+
+        if (_context.DirectAndroidErase is { } directPlan)
+        {
+            await WriteFreshMiscAsync(_initialEdl, run, progress, ct, androidDataErase: false).ConfigureAwait(false);
+            try
+            {
+                await directPlan.ExecuteAsync(
+                        _initialEdl,
+                        _context.EvidenceDirectory,
+                        message => WriteNewJsonFile(NewExecutionEvidencePath("android-erase", ".json"), new { message }),
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                run.MarkVerificationUnproven();
+                throw;
+            }
         }
 
         // The one reset of this run, and only after every write and readback above.
