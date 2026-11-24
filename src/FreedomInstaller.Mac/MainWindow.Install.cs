@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
@@ -1346,7 +1346,7 @@ public partial class MainWindow
                 M(
                     "Dynamic.InternalInstall.Execution.WithFailureDetails",
                     summary,
-                    prepared.GblAblReplacementSlots.Count != 0 || prepared.GblAblCopySlots.Count != 0
+                    prepared.GblAblReplacementSlots.Count != 0
                         ? M(
                             "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
                             string.Join(", ", prepared.GblAblReplacementSlots),
