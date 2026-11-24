@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
@@ -161,7 +161,7 @@ public sealed class Tb323fuGblAblReplacementTests
     [Theory]
     [InlineData(false, true, "b", new[] { "b" })]
     [InlineData(true, false, "a", new[] { "a" })]
-    [InlineData(true, true, "b", new[] { "a", "b" })]
+    [InlineData(true, true, "b", new[] { "b", "a" })]
     [InlineData(false, false, "a", new string[0])]
     public async Task LockedTb323fu_ReplacesExactIncompatibleAblSlotsAndExecutesInFrozenOrder(
         bool slotAIncompatible,
@@ -271,23 +271,23 @@ public sealed class Tb323fuGblAblReplacementTests
             .ToArray();
 
         Assert.Equal(11 + expectedWriteSlotOrder.Length, writes.Count);
+        Assert.Equal(11 + expectedWriteSlotOrder.Length, writes.Count);
         AssertFullWrite(writes[7], session.Backup.Files["efisp"]);
+
+        AssertFullWrite(writes[8], session.Backup.Files["boot_b"]);
+        AssertFullWrite(writes[9], session.Backup.Files["boot_a"]);
 
         for (int index = 0; index < expectedWriteSlotOrder.Length; index++)
         {
             string slot = expectedWriteSlotOrder[index];
             EdlCapturedRegion targetAbl = session.Backup.Files["abl_" + slot];
-            IB001Write ablWrite = writes[8 + index];
+            IB001Write ablWrite = writes[10 + index];
             AssertFullWrite(ablWrite, targetAbl);
             Assert.Equal(Tb323fuAbl088Assets.ImageSha256, ablWrite.Sha256, ignoreCase: true);
         }
 
-        int bootBIndex = 8 + expectedWriteSlotOrder.Length;
-        AssertFullWrite(writes[bootBIndex], session.Backup.Files["boot_b"]);
-        AssertFullWrite(writes[bootBIndex + 1], session.Backup.Files["boot_a"]);
-
-        if (!slotAIncompatible)
-        {
+        int miscIndex = 10 + expectedWriteSlotOrder.Length;
+        AssertBcbWrite(writes[miscIndex], session.Backup.Files["misc"]);
             Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files["abl_a"]));
         }
 
