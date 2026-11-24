@@ -395,7 +395,12 @@ class MacUninstallParityTests(unittest.TestCase):
         waited = backup[resume:android]
         # (the retry binds with the identity read right before the attempted entry, so the entry keeps the build that
         # entry accepted; the step-1 identity is only the fallback when no entry was attempted from Android)
-        self.assertIn(".WaitForPresentAsync(_uninstallEntryAndroid ?? expected, loaded.Profile, token)", waited)
+        self.assertIn("var resumeIdentity = _uninstallEntryAndroid;", waited)
+        self.assertRegex(
+            waited,
+            r"if \(resumeIdentity is null\)\s*\{\s*_uninstallEntryBuildUnknown = true;\s*resumeIdentity = expected;\s*\}",
+        )
+        self.assertIn(".WaitForPresentAsync(resumeIdentity, loaded.Profile, token)", waited)
         self.assertNotIn("EnterAsync", waited)
         # ... a tablet back in Android is re-read and compared before the one EnterAsync;
         entered = backup[android:]
@@ -432,6 +437,8 @@ class MacUninstallParityTests(unittest.TestCase):
         self.assertIn("AndroidDataErasePreview.Matches(liveAndroid.Model, liveAndroid.Firmware)", gate)
         # ... and the build the 9008 entry accepted must match as well (the entry re-proof ignores the fingerprint).
         self.assertIn("var enteredAndroid = entry.AndroidIdentity?.Identity;", gate)
+        # A retry that could only bind with the step-1 identity leaves the entered build unknown: no direct erase.
+        self.assertIn("&& !_uninstallEntryBuildUnknown", gate)
         self.assertIn("AndroidDataErasePreview.Matches(enteredAndroid.Model, enteredAndroid.Firmware)", gate)
 
     def test_tablet_backup_hash_is_recorded_only_after_a_successful_read(self):

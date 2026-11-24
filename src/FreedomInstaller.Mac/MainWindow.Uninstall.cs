@@ -48,6 +48,9 @@ public partial class MainWindow
     // The Android identity read right before the one EnterAsync (null until then): an unconfirmed-entry retry binds the
     // 9008 endpoint with it, so the entry keeps the build that was actually accepted, not the step-1 build.
     private AndroidMaintenanceIdentity? _uninstallEntryAndroid;
+    // Set when a retry had to bind with the step-1 identity because no entry identity was kept: the build behind the
+    // 9008 endpoint is then unknown and direct Android data erase stays off for this session.
+    private bool _uninstallEntryBuildUnknown;
     private string? _uninstallBackupParent;
     // 快照父目录是按所选恢复来源自动推导的（来源的上一级）：换来源时要一起清掉，不能继续用旧来源所在的卷。
     private bool _uninstallBackupParentFromSource;
@@ -1298,9 +1301,16 @@ public partial class MainWindow
                             AdoptUninstallEdlTools(loaded);
                             pendingTools = null;
                             SetText(UninstallPrepareStatusText, M("Dynamic.Mac.Backup.AlreadyInEdl", expected.SocSerial));
+                            var resumeIdentity = _uninstallEntryAndroid;
+                            if (resumeIdentity is null)
+                            {
+                                _uninstallEntryBuildUnknown = true;
+                                resumeIdentity = expected;
+                            }
+
                             var waited = await Task.Run(
                                 () => new EdlEntry(transport.AdbPath, _runner, Discovery)
-                                    .WaitForPresentAsync(_uninstallEntryAndroid ?? expected, loaded.Profile, token),
+                                    .WaitForPresentAsync(resumeIdentity, loaded.Profile, token),
                                 token);
 
                             _uninstallEdlEntry = waited;
@@ -1348,6 +1358,7 @@ public partial class MainWindow
 
                             _uninstallEntryAttempted = true;
                             _uninstallEntryAndroid = freshAndroid;
+                            _uninstallEntryBuildUnknown = false;
                             SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.EnteringEdl"));
 
                             // 整个流程只会在这里真实进入一次 9008，不自动重试；显式传入刚核对过的可信配置。
@@ -2007,6 +2018,7 @@ public partial class MainWindow
                     var enteredAndroid = entry.AndroidIdentity?.Identity;
                     bool useDirectAndroidDataErase = liveAndroid is not null
                         && enteredAndroid is not null
+                        && !_uninstallEntryBuildUnknown
                         && AndroidDataErasePreview.Matches(liveAndroid.Model, liveAndroid.Firmware)
                         && AndroidDataErasePreview.Matches(enteredAndroid.Model, enteredAndroid.Firmware);
                     if (capturedRestoreStock)
@@ -2987,6 +2999,7 @@ public partial class MainWindow
         _uninstallEdlEntry = null;
         _uninstallEntryAttempted = false;
         _uninstallEntryAndroid = null;
+        _uninstallEntryBuildUnknown = false;
         try
         {
             tools?.Dispose();
