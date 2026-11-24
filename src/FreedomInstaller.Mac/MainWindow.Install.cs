@@ -1267,7 +1267,7 @@ public partial class MainWindow
                 AppendLog(key);
                 // Same technical-details line as the Windows window; the failure text above carries no detail.
                 AppendLog(M("Dynamic.InternalInstall.Prepared.TechnicalDetails", exception.ToString()));
-                WritePreparationFailureLog(exception);
+                QueuePreparationFailureLog(exception.ToString());
             }
         });
 
@@ -1966,7 +1966,38 @@ public partial class MainWindow
     /// Keeps the full technical details of a failed preparation in ~/Library/Logs/FreedomInstaller, so they survive
     /// the window being closed. Writing it is best effort.
     /// </summary>
-    private static void WritePreparationFailureLog(Exception exception)
+    // Failure-log writes run off the UI thread, one after another; closing the window waits (bounded) for them.
+    private Task _preparationFailureLogWrites = Task.CompletedTask;
+    private bool _preparationFailureLogsFlushed;
+
+    private void QueuePreparationFailureLog(string details)
+    {
+        _preparationFailureLogWrites = _preparationFailureLogWrites.ContinueWith(
+            _ => WritePreparationFailureLog(details),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Called by the window's closing handler: true when it cancelled this close to let a pending failure-log write
+    /// finish first (bounded, so a stalled volume never keeps the window open), after which it closes again.
+    /// </summary>
+    private async Task<bool> FlushPreparationFailureLogsBeforeCloseAsync(WindowClosingEventArgs e)
+    {
+        if (_preparationFailureLogsFlushed || _preparationFailureLogWrites.IsCompleted)
+        {
+            return false;
+        }
+
+        e.Cancel = true;
+        _preparationFailureLogsFlushed = true;
+        await Task.WhenAny(_preparationFailureLogWrites, Task.Delay(TimeSpan.FromSeconds(10)));
+        Close();
+        return true;
+    }
+
+    private static void WritePreparationFailureLog(string details)
     {
         try
         {
@@ -1980,7 +2011,7 @@ public partial class MainWindow
                 "prepare-failure-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..8] + ".txt");
             using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
             using var writer = new StreamWriter(stream);
-            writer.Write(exception.ToString());
+            writer.Write(details);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

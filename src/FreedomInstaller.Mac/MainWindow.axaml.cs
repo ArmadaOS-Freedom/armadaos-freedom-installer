@@ -312,6 +312,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        // A preparation failure log still being written off the UI thread gets a bounded chance to finish first.
+        if (await FlushPreparationFailureLogsBeforeCloseAsync(e))
+        {
+            return;
+        }
+
         // The offline upgrade page goes first, like the WPF window's own closing handler for it: its exchanges run
         // as busy work, so the generic busy refusal below would otherwise keep an SSH session from ever closing.
         // It cancels the running exchange, disconnects, releases the imported package (saved session records stay)
