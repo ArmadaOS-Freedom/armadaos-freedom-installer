@@ -1265,6 +1265,9 @@ public partial class MainWindow
                     });
                 SetText(InternalInstallCapacityStatusText, key);
                 AppendLog(key);
+                // Same technical-details line as the Windows window; the failure text above carries no detail.
+                AppendLog(M("Dynamic.InternalInstall.Prepared.TechnicalDetails", exception.ToString()));
+                WritePreparationFailureLog(exception);
             }
         });
 
@@ -1957,5 +1960,25 @@ public partial class MainWindow
         _internalInstallClient = null;
         _internalInstallTools?.Dispose();
         _internalInstallTools = null;
+    }
+
+    /// <summary>
+    /// Keeps the full technical details of a failed preparation in ~/Library/Logs/FreedomInstaller, so they survive
+    /// the window being closed. Writing it is best effort.
+    /// </summary>
+    private static void WritePreparationFailureLog(Exception exception)
+    {
+        try
+        {
+            string directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Logs", "FreedomInstaller");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                Path.Combine(directory, "prepare-failure-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".txt"),
+                exception.ToString());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 }
