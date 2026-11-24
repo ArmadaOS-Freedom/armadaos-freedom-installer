@@ -267,7 +267,20 @@ public partial class MainWindow
             }
             if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
             {
-                workParent = DefaultRecoveryOutputDirectory();
+                try
+                {
+                    workParent = DefaultRecoveryOutputDirectory();
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    // 缓存目录建不出来：按准备失败报告并留在来源页；保护状态与 9008 会话不变，异常不逃出 async void。
+                    _userdataUninstallError = exception.Message;
+                    RenderUserdataUninstallPreparationError();
+                    AppendLocalizedLog(M(
+                        "Dynamic.RawValue",
+                        $"{exception.GetType().FullName}: {exception.Message}"));
+                    return;
+                }
                 workParentFromSource = false;
             }
             if (string.IsNullOrWhiteSpace(workParent)) return;
