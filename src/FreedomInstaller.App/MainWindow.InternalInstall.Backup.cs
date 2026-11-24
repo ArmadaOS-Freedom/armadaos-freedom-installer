@@ -127,6 +127,8 @@ public partial class MainWindow
             return;
         }
 
+        // 用户明确选的目录（哪怕和现在的相同）：换恢复来源时不再作废它。
+        _userdataUninstallBackupParentFromSource = false;
         ApplyInternalInstallBackupParent(folder);
     }
 
@@ -325,13 +327,15 @@ public partial class MainWindow
     /// </summary>
     private void ApplyInternalInstallBackupParent(string folder)
     {
-        // 任何一次明确写入父目录（包括重新选了同一个目录）都不再算“按卸载来源推导”；
-        // 卸载准备推导时会在写入之后自己再标记。
-        _userdataUninstallBackupParentFromSource = false;
         if (string.Equals(folder, _internalInstallBackupParent, StringComparison.Ordinal))
         {
+            // 同一个目录：内部沿用（例如 9008 恢复资料检查）不改变它是不是“按卸载来源推导”的；
+            // 用户在对话框里重新选了它，由对话框那里清掉标记。
             return;
         }
+
+        // 换成别的目录：不再是卸载按来源推导的那个；卸载准备推导时会在写入之后自己再标记。
+        _userdataUninstallBackupParentFromSource = false;
 
         var previousBackup = _internalInstallBackup;
         var previousDirectory = previousBackup?.DirectoryPath;
