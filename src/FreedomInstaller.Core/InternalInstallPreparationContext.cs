@@ -1689,16 +1689,6 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                         "The GBL guard capture budget overflows.");
                 }
             }
-
-                // GBL ABL copy readback: when B borrows from A, add readback for copied abl_b
-                foreach (string copyTarget in gblInputs.CopiedTargetSlots)
-                {
-                    string role = "abl_" + copyTarget;
-                    planned = CheckedAdd(
-                        planned,
-                        RequireBudgetRegion(files, role).Length,
-                        "The GBL ABL copy readback budget overflows.");
-                }
         }
 
         // The direct AOSP route reads each guarded ABL once in the future original capture and reads
