@@ -328,11 +328,11 @@ public partial class MainWindow
             AuxiliaryWorkflowButtons.Visibility = auxiliary ? Visibility.Visible : Visibility.Collapsed;
         HomeFooterHint.Visibility = home ? Visibility.Visible : Visibility.Collapsed;
 
-        // 支持页同样占满三列，只在打开时显示；当前功能与选中操作始终不变。
-        SupportPage.Visibility = (_showingSupport && !_showingDiagnostics) ? Visibility.Visible : Visibility.Collapsed;
+        // 支持页仅在展示支持时可见，并覆盖诊断页。
+        SupportPage.Visibility = _showingSupport ? Visibility.Visible : Visibility.Collapsed;
 
-        // 诊断导出页占满主体三列，只在打开时显示；不改其他可见性标志。
-        DiagnosticExportPage.Visibility = _showingDiagnostics ? Visibility.Visible : Visibility.Collapsed;
+        // 诊断导出页仅在展示诊断且未展示支持时可见。
+        DiagnosticExportPage.Visibility = (_showingDiagnostics && !_showingSupport) ? Visibility.Visible : Visibility.Collapsed;
 
         if (DiagnosticFailurePanel is not null)
             DiagnosticFailurePanel.Visibility = (!_showingDiagnostics && !string.IsNullOrWhiteSpace(DiagnosticFailureText?.Text))

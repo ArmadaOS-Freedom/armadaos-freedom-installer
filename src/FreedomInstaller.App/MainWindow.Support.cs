@@ -12,7 +12,7 @@ public partial class MainWindow
 
     private void OnShowSupport(object sender, RoutedEventArgs e)
     {
-        if (_busy || _showingDiagnostics)
+        if (_closed || _showingSupport)
         {
             return;
         }
@@ -27,11 +27,6 @@ public partial class MainWindow
 
     private void OnCloseSupport(object sender, RoutedEventArgs e)
     {
-        if (_busy)
-        {
-            return;
-        }
-
         _showingSupport = false;
         ApplyFunctionView();
     }
