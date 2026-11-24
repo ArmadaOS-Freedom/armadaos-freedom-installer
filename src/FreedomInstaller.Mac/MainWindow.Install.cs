@@ -1973,9 +1973,14 @@ public partial class MainWindow
             string directory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Logs", "FreedomInstaller");
             Directory.CreateDirectory(directory);
-            File.WriteAllText(
-                Path.Combine(directory, "prepare-failure-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".txt"),
-                exception.ToString());
+            // Timestamp for sorting plus a random suffix, created new: two failures in the same second never share
+            // (or overwrite) a file.
+            string path = Path.Combine(
+                directory,
+                "prepare-failure-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..8] + ".txt");
+            using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
+            using var writer = new StreamWriter(stream);
+            writer.Write(exception.ToString());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
