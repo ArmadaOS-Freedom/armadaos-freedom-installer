@@ -107,6 +107,7 @@ public sealed partial class InternalInstallBackend
         var metadataRegions = new List<InternalArtifactRegion>();
         var ablRegions = new List<InternalArtifactRegion>();
         var gblAblRegions = new List<InternalArtifactRegion>();
+        IReadOnlyList<string> orderedGblAblSlots;
 
         if (_context.DirectBootTrustMode == InternalInstallBootTrustMode.GblPreserveOem)
         {
@@ -139,28 +140,37 @@ public sealed partial class InternalInstallBackend
             candidateA = MakeExecutionRegion(
                 RequireCapturedRegion("boot_a"), gblBoots["a"].EffectiveCandidate, "boot_a");
 
-            var gblReplacements = _context.GblAblReplacements;
-            string[] gblSlotOrder = { "b", "a" };
+            var gblAblWrites = _context.GblAblWrites;
+            // A replaced active slot A must land before B is populated from it. The normal two-source route
+            // keeps the frozen b, a order.
+            string[] gblSlotOrder = _context.GblAblCopySlots.Contains("b", StringComparer.Ordinal)
+                ? new[] { "a", "b" }
+                : new[] { "b", "a" };
+            var orderedGblAblWrites = new List<string>(gblSlotOrder.Length);
             foreach (string slot in gblSlotOrder)
             {
                 string role = "abl_" + slot;
-                if (gblReplacements.TryGetValue(role, out VerifiedEdlFile? candidate))
+                if (gblAblWrites.TryGetValue(role, out VerifiedEdlFile? candidate))
                 {
                     gblAblRegions.Add(
                         MakeExecutionRegion(RequireCapturedRegion(role), candidate, role));
+                    orderedGblAblWrites.Add(role);
                 }
             }
 
-            if (gblAblRegions.Count != gblReplacements.Count)
+            if (gblAblRegions.Count != gblAblWrites.Count)
             {
                 throw new InvalidOperationException(
-                    DirectExecutionAvbMetadataMismatchCode + ": the prepared GBL ABL replacement map has "
-                    + gblReplacements.Count + " targets but only " + gblAblRegions.Count
+                    DirectExecutionAvbMetadataMismatchCode + ": the prepared GBL ABL write map has "
+                    + gblAblWrites.Count + " targets but only " + gblAblRegions.Count
                     + " fixed-slot regions were built.");
             }
+
+            orderedGblAblSlots = orderedGblAblWrites;
         }
         else
         {
+            orderedGblAblSlots = Array.Empty<string>();
             candidateB = MakeExecutionRegion(
                 RequireCapturedRegion("boot_b"), _context.DirectBoots["b"].CandidateBoot, "boot_b");
 
@@ -333,17 +343,13 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
-        // On the GBL-preserving route any replaced TB323FU 088 ABL is written whole and read back in the
-        // fixed b, a slot order immediately after efisp and before overwriting boot_b and boot_a, so the
-        // efisp-capable loader is durable on flash before any GBL boot wrapper lands. When slot b is empty,
-        // only slot a is in gblAblRegions, so slot a is downgraded before boot_b is populated from slot a.
-        foreach (InternalArtifactRegion region in gblAblRegions)
+        // On the GBL-preserving route every planned ABL write is written whole and read back in fixed b, a
+        // order immediately after efisp and before boot_b and boot_a. A replaced active slot A therefore lands
+        // first when B borrows A, then that effective A loader is copied to B before either boot wrapper.
+        for (int index = 0; index < gblAblRegions.Count; index++)
         {
-            string? slot = region.Role.EndsWith("_a", StringComparison.Ordinal)
-                ? "a"
-                : region.Role.EndsWith("_b", StringComparison.Ordinal)
-                    ? "b"
-                    : null;
+            InternalArtifactRegion region = gblAblRegions[index];
+            string slot = orderedGblAblSlots[index][4..];
 
             await WriteExecutionRegionAsync(
                     _initialEdl,
@@ -355,6 +361,45 @@ public sealed partial class InternalInstallBackend
                     progress,
                     ct)
                 .ConfigureAwait(false);
+        }
+
+        // If B slot was empty and borrowed A's ABL, copy A's loader to B after A is written.
+        // This ensures B slot has the same functional ABL as A for subsequent boot operations.
+        var ablCopySlots = _context.GblAblCopySlots;
+        foreach (string copyTarget in ablCopySlots)
+        {
+            if (string.Equals(copyTarget, "b", StringComparison.Ordinal))
+            {
+                // B borrowed from A: read the written abl_a and write it to abl_b
+                var ablACaptured = RequireCapturedRegion("abl_a");
+                var ablBCaptured = RequireCapturedRegion("abl_b");
+
+                // Copy abl_a bytes to abl_b using the same write path
+                byte[] ablABytes = await _initialEdl.ReadRawBytesAsync(
+                    ablACaptured.Lun,
+                    ablACaptured.StartSector,
+                    ablACaptured.SectorCount,
+                    ct).ConfigureAwait(false);
+
+                var copyRegion = new InternalArtifactRegion(
+                    "abl_b",
+                    ablBCaptured.Lun,
+                    ablBCaptured.StartSector,
+                    ablBCaptured.SectorCount,
+                    ablBCaptured.Length,
+                    ablABytes);
+
+                await WriteExecutionRegionAsync(
+                        _initialEdl,
+                        run,
+                        InternalInstallStage.WritingGblAbl,
+                        "b",
+                        copyRegion,
+                        true,
+                        progress,
+                        ct)
+                    .ConfigureAwait(false);
+            }
         }
 
         // The fixed candidate order is b then a; it is never selectable by a caller.

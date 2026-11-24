@@ -761,6 +761,29 @@ internal sealed partial class InternalInstallPreparationContext
             EfispCandidate = efispCandidate;
             ReplacementAbl = replacementAbl;
             ReplacedSourceSlots = Array.AsReadOnly((replacedSourceSlots ?? Array.Empty<string>()).ToArray());
+            var copySourceSlots = new SortedSet<string>(StringComparer.Ordinal);
+            var copiedTargetSlots = new List<string>(2);
+            foreach (string target in new[] { "a", "b" })
+            {
+                string source = SourceSlots[target];
+                if (string.Equals(source, target, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!Sources.TryGetValue(source, out GblSourceEvidence? sourceEvidence))
+                {
+                    throw new ArgumentException(
+                        "A copied GBL ABL target requires verified source evidence for '" + source + "'.",
+                        nameof(sources));
+                }
+
+                copySourceSlots.Add(source);
+                copiedTargetSlots.Add(target);
+            }
+
+            CopiedSourceSlots = Array.AsReadOnly(copySourceSlots.ToArray());
+            CopiedTargetSlots = Array.AsReadOnly(copiedTargetSlots.ToArray());
             if (ReplacedSourceSlots.Count > 0 && ReplacementAbl is null)
             {
                 throw new ArgumentException("Replaced source slots require a staged replacement ABL.", nameof(replacementAbl));
@@ -791,6 +814,10 @@ internal sealed partial class InternalInstallPreparationContext
         internal VerifiedEdlFile? ReplacementAbl { get; }
 
         internal IReadOnlyList<string> ReplacedSourceSlots { get; }
+
+        internal IReadOnlyList<string> CopiedSourceSlots { get; }
+
+        internal IReadOnlyList<string> CopiedTargetSlots { get; }
     }
 
     private sealed class VerifiedGblPlan
@@ -1036,11 +1063,52 @@ internal sealed partial class InternalInstallPreparationContext
             roles.Add("xbl_config_" + replacedSlot);
         }
 
+        foreach (string copiedTarget in inputs.CopiedTargetSlots)
+        {
+            roles.Add("abl_" + copiedTarget);
+        }
+
+        // Ensure xbl_config for all sources with loader budgets are included in guard roles
+        foreach (var source in inputs.Sources.Keys)
+        {
+            roles.Add("xbl_config_" + source);
+        }
+
         return roles
             .Distinct(StringComparer.Ordinal)
             .OrderBy(role => role, StringComparer.Ordinal)
             .ToList()
             .AsReadOnly();
+    }
+
+    private static IReadOnlyDictionary<string, VerifiedEdlFile> GetGblAblWritePlan(GblPreparationInputs inputs)
+    {
+        var writes = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal);
+        if (inputs.ReplacementAbl is { } replacement)
+        {
+            foreach (string slot in inputs.ReplacedSourceSlots)
+            {
+                writes["abl_" + slot] = replacement;
+            }
+        }
+
+        foreach (string target in inputs.CopiedTargetSlots)
+        {
+            string source = inputs.SourceSlots[target];
+            if (!inputs.Sources.TryGetValue(source, out GblSourceEvidence? sourceEvidence))
+            {
+                throw new InvalidDataException(
+                    "gbl-source-material-mismatch: no verified source evidence for copied ABL source '" + source + "'.");
+            }
+
+            if (!writes.TryAdd("abl_" + target, sourceEvidence.EffectiveAbl))
+            {
+                throw new InvalidDataException(
+                    "gbl-abl-write-plan-conflict: target '" + target + "' has both a replacement and a copy.");
+            }
+        }
+
+        return new ReadOnlyDictionary<string, VerifiedEdlFile>(writes);
     }
 
     private static void DisposeGblBoots(VerifiedGblPlan? plan)
@@ -1064,16 +1132,64 @@ internal sealed partial class InternalInstallPreparationContext
     {
         get
         {
-            var map = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal);
-            if (_directGblPlan?.Inputs is { ReplacementAbl: { } replacement } inputs)
+            if (_directGblPlan?.Inputs is not { } inputs)
             {
-                foreach (var slot in inputs.ReplacedSourceSlots)
+                return new ReadOnlyDictionary<string, VerifiedEdlFile>(
+                    new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal));
+            }
+
+            var map = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal);
+            foreach (string slot in inputs.ReplacedSourceSlots)
+            {
+                if (inputs.ReplacementAbl is null)
                 {
-                    map["abl_" + slot] = replacement;
+                    throw new InvalidDataException(
+                        "gbl-abl-write-plan-conflict: a replaced source slot has no staged replacement ABL.");
                 }
+
+                map["abl_" + slot] = inputs.ReplacementAbl;
             }
 
             return new ReadOnlyDictionary<string, VerifiedEdlFile>(map);
+        }
+    }
+
+    internal IReadOnlyDictionary<string, VerifiedEdlFile> GblAblCopies
+    {
+        get
+        {
+            if (_directGblPlan?.Inputs is not { } inputs)
+            {
+                return new ReadOnlyDictionary<string, VerifiedEdlFile>(
+                    new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal));
+            }
+
+            var plan = GetGblAblWritePlan(inputs);
+            var replacements = new HashSet<string>(
+                inputs.ReplacedSourceSlots.Select(slot => "abl_" + slot),
+                StringComparer.Ordinal);
+            var copies = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal);
+            foreach (string target in inputs.CopiedTargetSlots)
+            {
+                string role = "abl_" + target;
+                if (!replacements.Contains(role))
+                {
+                    copies[role] = plan[role];
+                }
+            }
+
+            return new ReadOnlyDictionary<string, VerifiedEdlFile>(copies);
+        }
+    }
+
+    internal IReadOnlyDictionary<string, VerifiedEdlFile> GblAblWrites
+    {
+        get
+        {
+            return _directGblPlan?.Inputs is { } inputs
+                ? GetGblAblWritePlan(inputs)
+                : new ReadOnlyDictionary<string, VerifiedEdlFile>(
+                    new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal));
         }
     }
 
@@ -1090,6 +1206,28 @@ internal sealed partial class InternalInstallPreparationContext
             foreach (var slot in SlotOrder)
             {
                 if (inputs.ReplacedSourceSlots.Contains(slot, StringComparer.Ordinal))
+                {
+                    ordered.Add(slot);
+                }
+            }
+
+            return ordered.AsReadOnly();
+        }
+    }
+
+    internal IReadOnlyList<string> GblAblCopySlots
+    {
+        get
+        {
+            if (_directGblPlan?.Inputs is not { CopiedTargetSlots.Count: > 0 } inputs)
+            {
+                return Array.Empty<string>();
+            }
+
+            var ordered = new List<string>(inputs.CopiedTargetSlots.Count);
+            foreach (string slot in SlotOrder)
+            {
+                if (inputs.CopiedTargetSlots.Contains(slot, StringComparer.Ordinal))
                 {
                     ordered.Add(slot);
                 }
