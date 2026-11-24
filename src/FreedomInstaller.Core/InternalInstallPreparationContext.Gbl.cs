@@ -984,6 +984,7 @@ internal sealed partial class InternalInstallPreparationContext
             }
 
             roles.Add("abl_" + source);
+            roles.Add("xbl_config_" + source);
             roles.Add("recovery_" + source);
             roles.Add("vbmeta_system_" + source);
             roles.Add("vbmeta_" + source);

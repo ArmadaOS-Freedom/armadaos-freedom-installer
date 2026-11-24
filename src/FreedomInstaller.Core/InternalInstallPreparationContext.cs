@@ -728,6 +728,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             }
 
             bool pendingProjectOnlyInactiveB = false;
+            bool deferredProjectOnlyInactiveBToGbl = false;
             if (string.Equals(profile.Model, "TB323FU", StringComparison.Ordinal)
                 && string.Equals(deviceCheck.CurrentSlot, "a", StringComparison.Ordinal)
                 && deviceCheck.FastbootLockState == BootloaderState.Locked
@@ -744,30 +745,50 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
                 if (packageSnapshot.EdlRawContract.BootRecipe?.UsesArmadaBoot == true)
                 {
-                    EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
-                        profile.ProfileId,
+                    bool canDeferToPinned088 = await ShouldDeferProjectOnlyInactiveBToGblAsync(
                         backupFacts.Files,
-                        installAssets.Tools,
-                        services.CommandRunner,
-                        evidenceDirectory,
+                        Tb323fuAbl088Assets.IsBundled,
                         cancellationToken).ConfigureAwait(false);
-                    inactiveTargets["b"] = proof;
-                    pendingProjectOnlyInactiveB = true;
+                    if (canDeferToPinned088)
+                    {
+                        deferredProjectOnlyInactiveBToGbl = true;
+                    }
+                    else
+                    {
+                        EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
+                            profile.ProfileId,
+                            backupFacts.Files,
+                            installAssets.Tools,
+                            services.CommandRunner,
+                            evidenceDirectory,
+                            cancellationToken).ConfigureAwait(false);
+                        inactiveTargets["b"] = proof;
+                        pendingProjectOnlyInactiveB = true;
+                    }
                 }
             }
 
-            Dictionary<string, string> sourceSlots = await DetermineDirectSourceSlotsAsync(
-                profile.ProfileId,
-                deviceCheck.CurrentSlot,
-                backupFacts.Files,
-                inactiveTargets,
-                cancellationToken).ConfigureAwait(false);
+            Dictionary<string, string> sourceSlots = deferredProjectOnlyInactiveBToGbl
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["b"] = "a",
+                    ["a"] = "a",
+                }
+                : await DetermineDirectSourceSlotsAsync(
+                    profile.ProfileId,
+                    deviceCheck.CurrentSlot,
+                    backupFacts.Files,
+                    inactiveTargets,
+                    cancellationToken).ConfigureAwait(false);
 
             // Direct core readiness point: BindBackup re-verified source image hashes and
             // DetermineDirectSourceSlotsAsync checked both target source slots. Only now may a
             // diagnostic boot-source proof attach. Notify before the direct ABL/AVB chain gate so
             // failures in that gate are diagnosable. Direct installs only; nothing else changed.
-            services.DiagnosticBootSourcesVerified?.Invoke();
+            if (!deferredProjectOnlyInactiveBToGbl)
+            {
+                services.DiagnosticBootSourcesVerified?.Invoke();
+            }
 
             // A locked TB322FC is classified from the effective (primary) AVB key of its live ABL. Slots
             // whose primary key is AOSP keep their ABL; only slots whose primary key is not AOSP use the
@@ -854,6 +875,86 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                     cancellationToken,
                     effectiveSourceAblA: projectDonorSourceA.EffectiveAbl).ConfigureAwait(false);
             }
+
+            if (deferredProjectOnlyInactiveBToGbl)
+            {
+                await CompleteDeferredProjectOnlyInactiveBAsync(
+                    profile.ProfileId,
+                    deviceCheck.CurrentSlot,
+                    backupFacts.Files,
+                    installAssets.Tools,
+                    services.CommandRunner,
+                    evidenceDirectory,
+                    inactiveTargets,
+                    sourceSlots,
+                    gblInputs,
+                    cancellationToken).ConfigureAwait(false);
+
+                services.DiagnosticBootSourcesVerified?.Invoke();
+            }
+
+        private static async Task<bool> ShouldDeferProjectOnlyInactiveBToGblAsync(
+            IReadOnlyDictionary<string, EdlCapturedRegion> files,
+            bool isBundledAbl088,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!isBundledAbl088)
+            {
+                return false;
+            }
+
+            // Check if ancillary partitions are empty (factory-zero state)
+            foreach (string ancillary in new[] { "recovery_b", "vbmeta_system_b" })
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(
+                    Claim(files, ancillary),
+                    cancellationToken).ConfigureAwait(false))
+                {
+                    // Ancillary is non-empty, cannot defer
+                    return false;
+                }
+            }
+
+            // All conditions met: ABL088 is bundled and ancillaries are empty
+            return true;
+        }
+
+        private async Task CompleteDeferredProjectOnlyInactiveBAsync(
+            string profileId,
+            string currentSlot,
+            IReadOnlyDictionary<string, EdlCapturedRegion> files,
+            EdlRawBootTools tools,
+            ICommandRunner runner,
+            string evidenceDirectory,
+            Dictionary<string, EdlRawInactiveSlotBackup> inactiveTargets,
+            Dictionary<string, string> sourceSlots,
+            GblPreparationInputs gblInputs,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Get the effective ABL from GBL inputs (source slot "a")
+            if (!gblInputs.Sources.TryGetValue("a", out var sourceEvidence) || sourceEvidence is null)
+            {
+                throw new InvalidOperationException(
+                    "deferred-project-only-b-completion: cannot complete deferred validation without GBL source evidence for slot 'a'.");
+            }
+
+            // Use the effective ABL (which may be the pinned 088 replacement)
+            EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
+                profileId,
+                files,
+                tools,
+                runner,
+                evidenceDirectory,
+                cancellationToken,
+                sourceEvidence.EffectiveAbl).ConfigureAwait(false);
+
+            inactiveTargets["b"] = proof;
+        }
 
             IReadOnlyDictionary<string, EdlRawResignedAvbNode> avbRoots;
             if (gblInputs is null && preservedAvbRoles is null)

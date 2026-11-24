@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -26,6 +27,14 @@ public sealed class Tb323fuGblAblReplacementTests
         "recovery_a", "vbmeta_system_a", "vbmeta_a",
         "recovery_b", "vbmeta_system_b", "vbmeta_b",
     };
+
+    private static readonly MethodInfo ControlBlockMethod = typeof(BootSlotControlTests).GetMethod(
+            "ControlBlock", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("BootSlotControlTests.ControlBlock was not found.");
+
+    private static readonly MethodInfo BuildMiscMethod = typeof(BootSlotControlTests).GetMethod(
+            "BuildMisc", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("BootSlotControlTests.BuildMisc was not found.");
 
     private readonly Gen5EdlToolchainFixture _g5;
     private readonly EdlRawSharedInput _raw;
@@ -520,6 +529,173 @@ public sealed class Tb323fuGblAblReplacementTests
     }
 
     [Fact]
+    public async Task LockedTb323fu_ChangedUnreplacedSourceXblConfigAfterPrepare_FailsBeforeAnyWrite()
+    {
+        if (!Tb323fuAbl088Assets.IsBundled)
+        {
+            return;
+        }
+
+        string caseDir = _g5.NewCaseDirectory(
+            nameof(LockedTb323fu_ChangedUnreplacedSourceXblConfigAfterPrepare_FailsBeforeAnyWrite));
+        VerifiedEdlFile compatibleAblB = await Tb323fuAbl088Assets.StageAsync(caseDir, CancellationToken.None);
+        VerifiedEdlFile incompatibleAblA = WriteDeterministicFile(
+            caseDir,
+            "abl-a-055.img",
+            Tb323fuAbl088Assets.ImageLength,
+            0x29);
+        VerifiedEdlFile xblA = WriteVerifiedFile(caseDir, "xbl-a-gen5.elf", BuildSyntheticGen5XblConfig());
+        VerifiedEdlFile xblB = WriteVerifiedFile(caseDir, "xbl-b-gen5.elf", BuildSyntheticGen5XblConfig());
+
+        using var source = new GblDirectSourceFixture(
+            region: "PRC",
+            mismatchParentBootChild: false,
+            androidTextOffset: null,
+            customAbl: compatibleAblB,
+            customXbl: xblA);
+
+        var overrides = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal)
+        {
+            ["abl_a"] = incompatibleAblA,
+            ["abl_b"] = compatibleAblB,
+            ["xbl_config_b"] = xblB,
+        };
+
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _g5.Toolchain,
+            _raw,
+            currentSlot: "a",
+            avbSourceKind: DirectAvbSourceKind.Oem,
+            observedFastbootLockState: BootloaderState.Locked,
+            gblSources: source,
+            sourceOverrides: overrides);
+
+        Assert.Equal(new[] { "a" }, session.Backend.Prepared.GblAblReplacementSlots);
+        session.Device.MutateDirectSourceByte("xbl_config_b", 0);
+
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            session.Backend.Prepared.ConfirmationId,
+            userdataEraseConfirmed: true);
+
+        Assert.Equal(InternalInstallOutcome.Failed, result.Outcome);
+        Assert.Equal(InternalInstallWriteState.NoneIssued, result.WriteState);
+        Assert.Empty(session.EdlRunner.Writes);
+        Assert.Equal(0, session.EdlRunner.ResetCount);
+    }
+
+    [Fact]
+    public async Task LockedTb323fu_ProjectOnlyInactiveBOver128MiBRaw_DefersBudgetUntilEffective088Abl()
+    {
+        if (!Tb323fuAbl088Assets.IsBundled)
+        {
+            return;
+        }
+
+        string caseDir = _g5.NewCaseDirectory(
+            nameof(LockedTb323fu_ProjectOnlyInactiveBOver128MiBRaw_DefersBudgetUntilEffective088Abl));
+        VerifiedEdlFile compatibleAbl088 = await Tb323fuAbl088Assets.StageAsync(caseDir, CancellationToken.None);
+        VerifiedEdlFile incompatibleAblA = WriteDeterministicFile(
+            caseDir,
+            "abl-a-055.img",
+            Tb323fuAbl088Assets.ImageLength,
+            0x51);
+        VerifiedEdlFile xbl = WriteVerifiedFile(caseDir, "xbl-gen5.elf", BuildSyntheticGen5XblConfig());
+
+        using var source = new GblDirectSourceFixture(
+            region: "PRC",
+            mismatchParentBootChild: false,
+            androidTextOffset: null,
+            customAbl: incompatibleAblA,
+            customXbl: xbl);
+
+        byte[] zeroVbmeta = new byte[4096];
+        VerifiedEdlFile zeroVbmetaFile = WriteVerifiedFile(caseDir, "vbmeta-b-zero.bin", zeroVbmeta);
+        var overrides = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal)
+        {
+            ["abl_a"] = incompatibleAblA,
+        };
+
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _g5.Toolchain,
+            _raw,
+            currentSlot: "a",
+            zeroSlot: "b",
+            bootOnlyInactiveB: true,
+            avbSourceKind: DirectAvbSourceKind.Oem,
+            observedFastbootLockState: BootloaderState.Locked,
+            gblSources: source,
+            reinstallAndroidGiB: 16,
+            sourceOverrides: overrides,
+            usesArmadaBoot: true,
+            expectedNativeCalls: null,
+            configureReinstallOverlayAsync: async (device, tools, runner, factoryBackup, contract, workRoot) =>
+            {
+                string stageDir = Path.Combine(workRoot, "reinstall-project-b");
+                Directory.CreateDirectory(stageDir);
+
+                // Build an earlier-installed legacy composite B whose unpacked raw exceeds the 128 MiB
+                // fallback budget (130 MiB BSS-expanded Linux payload + runtime > 128 MiB), while fitting
+                // inside the ~253 MiB budget proven by the effective 088 ABL + Gen5 XBL window.
+                using var priorBPackage = new EdlRawBootBuilderTests.SyntheticPackage(
+                    deviceModel: "TB323FU",
+                    usesArmadaBoot: false);
+                byte[] largeKernel = (byte[])priorBPackage.Kernel.Clone();
+                BinaryPrimitives.WriteUInt64LittleEndian(largeKernel.AsSpan(16, 8), 130UL * 1024 * 1024);
+                priorBPackage.ReplaceKernel(largeKernel);
+
+                EdlCapturedRegion bootA = factoryBackup.Files["boot_a"];
+                EdlCapturedRegion vendorA = factoryBackup.Files["vendor_boot_a"];
+                EdlCapturedRegion initA = factoryBackup.Files["init_boot_a"];
+                EdlCapturedRegion xblA = factoryBackup.Files["xbl_config_a"];
+                EdlCapturedRegion bootB = factoryBackup.Files["boot_b"];
+
+                using EdlRawInactiveSlotBackup donorProof = await EdlRawInactiveSlotBackup.VerifyBootOnlyInactiveBAsync(
+                    factoryBackup.ProfileId,
+                    new VerifiedEdlFile(bootB.FilePath, bootB.Length, bootB.Sha256),
+                    new VerifiedEdlFile(factoryBackup.Files["vendor_boot_b"].FilePath, factoryBackup.Files["vendor_boot_b"].Length, factoryBackup.Files["vendor_boot_b"].Sha256),
+                    new VerifiedEdlFile(factoryBackup.Files["init_boot_b"].FilePath, factoryBackup.Files["init_boot_b"].Length, factoryBackup.Files["init_boot_b"].Sha256),
+                    new VerifiedEdlFile(factoryBackup.Files["abl_b"].FilePath, factoryBackup.Files["abl_b"].Length, factoryBackup.Files["abl_b"].Sha256),
+                    new VerifiedEdlFile(factoryBackup.Files["xbl_config_b"].FilePath, factoryBackup.Files["xbl_config_b"].Length, factoryBackup.Files["xbl_config_b"].Sha256),
+                    CancellationToken.None);
+
+                using EdlRawBuiltBoot builtB = await EdlRawBootBuilder.BuildAsync(
+                    new EdlRawBootBuildRequest(
+                        "b",
+                        new VerifiedEdlFile(bootA.FilePath, bootA.Length, bootA.Sha256),
+                        new VerifiedEdlFile(vendorA.FilePath, vendorA.Length, vendorA.Sha256),
+                        new VerifiedEdlFile(initA.FilePath, initA.Length, initA.Sha256),
+                        compatibleAbl088,
+                        new VerifiedEdlFile(xblA.FilePath, xblA.Length, xblA.Sha256),
+                        priorBPackage.Contract,
+                        tools,
+                        stageDir,
+                        donorProof),
+                    runner,
+                    CancellationToken.None);
+
+                Assert.True(builtB.PackedRaw.Length > 134_217_728L);
+
+                string wrappedBootBPath = Path.Combine(stageDir, "installed-gbl-boot_b.img");
+                using EdlRawGblPreservedBoot wrappedB = await EdlRawBootBuilder.PreserveOriginalSignedBootMetadataAsync(
+                    builtB,
+                    new VerifiedEdlFile(bootA.FilePath, bootA.Length, bootA.Sha256),
+                    wrappedBootBPath,
+                    CancellationToken.None);
+
+                string durableBootBPath = Path.Combine(stageDir, "overlay-boot_b.img");
+                File.Copy(wrappedB.EffectiveCandidate.Path, durableBootBPath, overwrite: true);
+                device.AddWriteOverlay(bootB.Lun, bootB.StartSector, bootB.SectorCount, durableBootBPath);
+                _ = zeroVbmetaFile;
+            });
+
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+        Assert.Equal(InternalInstallBootTrustMode.GblPreserveOem, prepared.BootTrustMode);
+        Assert.Equal(new[] { "a" }, prepared.GblAblReplacementSlots);
+        Assert.Equal("a", prepared.AvbSlots["b"].SourceSlot);
+        Assert.True(prepared.AvbSlots["b"].NonbootableSystem);
+    }
+
+    [Fact]
     public async Task LockedTb323fu_AblReadbackFailureAfterWrite_StopsBeforeMiscAndKeepsOriginalBackups()
     {
         if (!Tb323fuAbl088Assets.IsBundled)
@@ -561,7 +737,13 @@ public sealed class Tb323fuGblAblReplacementTests
             avbSourceKind: DirectAvbSourceKind.Oem,
             observedFastbootLockState: BootloaderState.Locked,
             gblSources: source,
-            sourceOverrides: overrides);
+            sourceOverrides: overrides,
+            configureInitialDevice: static (device, workRoot) =>
+            {
+                (int miscLun, long miscStart, long miscCount, _) = device.Expectation("misc");
+                string miscPath = WriteMiscOverlay(Path.Combine(workRoot, "misc-init"), "b", miscCount);
+                device.AddWriteOverlay(miscLun, miscStart, miscCount, miscPath);
+            });
 
         InternalInstallPrepared prepared = session.Backend.Prepared;
         Assert.Equal(InternalInstallBootTrustMode.GblPreserveOem, prepared.BootTrustMode);
@@ -603,6 +785,63 @@ public sealed class Tb323fuGblAblReplacementTests
             using var stream = File.OpenRead(backup.FilePath);
             Assert.Equal(backup.Sha256, Convert.ToHexString(SHA256.HashData(stream)), ignoreCase: true);
         }
+
+        // Partially written / replaced live ABLs must remain recoverable through RestoreStock using the
+        // original factory backup directory captured before execution.
+        string damagedAblAPath = Path.Combine(caseDir, "damaged-live-abl_a.bin");
+        byte[] damagedAblA = await File.ReadAllBytesAsync(ablA.FilePath);
+        damagedAblA[0] ^= 0xFF;
+        damagedAblA[4096] ^= 0x55;
+        await File.WriteAllBytesAsync(damagedAblAPath, damagedAblA);
+        session.Device.AddWriteOverlay(ablA.Lun, ablA.StartSector, ablA.SectorCount, damagedAblAPath);
+
+        var recoveryRunner = new IB001FakeEdlRunner(
+            session.Device,
+            enableWrites: true,
+            hardwareId: _g5.Toolchain.HardwareId);
+        var recoveryClient = new EdlClient(
+            _g5.Toolchain,
+            session.Backup.Binding,
+            recoveryRunner,
+            new E003ScriptedEndpointDiscovery { Endpoints = new[] { E003EdlTestData.Endpoint() } });
+
+        string currentParent = Path.Combine(caseDir, "restore-current");
+        string restoreEvidenceParent = Path.Combine(caseDir, "restore-evidence");
+        Directory.CreateDirectory(currentParent);
+        Directory.CreateDirectory(restoreEvidenceParent);
+
+        using InternalBackupSet currentDamaged = await InternalInstallBackup.CreateAsync(recoveryClient, currentParent);
+        BootMaintenanceHistoricalIdentity history = await BootMaintenanceBackend.ReadHistoricalIdentityAsync(
+            session.Backup.DirectoryPath,
+            CancellationToken.None);
+
+        using BootMaintenanceBackend restoreBackend = await BootMaintenanceBackend.CreatePreparedFromEdlAsync(
+            MaintenanceMode.RestoreStock,
+            history,
+            recoveryClient,
+            currentDamaged,
+            new BootMaintenanceSources(OriginalBackupDirectory: session.Backup.DirectoryPath),
+            recoveryRunner,
+            restoreEvidenceParent,
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Contains(
+            restoreBackend.Prepared.Regions,
+            region => region.Role == "abl_a"
+                && region.WillWrite
+                && string.Equals(region.CandidateSha256, ablA.Sha256, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            restoreBackend.Prepared.Regions,
+            region => region.Role == "abl_b"
+                && region.WillWrite
+                && string.Equals(region.CandidateSha256, ablB.Sha256, StringComparison.OrdinalIgnoreCase));
+
+        BootMaintenanceResult restoreResult = await restoreBackend.ExecuteAsync(restoreBackend.Prepared.ConfirmationId);
+        Assert.Equal(BootMaintenanceOutcome.Completed, restoreResult.Outcome);
+        Assert.Equal(InternalInstallWriteState.AllVerified, restoreResult.WriteState);
+        Assert.Contains("abl_a", restoreResult.VerifiedRegions);
+        Assert.Contains("abl_b", restoreResult.VerifiedRegions);
     }
 
     private static VerifiedEdlFile WriteDeterministicFile(string directory, string name, int length, byte seed)
@@ -625,6 +864,25 @@ public sealed class Tb323fuGblAblReplacementTests
         string path = Path.Combine(directory, name);
         File.WriteAllBytes(path, bytes);
         return new VerifiedEdlFile(path, bytes.LongLength, Convert.ToHexString(SHA256.HashData(bytes)));
+    }
+
+    private static string WriteMiscOverlay(string directory, string currentSlot, long miscSectorCount)
+    {
+        Directory.CreateDirectory(directory);
+        byte[] control = (byte[])ControlBlockMethod.Invoke(
+            null, new object?[] { "_" + currentSlot, (byte)0, null, null })!;
+        byte[] controlPage = (byte[])BuildMiscMethod.Invoke(null, new object?[] { control })!;
+        var overlay = new byte[miscSectorCount * IB001SyntheticDevice.SectorSize];
+        Buffer.BlockCopy(controlPage, 0, overlay, 0, controlPage.Length);
+
+        overlay[32768] = 2;
+        BinaryPrimitives.WriteUInt32LittleEndian(overlay.AsSpan(32768 + 1), 0x56740AB0);
+        overlay[32768 + 5] = 0;
+        overlay[32768 + 6] = currentSlot == "b" ? (byte)1 : (byte)0;
+
+        string path = Path.Combine(directory, "misc-overlay.img");
+        File.WriteAllBytes(path, overlay);
+        return path;
     }
 
     /// <summary>

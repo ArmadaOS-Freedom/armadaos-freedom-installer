@@ -464,7 +464,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         bool bootOnlyInactiveB = false,
         bool keepInactiveRecovery = false,
         bool useDirectAndroidDataErase = false,
-        IReadOnlyDictionary<string, VerifiedEdlFile>? sourceOverrides = null)
+        IReadOnlyDictionary<string, VerifiedEdlFile>? sourceOverrides = null,
+        Action<IB001SyntheticDevice, string>? configureInitialDevice = null)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -673,6 +674,7 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 originalAvbSources,
                 gblSources?.EfispSource,
                 gen5: IsG5Model(toolchain.Model));
+            configureInitialDevice?.Invoke(device, root);
 
             // The source five of each slot are not mutated by the copy/pad into the device's own child.
             foreach (VerifiedEdlFile claim in sources.Values)

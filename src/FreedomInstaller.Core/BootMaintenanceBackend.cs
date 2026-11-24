@@ -24,9 +24,11 @@ namespace FreedomInstaller.Core;
 /// <para>
 /// Preparation never writes and never resets: every device operation before execution is a warm probe or a
 /// read into this backend's own evidence directory. The candidate claims are the exact whole original stock
-/// files of the historical source, byte-identical, never repacked or re-signed, and only the four full
-/// partition roles <c>boot_s</c>, <c>recovery_s</c>, <c>vbmeta_system_s</c> and <c>vbmeta_s</c> can enter the
-/// plan. No ABL, xbl, efisp, GPT, misc, userdata, Linux, format or set-active action exists here.
+/// files of the historical source, byte-identical, never repacked or re-signed: the four full partition roles
+/// <c>boot_s</c>, <c>recovery_s</c>, <c>vbmeta_system_s</c> and <c>vbmeta_s</c>, plus <c>abl_s</c> in
+/// <see cref="MaintenanceMode.RestoreStock"/> when the current slot ABL differs from the stock backup (for
+/// example after a partial or completed installer ABL replacement). No xbl, efisp, GPT, misc, userdata, Linux,
+/// format or set-active action exists here.
 /// </para>
 /// <para>
 /// <see cref="Dispose"/> releases only the read leases this backend owns through its two own sets; it never
@@ -389,9 +391,13 @@ public sealed partial class BootMaintenanceBackend : IDisposable
                 0,
                 "opening-original-source"));
 
-            source = await InternalInstallBackup
-                .OpenBootMaintenanceOriginalAsync(client, ownedCurrent, originalDirectory, cancellationToken)
-                .ConfigureAwait(false);
+            source = mode == MaintenanceMode.RestoreStock
+                ? await InternalInstallBackup
+                    .OpenBootMaintenanceStockRestoreAsync(client, ownedCurrent, originalDirectory, cancellationToken)
+                    .ConfigureAwait(false)
+                : await InternalInstallBackup
+                    .OpenBootMaintenanceOriginalAsync(client, ownedCurrent, originalDirectory, cancellationToken)
+                    .ConfigureAwait(false);
 
             // The Android route keeps its explicit Step-1 slot guard; the EDL route trusts only the fresh
             // misc control slot. There is never a default, a history slot or a VAB source slot guess.
@@ -503,6 +509,29 @@ public sealed partial class BootMaintenanceBackend : IDisposable
                 bool bootWillWrite = false;
                 string? bootCandidateSha = null;
 
+                if (mode == MaintenanceMode.RestoreStock)
+                {
+                    string ablRole = "abl_" + slot;
+                    EdlCapturedRegion currentAbl = RequireRegion(
+                        ownedCurrent.Files, ablRole, "the current rollback capture");
+                    EdlCapturedRegion sourceAbl = RequireRegion(source.Files, ablRole, "the original source");
+                    RequireWholeRegion(currentAbl, sourceAbl, ablRole);
+
+                    if (!string.Equals(currentAbl.Sha256, sourceAbl.Sha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        plan.Add(new PlannedRegion(
+                            ablRole,
+                            slot,
+                            currentAbl.Lun,
+                            currentAbl.StartSector,
+                            currentAbl.SectorCount,
+                            currentAbl.Length,
+                            currentAbl.Sha256,
+                            sourceAbl.FilePath,
+                            sourceAbl.Sha256));
+                    }
+                }
+
                 foreach (string rolePrefix in PlanRolesPerSlot)
                 {
                     string role = rolePrefix + slot;
@@ -555,7 +584,7 @@ public sealed partial class BootMaintenanceBackend : IDisposable
                     BootMaintenanceSourceKind.StockOriginal,
                     boot.Sha256,
                     bootCandidateSha,
-                    bootWillWrite));
+                    bootWillWrite || plan.Exists(item => string.Equals(item.Slot, slot, StringComparison.Ordinal) && item.WillWrite)));
             }
 
             if (plan.Count == 0 && slotSummaries.Count == 0)
