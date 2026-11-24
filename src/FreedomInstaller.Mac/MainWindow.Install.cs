@@ -1968,6 +1968,7 @@ public partial class MainWindow
     /// </summary>
     // Failure-log writes run off the UI thread, one after another; closing the window waits (bounded) for them.
     private Task _preparationFailureLogWrites = Task.CompletedTask;
+    private bool _preparationFailureLogsFlushing;
     private bool _preparationFailureLogsFlushed;
 
     private void QueuePreparationFailureLog(string details)
@@ -1985,14 +1986,30 @@ public partial class MainWindow
     /// </summary>
     private async Task<bool> FlushPreparationFailureLogsBeforeCloseAsync(WindowClosingEventArgs e)
     {
+        if (_preparationFailureLogsFlushing)
+        {
+            // A close while the bounded wait is running stays cancelled; the wait closes the window itself.
+            e.Cancel = true;
+            return true;
+        }
+
         if (_preparationFailureLogsFlushed || _preparationFailureLogWrites.IsCompleted)
         {
             return false;
         }
 
         e.Cancel = true;
-        _preparationFailureLogsFlushed = true;
-        await Task.WhenAny(_preparationFailureLogWrites, Task.Delay(TimeSpan.FromSeconds(10)));
+        _preparationFailureLogsFlushing = true;
+        try
+        {
+            await Task.WhenAny(_preparationFailureLogWrites, Task.Delay(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            _preparationFailureLogsFlushing = false;
+            _preparationFailureLogsFlushed = true;
+        }
+
         Close();
         return true;
     }
