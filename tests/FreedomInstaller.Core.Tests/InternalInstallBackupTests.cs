@@ -1904,6 +1904,28 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
                 return Read(arguments, cancellationToken);
             case "write-sector":
                 return Write(arguments);
+            case "erase-sector":
+            {
+                if (!_enableWrites)
+                    throw new InvalidOperationException("Writes are disabled.");
+                if (arguments.Length < 7)
+                    throw new InvalidOperationException("erase-sector requires 6 arguments.");
+                long start = long.Parse(arguments[1], CultureInfo.InvariantCulture);
+                long count = long.Parse(arguments[2], CultureInfo.InvariantCulture);
+                if (arguments[3] != "--lun" || arguments[4] != "0" || arguments[5] != "--expected-bus-serial" || arguments[6] != E003EdlTestData.BusSerialHex)
+                    throw new InvalidOperationException("Invalid erase-sector arguments.");
+                if (count <= 0 || start < 0 || start + count > _device.TotalSectors(0))
+                    throw new InvalidOperationException("Erase range out of bounds.");
+                WriteOrResetCount++;
+                string stamp = DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
+                string output = E003EdlTestData.Selected() + "\n" +
+                    stamp + " [DEBUG] Using sector size: " + E003EdlTestData.SectorSize + " bytes for LUN 0.\n" +
+                    stamp + " [INFO] Attempting to erase " + count + " sectors starting at LBA " + start + " on LUN 0...\n" +
+                    stamp + " [DEBUG] Erase command ACKed.\n" +
+                    stamp + " [INFO] Successfully erased " + count + " sectors in 1.5s.\n" +
+                    stamp + " [INFO] 'erase-sector' command finished";
+                return Task.FromResult(new ProcessResult(0, output, string.Empty));
+            }
             case "reset":
                 return Task.FromResult(Reset(arguments));
             default:

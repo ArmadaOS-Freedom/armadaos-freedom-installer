@@ -739,8 +739,8 @@ def plan_restore(
     )
 
 
-def make_factory_reset_bcb(existing: bytes) -> bytes:
-    """Return a 2048-byte BCB that queues a one-shot factory reset.
+def make_factory_reset_bcb(existing: bytes, *, queue_recovery: bool = True) -> bytes:
+    """Return a 2048-byte BCB that either queues a one-shot factory reset or clears the BCB command.
 
     ``existing`` must be exactly 2048 bytes whose ``command[0:32]`` is
     either empty (all NUL) or the exact canonical ``bootonce-bootloader``
@@ -748,6 +748,13 @@ def make_factory_reset_bcb(existing: bytes) -> bytes:
     :class:`GptError` is raised. The input is not mutated. Only the command
     and recovery payload are written; ``status`` and ``reserved`` are
     preserved. No reboot or device write is performed.
+
+    With ``queue_recovery=True`` (the default), the canonical one-shot
+    recovery factory reset command is written to ``command`` and the
+    recovery payload to ``recovery``. With ``queue_recovery=False``, only
+    ``command`` is cleared to all NUL; the already-empty ``recovery`` field
+    is left unchanged. Both modes require the same accepted existing command
+    and an empty recovery field.
     """
 
     if not isinstance(existing, (bytes, bytearray, memoryview)):
@@ -762,8 +769,11 @@ def make_factory_reset_bcb(existing: bytes) -> bytes:
         raise GptError("a boot command or recovery request is already pending")
 
     buffer = bytearray(data)
-    buffer[0:32] = _BCB_COMMAND.ljust(32, b"\x00")
-    buffer[64:832] = _BCB_RECOVERY.ljust(768, b"\x00")
+    if queue_recovery:
+        buffer[0:32] = _BCB_COMMAND.ljust(32, b"\x00")
+        buffer[64:832] = _BCB_RECOVERY.ljust(768, b"\x00")
+    else:
+        buffer[0:32] = bytes(32)
     return bytes(buffer)
 
 

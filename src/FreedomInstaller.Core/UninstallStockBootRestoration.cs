@@ -30,7 +30,8 @@ public static class UninstallStockBootRestoration
         ArgumentNullException.ThrowIfNull(uninstallResult);
 
         if (!uninstallResult.Success ||
-            uninstallResult.Stage != UninstallStage.AwaitingFactoryReset ||
+            uninstallResult.Stage != UninstallStage.AwaitingFactoryReset &&
+            uninstallResult.Stage != UninstallStage.AwaitingAndroidBoot ||
             !uninstallResult.DataMayBeErased)
         {
             throw new ArgumentException(

@@ -1440,7 +1440,7 @@ public sealed partial class InternalInstallBackend
     internal static byte[] BuildInstallBcbWriteUnit(byte[] freshWriteUnit, int sectorSize)
         => BuildBcbWriteUnit(freshWriteUnit, sectorSize, androidDataErase: true);
 
-    private static byte[] BuildBcbWriteUnit(byte[] freshWriteUnit, int sectorSize, bool androidDataErase)
+    internal static byte[] BuildBcbWriteUnit(byte[] freshWriteUnit, int sectorSize, bool androidDataErase)
     {
         ArgumentNullException.ThrowIfNull(freshWriteUnit);
 

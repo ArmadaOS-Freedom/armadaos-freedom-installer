@@ -72,7 +72,7 @@ public sealed partial class InternalInstallBackend
         await _context.VerifyLauncherDefaultsAsync(_initialEdl, after: false, ct).ConfigureAwait(false);
         _context.EnsureDirectExecutionSpace(includeOriginalCapture: false);
 
-        if (!_context.AndroidDataErase)
+        if (!_context.AndroidDataErase || _context.DirectAndroidErase is not null)
         {
             EdlCapturedRegion pendingMisc = RequireCapturedRegion("misc");
             int pendingUnitBytes = CheckedWriteUnitBytes(pendingMisc.SectorSize);
@@ -377,7 +377,8 @@ public sealed partial class InternalInstallBackend
 
         // A preserved ARMADA_BOOT layout skips misc entirely; a preserved legacy layout may still clear
         // an existing installer BCB. The explicit AndroidDataErase decision must accompany every call.
-        if (_context.AndroidDataErase || !_context.Package.EdlRawContract.BootRecipe.UsesArmadaBoot)
+        if (_context.DirectAndroidErase is null
+            && (_context.AndroidDataErase || !_context.Package.EdlRawContract.BootRecipe.UsesArmadaBoot))
         {
             await WriteFreshMiscAsync(_initialEdl, run, progress, ct, androidDataErase: _context.AndroidDataErase).ConfigureAwait(false);
         }
@@ -407,6 +408,25 @@ public sealed partial class InternalInstallBackend
         {
             run.MarkVerificationUnproven();
             throw;
+        }
+
+        if (_context.DirectAndroidErase is { } directPlan)
+        {
+            await WriteFreshMiscAsync(_initialEdl, run, progress, ct, androidDataErase: false).ConfigureAwait(false);
+            try
+            {
+                await directPlan.ExecuteAsync(
+                        _initialEdl,
+                        _context.EvidenceDirectory,
+                        message => WriteNewJsonFile(NewExecutionEvidencePath("android-erase", ".json"), new { message }),
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                run.MarkVerificationUnproven();
+                throw;
+            }
         }
 
         // The one reset of this run, and only after every write and readback above.

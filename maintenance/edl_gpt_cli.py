@@ -105,10 +105,15 @@ def _validate_request(
     """Validate the request envelope and return its normalized values."""
 
     mapping = _require_object(request, "request")
-    expected = _REQUEST_FIELDS | ({"reclaimBoardBackup"} if "reclaimBoardBackup" in mapping else set())
+    optional = {"reclaimBoardBackup", "directAndroidDataErase"}
+    expected = _REQUEST_FIELDS | {
+        field for field in optional if field in mapping
+    }
     _require_exact_fields(mapping, expected, "request")
     if not isinstance(mapping.get("reclaimBoardBackup", True), bool):
         _fail("reclaimBoardBackup must be a boolean")
+    if not isinstance(mapping.get("directAndroidDataErase", False), bool):
+        _fail("directAndroidDataErase must be a boolean")
 
     if _require_int(mapping["schemaVersion"], "schemaVersion") != _SCHEMA_VERSION:
         _fail("schemaVersion must be 1")
@@ -301,7 +306,10 @@ def prepare_plan(request: dict[str, Any]) -> dict[str, Any]:
     if len(misc_bytes) < write_unit:
         _fail("misc capture is shorter than one BCB write unit")
 
-    new_bcb = portable_gpt.make_factory_reset_bcb(misc_bytes[:_BCB_SIZE])
+    direct_erase = request.get("directAndroidDataErase", False)
+    new_bcb = portable_gpt.make_factory_reset_bcb(
+        misc_bytes[:_BCB_SIZE], queue_recovery=not direct_erase
+    )
     misc_written = new_bcb + misc_bytes[_BCB_SIZE:write_unit]
     misc_before_sha = hashlib.sha256(misc_bytes).hexdigest()
     misc_after_sha = hashlib.sha256(
