@@ -365,45 +365,8 @@ public sealed partial class InternalInstallBackend
 
         // If B slot was empty and borrowed A's ABL, copy A's loader to B after A is written.
         // This ensures B slot has the same functional ABL as A for subsequent boot operations.
-        var ablCopySlots = _context.GblAblCopySlots;
-        foreach (string copyTarget in ablCopySlots)
-        {
-            if (string.Equals(copyTarget, "b", StringComparison.Ordinal))
-            {
-                // B borrowed from A: read the written abl_a and write it to abl_b
-                var ablACaptured = RequireCapturedRegion("abl_a");
-                var ablBCaptured = RequireCapturedRegion("abl_b");
-
-                // Copy abl_a bytes to abl_b using the same write path
-                // Use the verified ABL write plan from preparation context
-                var gblAblWrites = _context.GblAblWrites;
-                if (!gblAblWrites.TryGetValue("abl_a", out var ablASource))
-                {
-                    throw new InvalidOperationException("abl-copy-source-missing: abl_a not found in GblAblWrites");
-                }
-
-                var copyRegion = new InternalArtifactRegion(
-                    "abl_b",
-                    ablBCaptured.Lun,
-                    ablBCaptured.StartSector,
-                    ablBCaptured.SectorCount,
-                    ablBCaptured.SectorSize,
-                    ablASource.Path,
-                    ablASource.Length,
-                    ablASource.Sha256);
-
-                await WriteExecutionRegionAsync(
-                        _initialEdl,
-                        run,
-                        InternalInstallStage.WritingGblAbl,
-                        "b",
-                        copyRegion,
-                        true,
-                        progress,
-                        ct)
-                    .ConfigureAwait(false);
-            }
-        }
+        // GblAblCopySlots are already handled above in the gblAblRegions loop from the unified write plan.
+        // No additional copy is needed here; the plan execution above has already written all copies.
 
         // The fixed candidate order is b then a; it is never selectable by a caller.
         await WriteExecutionRegionAsync(
