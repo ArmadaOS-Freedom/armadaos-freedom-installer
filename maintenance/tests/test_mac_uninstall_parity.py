@@ -409,6 +409,38 @@ class MacUninstallParityTests(unittest.TestCase):
             mismatch,
             r"if \(!resumeUnconfirmedEntry\)\s*\{\s*InvalidateUninstallCheckFromMismatch\(\);\s*\}",
         )
+        # The mismatch block itself stops before the entry: it reports the mismatch and returns ...
+        stop = re.search(
+            r'SetText\(UninstallPrepareStatusText, M\("Dynamic\.InternalInstall\.Backup\.IdentityMismatch"\)\);'
+            r"\s*return;\s*\}",
+            mismatch,
+        )
+        self.assertIsNotNone(stop)
+        # ... while the matched identity (control) falls through to the one EnterAsync without another return.
+        self.assertNotIn("return;", mismatch[stop.end():])
+
+    def test_direct_android_erase_uses_only_the_live_checked_build(self):
+        code = _code(MAC_CODE)
+        start = code.index("bool useDirectAndroidDataErase")
+        gate = code[code.rindex("var liveAndroid", 0, start):code.index(";", start) + 1]
+        # The already-in-9008 entry carries the saved backup identity: it must never opt in to direct erase.
+        self.assertIn("HasCheckedUninstallDevice ? _uninstallDeviceCheck!.Android!.Identity : null", gate)
+        self.assertIn("AndroidDataErasePreview.Matches(liveAndroid.Model, liveAndroid.Firmware)", gate)
+        self.assertNotIn("entry.AndroidIdentity", gate)
+
+    def test_tablet_backup_hash_is_recorded_only_after_a_successful_read(self):
+        code = _code(MAC_CODE)
+        record = "_uninstallBoardRecoveryAttemptManifest = current.ManifestSha256;"
+        for source, ready in (
+            ("InternalInstallBackup.OpenRecoveryAsync(client, discovered", "_uninstallRecoverySource = discoveredBackup;"),
+            ("BoardRecoveryBackup.ReadAsync(client, current", "_uninstallRecoverySource = board;"),
+        ):
+            read = code.index(source)
+            accepted = code.index(ready, read)
+            # No hash recorded between the attempt's start and the read: a failed read can be retried.
+            attempt = code.rindex("if (", 0, read)
+            self.assertNotIn(record, code[attempt:read], source)
+            self.assertIn(record, code[accepted:code.index("return ", accepted)], source)
 
     def test_source_change_drops_the_source_derived_snapshot_parent(self):
         code = _code(MAC_CODE)

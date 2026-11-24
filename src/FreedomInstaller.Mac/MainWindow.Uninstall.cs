@@ -874,8 +874,8 @@ public partial class MainWindow
         SetText(UninstallCheckProgressText, "Dynamic.InternalInstall.Check.Progress.Completed");
         if (HasCheckedUninstallDevice)
         {
-            SetText(UninstallRouteText, "Dynamic.InternalInstall.Check.RoutePassed");
-            SetText(UninstallCheckStatusText, "Dynamic.InternalInstall.Check.Passed");
+            SetText(UninstallRouteText, "Dynamic.Mac.Uninstall.CheckRoutePassed");
+            SetText(UninstallCheckStatusText, "Dynamic.Mac.Uninstall.CheckPassed");
             return;
         }
 
@@ -1994,8 +1994,11 @@ public partial class MainWindow
                     });
 
                     // WPF #139: models whose Android data partitions are erased directly in 9008 (no factory reset).
-                    bool useDirectAndroidDataErase = AndroidDataErasePreview.Matches(
-                        entry.AndroidIdentity.Identity.Model, entry.AndroidIdentity.Identity.Firmware);
+                    // Only the Android build read live by this session's check may opt in: on the already-in-9008 route
+                    // the entry carries the saved backup's identity, which says nothing about the build now installed.
+                    var liveAndroid = HasCheckedUninstallDevice ? _uninstallDeviceCheck!.Android!.Identity : null;
+                    bool useDirectAndroidDataErase = liveAndroid is not null
+                        && AndroidDataErasePreview.Matches(liveAndroid.Model, liveAndroid.Firmware);
                     if (capturedRestoreStock)
                     {
                         var stock = stockPrepared!;
@@ -2149,9 +2152,9 @@ public partial class MainWindow
         }
 
         var client = _uninstallEdlClient ?? throw new InvalidOperationException("No active EDL connection.");
+        // WPF 一样：只在读取成功后才记录清单哈希，读取失败、取消选择电脑备份后再点下一步会重新读取板内备份。
         if (_uninstallBoardRecoveryDirectory is { } discovered)
         {
-            _uninstallBoardRecoveryAttemptManifest = current.ManifestSha256;
             try
             {
                 var discoveredBackup = await Task.Run(
@@ -2168,6 +2171,7 @@ public partial class MainWindow
                 }
 
                 _uninstallRecoverySource = discoveredBackup;
+                _uninstallBoardRecoveryAttemptManifest = current.ManifestSha256;
                 AppendUninstallLog(M("Dynamic.RecoverySource.BoardReady", discoveredBackup.DirectoryPath));
                 return discoveredBackup;
             }
@@ -2181,7 +2185,6 @@ public partial class MainWindow
 
         if (_uninstallBoardRecoveryAttemptManifest != current.ManifestSha256)
         {
-            _uninstallBoardRecoveryAttemptManifest = current.ManifestSha256;
             AppendUninstallLog(M("Dynamic.RecoverySource.ReadingBoard"));
             try
             {
@@ -2191,6 +2194,7 @@ public partial class MainWindow
                 if (board is not null)
                 {
                     _uninstallRecoverySource = board;
+                    _uninstallBoardRecoveryAttemptManifest = current.ManifestSha256;
                     AppendUninstallLog(M("Dynamic.RecoverySource.BoardReady", board.DirectoryPath));
                     return board;
                 }
@@ -3071,6 +3075,10 @@ public partial class MainWindow
                 // an unconfirmed write.
                 bool unproven = !HasUnresolvedUninstallState && !sessionOver
                     && _uninstallEdlClient is { HasInitialSaharaProof: false };
+                // Pre-write as well when the 9008 entry never returned a client (for example EnterAsync timed out):
+                // the staged toolchain is released the same way; unresolved writes keep everything.
+                bool prewrite = !HasUnresolvedUninstallState && !sessionOver
+                    && (unproven || (HasUninstallLiveEdlState && _uninstallEdlClient is null));
                 if (await MessageDialog.AskAsync(
                         this,
                         T(unproven ? "Dynamic.Mac.Close.ProbeFailedTitle" : "Dynamic.UserdataUninstall.Exit.CloseUnconfirmedTitle"),
@@ -3079,7 +3087,7 @@ public partial class MainWindow
                         T("Dynamic.Mac.Dialog.No")))
                 {
                     _closeConfirmed = true;
-                    if (unproven)
+                    if (prewrite)
                     {
                         // Pre-write: release what this window owns; no device command.
                         ReleaseUninstallLocalResourcesForPrewriteClose();
