@@ -1835,6 +1835,12 @@ public partial class MainWindow
             if (!string.IsNullOrWhiteSpace(selectedOriginal) && Directory.Exists(selectedOriginal))
             {
                 workParent = Directory.GetParent(Path.GetFullPath(selectedOriginal))?.FullName;
+                // 来源在只读卷上时，来源的上一级写不了快照：改用缓存目录（下面的后备）。
+                if (!IsWritableDirectory(workParent))
+                {
+                    workParent = null;
+                }
+
                 workParentFromSource = !string.IsNullOrWhiteSpace(workParent);
             }
 
@@ -2911,6 +2917,27 @@ public partial class MainWindow
     /// 换上新加载的工具链。之前一次进入 9008 失败时留下的工具链没有客户端在用：先释放它（删掉它解出的目录，
     /// 含 Python 运行时），重试多少次都不会留下旧的解出目录。已有客户端在用的工具链绝不在这里释放。
     /// </summary>
+    /// <summary>能在 <paramref name="directory"/> 里新建文件（建一个随即删除的探测文件）。</summary>
+    private static bool IsWritableDirectory(string? directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var probe = new FileStream(
+                Path.Combine(directory, ".freedom-write-probe-" + Guid.NewGuid().ToString("N")),
+                FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
     private void AdoptUninstallEdlTools(EdlToolchain tools)
     {
         var previous = _uninstallEdlTools;
