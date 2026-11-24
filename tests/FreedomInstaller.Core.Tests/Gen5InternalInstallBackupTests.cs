@@ -472,6 +472,57 @@ public sealed class Gen5InternalInstallBackupTests : IClassFixture<Gen5EdlToolch
         Assert.Equal(0, runner.WriteOrResetCount);
     }
 
+    [Theory]
+    [InlineData("a", true)]
+    [InlineData("b", false)]
+    public async Task G5_07_CreateForFirstInstall_captures_inactive_abl_without_requiring_a_replacement(
+        string activeSlot,
+        bool inactiveBlank)
+    {
+        string parent = _fixture.NewCaseDirectory("first-install-inactive-abl-" + activeSlot);
+        using var source = new DirectSourceFixture();
+        string inactiveRole = activeSlot == "a" ? "abl_b" : "abl_a";
+        byte[] inactiveBytes = new byte[Tb323fuAbl088Assets.ImageLength];
+        if (!inactiveBlank)
+        {
+            inactiveBytes[0] = 0x5A;
+        }
+
+        string inactivePath = Path.Combine(parent, "inactive-input.img");
+        File.WriteAllBytes(inactivePath, inactiveBytes);
+        string inactiveHash = Convert.ToHexString(SHA256.HashData(inactiveBytes));
+        string activePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "tb323fu-abl088.img");
+        var sources = new Dictionary<string, VerifiedEdlFile>(source.Sources(), StringComparer.Ordinal)
+        {
+            ["abl_" + activeSlot] = new VerifiedEdlFile(activePath, new FileInfo(activePath).Length, HashFile(activePath)),
+            [inactiveRole] = new VerifiedEdlFile(inactivePath, inactiveBytes.LongLength, inactiveHash),
+        };
+        string deviceDir = Directory.CreateDirectory(Path.Combine(parent, "device")).FullName;
+        IB001SyntheticDevice device = IB001SyntheticDevice.CreateDirect(
+            deviceDir, sources, gen5: true);
+        IB001FakeEdlRunner runner = new(device, hardwareId: Gen5HardwareId);
+        EdlClient client = NewClient(runner);
+        InternalDeviceCheckResult check = new(
+            android: client.Binding.AndroidIdentity,
+            fastbootSerial: client.Binding.AndroidIdentity?.Identity?.Serial,
+            fastbootProduct: null,
+            fastbootLockState: BootloaderState.Locked,
+            otaState: default,
+            androidReturn: default,
+            cancelled: false,
+            failedStage: null,
+            error: null,
+            currentSlot: activeSlot);
+
+        string backupParent = Directory.CreateDirectory(Path.Combine(parent, "backup")).FullName;
+        using InternalBackupSet backup = await InternalInstallBackup.CreateForFirstInstallAsync(
+            client, backupParent, check, progress: null, CancellationToken.None);
+
+        Assert.Equal(Gen5RoleCount, backup.Files.Count);
+        Assert.Equal(inactiveHash, HashFile(backup.Files[inactiveRole].FilePath), StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(0, runner.WriteOrResetCount);
+    }
+
     private sealed class ThrowingOnReadingPartitionProgress : IProgress<InternalBackupProgress>
     {
         public void Report(InternalBackupProgress value)

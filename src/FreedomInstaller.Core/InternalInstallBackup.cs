@@ -762,7 +762,6 @@ public static partial class InternalInstallBackup
         bool canReplaceWithPinned088 = string.Equals(model, "TB323FU", StringComparison.Ordinal)
             && lockState == BootloaderState.Locked
             && Tb323fuAbl088Assets.IsBundled;
-        bool verifiedPinned088 = false;
 
         // Inspect both sealed ABL copies, each read exactly once from its held stream.
         for (int i = 0; i < roles.Length; i++)
@@ -782,54 +781,29 @@ public static partial class InternalInstallBackup
             byte[] raw = await ReadHeldAsync(sealedFile.Stream, sealedFile.Length, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
 
-            if (raw.AsSpan().IndexOfAnyExcept((byte)0) < 0)
+            bool zeroFilled = raw.AsSpan().IndexOfAnyExcept((byte)0) < 0;
+            string? reason = zeroFilled ? "decode failure" : GetFirstInstallAblIncompatibility(raw, token);
+            if (reason is null)
             {
-                if (canReplaceWithPinned088 && sealedFile.Length == Tb323fuAbl088Assets.ImageLength)
-                {
-                    if (!verifiedPinned088)
-                    {
-                        _ = Tb323fuAbl088Assets.ReadVerifiedBytes(token);
-                        verifiedPinned088 = true;
-                    }
-
-                    observations[i] = roles[i] + "=replaceable";
-                }
-                else
-                {
-                    observations[i] = roles[i] + "=zero-filled";
-                    if (i == 0)
-                    {
-                        activeReason = "decode failure";
-                    }
-                }
+                observations[i] = roles[i] + "=compatible";
                 continue;
             }
 
-            string? reason = GetFirstInstallAblIncompatibility(raw, token);
-            if (reason is not null)
+            observations[i] = roles[i] + (zeroFilled ? "=zero-filled" : "=incompatible");
+            if (i != 0)
             {
-                if (canReplaceWithPinned088 && sealedFile.Length == Tb323fuAbl088Assets.ImageLength)
-                {
-                    if (!verifiedPinned088)
-                    {
-                        _ = Tb323fuAbl088Assets.ReadVerifiedBytes(token);
-                        verifiedPinned088 = true;
-                    }
-
-                    observations[i] = roles[i] + "=replaceable";
-                }
-                else
-                {
-                    observations[i] = roles[i] + "=incompatible";
-                    if (i == 0)
-                    {
-                        activeReason = reason;
-                    }
-                }
                 continue;
             }
 
-            observations[i] = roles[i] + "=compatible";
+            if (canReplaceWithPinned088 && sealedFile.Length == Tb323fuAbl088Assets.ImageLength)
+            {
+                _ = Tb323fuAbl088Assets.ReadVerifiedBytes(token);
+                observations[i] = roles[i] + "=replaceable";
+            }
+            else
+            {
+                activeReason = reason;
+            }
         }
 
         if (!haveActive || activeReason is not null)

@@ -277,19 +277,19 @@ public sealed class Tb323fuGblAblReplacementTests
 
         if (!slotAIncompatible)
         {
-            Assert.DoesNotContain(writes, write => SameRegion(write, session.Backup.Files["abl_a"]));
+            Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files["abl_a"]));
         }
 
         if (!slotBIncompatible)
         {
-            Assert.DoesNotContain(writes, write => SameRegion(write, session.Backup.Files["abl_b"]));
+            Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files["abl_b"]));
         }
 
         AssertBcbWrite(writes[10 + expectedWriteSlotOrder.Length], session.Backup.Files["misc"]);
 
         foreach (string metadataRole in MetadataRoles)
         {
-            Assert.DoesNotContain(writes, write => SameRegion(write, session.Backup.Files[metadataRole]));
+            Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files[metadataRole]));
         }
 
         string[] verifiedGblAblSlots = stageEvents
@@ -345,7 +345,7 @@ public sealed class Tb323fuGblAblReplacementTests
         Assert.Equal(12, session.EdlRunner.Writes.Count);
         AssertFullWrite(session.EdlRunner.Writes[10], session.Backup.Files["abl_a"]);
         Assert.Equal(Tb323fuAbl088Assets.ImageSha256, session.EdlRunner.Writes[10].Sha256, ignoreCase: true);
-        Assert.DoesNotContain(session.EdlRunner.Writes, write => SameRegion(write, session.Backup.Files["abl_b"]));
+        Assert.DoesNotContain(session.EdlRunner.Writes, write => OverlapsRegion(write, session.Backup.Files["abl_b"]));
     }
 
     [Fact]
@@ -433,6 +433,90 @@ public sealed class Tb323fuGblAblReplacementTests
         Assert.Equal(InternalInstallWriteState.NoneIssued, result.WriteState);
         Assert.Empty(session.EdlRunner.Writes);
         Assert.Equal(0, session.EdlRunner.ResetCount);
+    }
+
+    [Fact]
+    public async Task LockedTb323fu_AblReadbackFailureAfterWrite_StopsBeforeMiscAndKeepsOriginalBackups()
+    {
+        if (!Tb323fuAbl088Assets.IsBundled)
+        {
+            return;
+        }
+
+        string caseDir = _g5.NewCaseDirectory(
+            nameof(LockedTb323fu_AblReadbackFailureAfterWrite_StopsBeforeMiscAndKeepsOriginalBackups));
+        VerifiedEdlFile incompatibleAblA = WriteDeterministicFile(
+            caseDir,
+            "abl-a-055.img",
+            Tb323fuAbl088Assets.ImageLength,
+            0x21);
+        VerifiedEdlFile incompatibleAblB = WriteDeterministicFile(
+            caseDir,
+            "abl-b-055.img",
+            Tb323fuAbl088Assets.ImageLength,
+            0x63);
+        VerifiedEdlFile xbl = WriteVerifiedFile(caseDir, "xbl-gen5.elf", BuildSyntheticGen5XblConfig());
+
+        using var source = new GblDirectSourceFixture(
+            region: "PRC",
+            mismatchParentBootChild: false,
+            androidTextOffset: null,
+            customAbl: incompatibleAblA,
+            customXbl: xbl);
+
+        var overrides = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal)
+        {
+            ["abl_a"] = incompatibleAblA,
+            ["abl_b"] = incompatibleAblB,
+        };
+
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _g5.Toolchain,
+            _raw,
+            currentSlot: "b",
+            avbSourceKind: DirectAvbSourceKind.Oem,
+            observedFastbootLockState: BootloaderState.Locked,
+            gblSources: source,
+            sourceOverrides: overrides);
+
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+        Assert.Equal(InternalInstallBootTrustMode.GblPreserveOem, prepared.BootTrustMode);
+        Assert.Equal(new[] { "a", "b" }, prepared.GblAblReplacementSlots);
+
+        EdlCapturedRegion ablA = session.Backup.Files["abl_a"];
+        EdlCapturedRegion ablB = session.Backup.Files["abl_b"];
+        EdlCapturedRegion misc = session.Backup.Files["misc"];
+        session.EdlRunner.InjectReadbackFailureOnce(ablA.Lun, ablA.StartSector, ablA.SectorCount);
+
+        var verifiedAblSlots = new List<string>();
+        var progress = new SynchronousProgress<InternalInstallProgress>(item =>
+        {
+            if (item.Stage == InternalInstallStage.WritingGblAbl
+                && item.Kind == InternalInstallProgressKind.Verified)
+            {
+                verifiedAblSlots.Add(item.Slot!);
+            }
+        });
+
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            prepared.ConfirmationId,
+            userdataEraseConfirmed: true,
+            progress: progress);
+
+        Assert.Equal(InternalInstallOutcome.UnknownWriteOutcome, result.Outcome);
+        Assert.Equal(InternalInstallWriteState.Unknown, result.WriteState);
+        Assert.Equal(new[] { "b" }, verifiedAblSlots);
+        var writes = session.EdlRunner.Writes;
+        AssertFullWrite(writes[^1], ablA);
+        Assert.DoesNotContain(writes, write => OverlapsRegion(write, misc));
+        Assert.Equal(0, session.EdlRunner.ResetCount);
+
+        foreach (EdlCapturedRegion backup in new[] { ablA, ablB })
+        {
+            Assert.True(File.Exists(backup.FilePath));
+            using var stream = File.OpenRead(backup.FilePath);
+            Assert.Equal(backup.Sha256, Convert.ToHexString(SHA256.HashData(stream)), ignoreCase: true);
+        }
     }
 
     private static VerifiedEdlFile WriteDeterministicFile(string directory, string name, int length, byte seed)
@@ -608,10 +692,10 @@ public sealed class Tb323fuGblAblReplacementTests
         Assert.Equal(expectedUnits * sectorSize, new FileInfo(write.FilePath).Length);
     }
 
-    private static bool SameRegion(IB001Write write, EdlCapturedRegion region) =>
-        Convert.ToInt64(write.Lun) == Convert.ToInt64(region.Lun)
-        && Convert.ToInt64(write.StartSector) == Convert.ToInt64(region.StartSector)
-        && Convert.ToInt64(write.SectorCount) == Convert.ToInt64(region.SectorCount);
+    private static bool OverlapsRegion(IB001Write write, EdlCapturedRegion region) =>
+        write.Lun == region.Lun
+        && write.StartSector < region.StartSector + region.SectorCount
+        && region.StartSector < write.StartSector + write.SectorCount;
 
     private sealed class SynchronousProgress<T> : IProgress<T>
     {
