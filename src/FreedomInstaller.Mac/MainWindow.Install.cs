@@ -1982,8 +1982,9 @@ public partial class MainWindow
             using var writer = new StreamWriter(stream);
             writer.Write(exception.ToString());
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            // Best effort inside a failure handler: no path, permission or format problem may escape to the UI.
         }
     }
 }
