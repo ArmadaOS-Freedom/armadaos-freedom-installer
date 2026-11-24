@@ -393,13 +393,17 @@ class MacUninstallParityTests(unittest.TestCase):
         resume = backup.index("if (resumeUnconfirmedEntry && (await ReadEdlPresentAsync(token)).Count > 0)")
         android = backup.index("else", resume)
         waited = backup[resume:android]
-        self.assertIn(".WaitForPresentAsync(expected, loaded.Profile, token)", waited)
+        # (the retry binds with the identity read right before the attempted entry, so the entry keeps the build that
+        # entry accepted; the step-1 identity is only the fallback when no entry was attempted from Android)
+        self.assertIn(".WaitForPresentAsync(_uninstallEntryAndroid ?? expected, loaded.Profile, token)", waited)
         self.assertNotIn("EnterAsync", waited)
         # ... a tablet back in Android is re-read and compared before the one EnterAsync;
         entered = backup[android:]
         reread = entered.index(".ReadAndroidAsync(freshIdentity, token)")
         compare = entered.index("UninstallAndroidMatches(expected, freshAndroid)")
         enter = entered.index(".EnterAsync(freshAndroid, loaded.Profile, token)")
+        # The identity handed to EnterAsync is kept for an unconfirmed-entry retry.
+        self.assertIn("_uninstallEntryAndroid = freshAndroid;", entered[compare:enter])
         self.assertLess(reread, compare)
         self.assertLess(compare, enter)
         # ... and a mismatch while the entry is unconfirmed keeps the step-1 identity, so the original tablet

@@ -45,6 +45,9 @@ public partial class MainWindow
     private EdlEntryResult? _uninstallEdlEntry;
     private EdlClient? _uninstallEdlClient;
     private bool _uninstallEntryAttempted;
+    // The Android identity read right before the one EnterAsync (null until then): an unconfirmed-entry retry binds the
+    // 9008 endpoint with it, so the entry keeps the build that was actually accepted, not the step-1 build.
+    private AndroidMaintenanceIdentity? _uninstallEntryAndroid;
     private string? _uninstallBackupParent;
     // 快照父目录是按所选恢复来源自动推导的（来源的上一级）：换来源时要一起清掉，不能继续用旧来源所在的卷。
     private bool _uninstallBackupParentFromSource;
@@ -1010,6 +1013,7 @@ public partial class MainWindow
                             _uninstallEdlEntry = entry;
                             _uninstallEdlClient = client;
                             _uninstallEntryAttempted = true;
+                            _uninstallEntryAndroid = null;
                         }
                         catch
                         {
@@ -1296,7 +1300,7 @@ public partial class MainWindow
                             SetText(UninstallPrepareStatusText, M("Dynamic.Mac.Backup.AlreadyInEdl", expected.SocSerial));
                             var waited = await Task.Run(
                                 () => new EdlEntry(transport.AdbPath, _runner, Discovery)
-                                    .WaitForPresentAsync(expected, loaded.Profile, token),
+                                    .WaitForPresentAsync(_uninstallEntryAndroid ?? expected, loaded.Profile, token),
                                 token);
 
                             _uninstallEdlEntry = waited;
@@ -1343,6 +1347,7 @@ public partial class MainWindow
                             pendingTools = null;
 
                             _uninstallEntryAttempted = true;
+                            _uninstallEntryAndroid = freshAndroid;
                             SetText(UninstallPrepareStatusText, M("Dynamic.InternalInstall.Backup.EnteringEdl"));
 
                             // 整个流程只会在这里真实进入一次 9008，不自动重试；显式传入刚核对过的可信配置。
@@ -2981,6 +2986,7 @@ public partial class MainWindow
         _uninstallEdlClient = null;
         _uninstallEdlEntry = null;
         _uninstallEntryAttempted = false;
+        _uninstallEntryAndroid = null;
         try
         {
             tools?.Dispose();
