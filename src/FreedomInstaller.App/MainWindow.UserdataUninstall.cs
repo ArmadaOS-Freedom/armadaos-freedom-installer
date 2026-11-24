@@ -353,11 +353,13 @@ public partial class MainWindow
                     {
                         if (acceptProgress) RenderModernUserdataUninstallPrepareProgress(report);
                     });
+                    bool useDirectAndroidDataErase = AndroidDataErasePreview.Matches(entry.AndroidIdentity.Identity.Model, entry.AndroidIdentity.Identity.Firmware);
                     if (capturedRestoreStock)
                     {
                         backend = await EdlUninstallBackend.CreatePreparedForStockRestoreAsync(
                             client, tools, entry, assets, fresh, stockPrepared!, TemporaryWorkRoot,
-                            runner, backendProgress, token, capturedReclaimBackup);
+                            runner, backendProgress, token, capturedReclaimBackup,
+                            useDirectAndroidDataErase: useDirectAndroidDataErase);
                     }
                     else
                     {
@@ -372,7 +374,8 @@ public partial class MainWindow
                             actualTools, runner, TemporaryWorkRoot, token);
                         backend = await EdlUninstallBackend.CreatePreparedAsync(
                             client, tools, entry, assets, fresh, menu, facts.CurrentSlot,
-                            TemporaryWorkRoot, runner, backendProgress, token, capturedReclaimBackup);
+                            TemporaryWorkRoot, runner, backendProgress, token, capturedReclaimBackup,
+                            useDirectAndroidDataErase: useDirectAndroidDataErase);
                     }
 
                     // 全部真实返回后再核对捕获；一致才提交三个自有字段。

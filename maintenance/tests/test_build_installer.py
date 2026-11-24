@@ -149,6 +149,7 @@ def _build_fixture_repo(root):
         "vendor/qualcomm/g4/firehose.melf": G4_MELF,
         "vendor/qualcomm/g4/abl_aosp_capable.img": b"fixture-aosp-capable-abl\n",
         "vendor/qualcomm/tb710fu/firehose.melf": TB710FU_MELF,
+        "vendor/qualcomm/tb710fu/abl_aosp_capable.img": b"fixture-tb710fu-aosp-capable-abl\n",
     }
     for package in ("google", "oplus"):
         for name in ("android_winusb.inf", "androidwinusba64.cat",
@@ -442,6 +443,15 @@ class PrepareTests(unittest.TestCase):
             f"<BundledTb322fcAbl188>{build_installer._xml_escape(str(abl.resolve()))}</BundledTb322fcAbl188>",
             props_xml,
         )
+        tb710fu_abl = Path(record["inputs"]["BundledTb710fuAospAbl"])
+        self.assertEqual(
+            (self.repo_root / "vendor" / "qualcomm" / "tb710fu" / "abl_aosp_capable.img").resolve(),
+            tb710fu_abl.resolve(),
+        )
+        self.assertIn(
+            f"<BundledTb710fuAospAbl>{build_installer._xml_escape(str(tb710fu_abl.resolve()))}</BundledTb710fuAospAbl>",
+            props_xml,
+        )
         # no offline inputs supplied: the optional pair stays out of props
         for prop in build_installer._OFFLINE_PROPERTY_NAMES:
             self.assertNotIn(f"<{prop}>", props_xml)
@@ -558,6 +568,27 @@ class PrepareTests(unittest.TestCase):
                 )
         fetch_mock.assert_not_called()
         run_mock.assert_not_called()
+
+    def test_manifest_without_required_abl_entry_fails_before_fetch_or_compile(self):
+        manifest_path = self.repo_root / "maintenance" / "build-inputs.json"
+        for rel in build_installer._REQUIRED_VENDOR_FILES.values():
+            with self.subTest(rel=rel):
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["vendorFiles"] = [
+                    e for e in manifest["vendorFiles"] if e["path"] != rel
+                ]
+                custom = self.repo_root / "maintenance" / "custom-inputs.json"
+                custom.write_text(json.dumps(manifest), encoding="utf-8")
+                with mock.patch.object(
+                    fetch_build_inputs, "fetch_all"
+                ) as fetch_mock, mock.patch.object(build_installer, "_run") as run_mock:
+                    with self.assertRaises(SystemExit) as raised:
+                        build_installer.prepare(
+                            self.repo_root, self.work_dir, manifest_path=custom
+                        )
+                self.assertIn(rel, str(raised.exception))
+                fetch_mock.assert_not_called()
+                run_mock.assert_not_called()
 
     def test_missing_vendor_fails_before_fetch_or_compile(self):
         (self.repo_root / "vendor" / "qualcomm" / "g4" / "firehose.melf").unlink()

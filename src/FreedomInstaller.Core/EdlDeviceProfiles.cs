@@ -20,7 +20,8 @@ public enum EdlInstallBootTrust
     /// <summary>
     /// Only the boot candidates are written, signed with the AOSP test key; the device's vbmeta, vbmeta_system
     /// and recovery stay as they are. Requires that every source slot's root vbmeta is signed by the AOSP key
-    /// and chains boot to it (a locked bootloader with an AOSP-test-key root).
+    /// and chains boot to it (a locked bootloader with an AOSP-test-key root). A source whose root uses another
+    /// key takes the AOSP re-sign route instead, when the model has a pinned AOSP-capable ABL.
     /// </summary>
     AospPreservedBoot
 }
@@ -273,8 +274,10 @@ public static class EdlDeviceProfiles
     /// <see cref="EdlDeviceProfile.IsComplete"/> again describes the static identity and loader pin only.
     /// Being registered here enables identification, the 9008 tool profile and read-only work. Of the write
     /// routes only the internal install is open (see <see cref="DeviceModelRoutes"/>), and it uses
-    /// <see cref="EdlInstallBootTrust.AospPreservedBoot"/>: the locked ZUXOS 495 boot chain has an AOSP-test-key
-    /// root vbmeta but an RSA2048 vbmeta_system chain, so only boot is re-signed and the AVB metadata is kept.
+    /// <see cref="EdlInstallBootTrust.AospPreservedBoot"/>: the locked ZUXOS 495 no-unlock boot chain has an
+    /// AOSP-test-key root vbmeta but an RSA2048 vbmeta_system chain, so only boot is re-signed and the AVB metadata
+    /// is kept. Lenovo's stock 495 chain (every node signed with Lenovo's key) leaves that route for the full AOSP
+    /// re-sign with the pinned AOSP-capable ABL (<see cref="PinnedAospAbl.Tb710fu"/>).
     /// </summary>
     private static EdlDeviceProfile Tb710fu { get; } = new EdlDeviceProfile(
         "tb710fu-9008-495",

@@ -560,8 +560,18 @@ public partial class MainWindow
                 }
                 catch (Exception exception)
                 {
-                    SetText(GlobalProgressStatusText, GlobalBackupFailureMessage(exception));
+                    var failure = GlobalBackupFailureMessage(exception);
+                    SetText(GlobalProgressStatusText, failure);
                     AppendLocalizedLog(M("Dynamic.Global.Log.BackupFailed", exception.ToString()));
+                    if (failure.Key == "Dynamic.Global.Error.LinuxAlreadyInstalled")
+                    {
+                        MessageBox.Show(
+                            this,
+                            _uiText.FormatForDisplay(failure),
+                            T("Static.Function.GlobalBackup.Title"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                    }
                 }
             });
         }
