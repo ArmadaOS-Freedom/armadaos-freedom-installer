@@ -64,6 +64,7 @@ _PROPERTY_NAMES = (
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
     "BundledTb322fcAbl188",
+    "BundledTb710fuAospAbl",
 )
 
 # Optional paired legacy inputs: embedded only when supplied.  A single-file
@@ -186,9 +187,18 @@ def _xml_escape(text):
     return s
 
 
+# Vendor files a build embeds by path: the manifest must list each of them, so
+# its digest is always checked (a custom manifest cannot silently skip one).
+_REQUIRED_VENDOR_FILES = {
+    "BundledTb322fcAbl188": "vendor/qualcomm/g4/abl_aosp_capable.img",
+    "BundledTb710fuAospAbl": "vendor/qualcomm/tb710fu/abl_aosp_capable.img",
+}
+
+
 def _validate_vendor_files(repo_root, manifest):
     """Validate every vendor file (exact bytes + SHA) BEFORE any download or
-    compilation.  Also ensure the relative path stays inside the repo."""
+    compilation.  Also ensure the relative path stays inside the repo, and
+    that every file in _REQUIRED_VENDOR_FILES is listed (and so validated)."""
     repo_root = Path(repo_root).resolve()
     entries = manifest.get("vendorFiles")
     if not isinstance(entries, list) or not entries:
@@ -227,6 +237,11 @@ def _validate_vendor_files(repo_root, manifest):
                 f"vendor mismatch: {rel} sha256 {got_sha} != expected {want_sha}"
             )
         results[rel] = resolved
+    missing = [rel for rel in _REQUIRED_VENDOR_FILES.values() if rel not in results]
+    if missing:
+        raise SystemExit(
+            "manifest error: vendorFiles must list " + ", ".join(missing)
+        )
     return results
 
 
@@ -1053,10 +1068,11 @@ def prepare(repo_root, work_dir, manifest_path=None,
         ),
         "BundledGblPrcEfi": str(Path(fetched["gblPrc"]).resolve()),
         "BundledGblRowEfi": str(Path(fetched["gblRow"]).resolve()),
-        "BundledTb322fcAbl188": str(
-            (repo_root / "vendor" / "qualcomm" / "g4" / "abl_aosp_capable.img").resolve()
-        ),
     }
+    # validated vendor paths: the digest of each was checked in phase 1b
+    inputs.update({
+        prop: str(vendor_map[rel]) for prop, rel in _REQUIRED_VENDOR_FILES.items()
+    })
     inputs.update(offline_inputs)
     for prop, path_str in inputs.items():
         if not Path(path_str).is_file():

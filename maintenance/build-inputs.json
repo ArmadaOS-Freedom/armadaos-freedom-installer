@@ -170,6 +170,11 @@
       "path": "vendor/qualcomm/tb710fu/firehose.melf"
     },
     {
+      "bytes": 1048576,
+      "sha256": "6CFA16E65C2DADD0FC557DD356E6C383C693B4C3B7F0A651D92BB9F6E38B74A8",
+      "path": "vendor/qualcomm/tb710fu/abl_aosp_capable.img"
+    },
+    {
       "bytes": 6957,
       "path": "vendor/android/google/android_winusb.inf",
       "sha256": "cd1ebe134e3ace2b0c20b16ce62ca8369b1c80f497d6fa584f38dfbfc0a65ade"
@@ -256,7 +261,7 @@
     "driver": "Qualcomm 2.1.5.2 AMD64, 2023-08-24; unchanged DriverStore files; vendor terms",
     "g4": "TB322FC_CN_OPEN_USER_Q00041.1_W_ZUXOS_1.5.10.259_ST_260611",
     "g5": "QCTool-2026.3.21-1/lenovo/devprg_legion-y700-5",
-    "tb710fu": "TB710FU ZUXOS_1.5.04.495_WITHOUT_UBL/EDL/xbl_s_devprg_ns.melf",
+    "tb710fu": "TB710FU ZUXOS_1.5.04.495_WITHOUT_UBL/EDL/xbl_s_devprg_ns.melf; abl_aosp_capable.img = TB710FU CN ZUI 17.0.04.279 abl (ZUXOS_1.5.04.495_WITHOUT_UBL abl.img)",
     "androidDrivers": "Original signed Google r13 and OPLUS 11.0.0000.00000 x64 WinUSB packages; unchanged vendor files and terms."
   }
 }

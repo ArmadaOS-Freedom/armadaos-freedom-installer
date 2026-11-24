@@ -1346,6 +1346,15 @@ public partial class MainWindow
                 M("Dynamic.InternalInstall.Execution.WithFailureDetails", summary, M("Dynamic.InternalInstall.Prepared.GblInstallMode")),
             InternalInstallBootTrustMode.AospPreserved =>
                 M("Dynamic.InternalInstall.Execution.WithFailureDetails", summary, M("Dynamic.InternalInstall.Prepared.AospPreservedInstallMode")),
+            _ when prepared.Abl188ReplacementSlots.Count != 0 =>
+                M(
+                    "Dynamic.InternalInstall.Execution.WithFailureDetails",
+                    summary,
+                    M(
+                        prepared.AblReplacementKind == "tb710fu-279"
+                            ? "Dynamic.InternalInstall.Prepared.Tb710fuAblInstallMode"
+                            : "Dynamic.InternalInstall.Prepared.Abl188InstallMode",
+                        string.Join(", ", prepared.Abl188ReplacementSlots))),
             _ => summary,
         };
         SetText(

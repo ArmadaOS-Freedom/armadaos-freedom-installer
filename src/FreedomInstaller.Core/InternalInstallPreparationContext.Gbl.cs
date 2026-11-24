@@ -85,6 +85,46 @@ internal sealed partial class InternalInstallPreparationContext
         return roles.AsReadOnly();
     }
 
+    /// <summary>
+    /// Whether any selected source slot of an AOSP-preserving model carries a non-empty root vbmeta signed by a
+    /// key other than the AOSP signing key (TB710FU: Lenovo's stock ZUXOS 1.5.04.495). Such a source cannot take
+    /// the boot-only route and is classified by the ABL proof instead. An empty root is skipped, and a root that
+    /// does not authenticate is not OEM evidence: the boot-only gate then refuses it exactly as before.
+    /// </summary>
+    private static async Task<bool> AnyDirectSourceRootIsOemAsync(
+        IReadOnlyDictionary<string, string> sourceSlots,
+        BackupFacts backup,
+        CancellationToken ct)
+    {
+        foreach (string source in new SortedSet<string>(sourceSlots.Values, StringComparer.Ordinal))
+        {
+            ct.ThrowIfCancellationRequested();
+
+            VerifiedEdlFile root = Claim(backup.Files, "vbmeta_" + source);
+            if (await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(root, ct).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            EdlRawOriginalBootChainFacts facts;
+            try
+            {
+                facts = await EdlRawBootBuilder.AuthenticatePreservedBootChainAsync(root, ct).ConfigureAwait(false);
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+
+            if (!SameSha(facts.PublicKeySha256, EdlRawBootBuilder.SigningPublicKeySha256))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     internal VerifiedEdlFile GblEfispCandidate => RequireDirectGblPlan().Inputs.EfispCandidate;
 
     internal EdlCapturedRegion GblEfispTarget => RequireDirectGblPlan().Inputs.EfispTarget;
