@@ -375,19 +375,22 @@ public sealed partial class InternalInstallBackend
                 var ablBCaptured = RequireCapturedRegion("abl_b");
 
                 // Copy abl_a bytes to abl_b using the same write path
-                byte[] ablABytes = await _initialEdl.ReadRawBytesAsync(
-                    ablACaptured.Lun,
-                    ablACaptured.StartSector,
-                    ablACaptured.SectorCount,
-                    ct).ConfigureAwait(false);
+                // Use the verified ABL write plan from preparation context
+                var gblAblWrites = _context.GblAblWrites;
+                if (!gblAblWrites.TryGetValue("abl_a", out var ablASource))
+                {
+                    throw new InvalidOperationException("abl-copy-source-missing: abl_a not found in GblAblWrites");
+                }
 
                 var copyRegion = new InternalArtifactRegion(
                     "abl_b",
                     ablBCaptured.Lun,
                     ablBCaptured.StartSector,
                     ablBCaptured.SectorCount,
-                    ablBCaptured.Length,
-                    ablABytes);
+                    ablBCaptured.SectorSize,
+                    ablASource.Path,
+                    ablASource.Length,
+                    ablASource.Sha256);
 
                 await WriteExecutionRegionAsync(
                         _initialEdl,
