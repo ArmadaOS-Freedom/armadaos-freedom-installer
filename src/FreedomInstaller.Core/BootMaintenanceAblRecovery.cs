@@ -51,7 +51,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
 
     /// <summary>
     /// The live loader roles that authorize a direct proof. This includes the selected source ABLs and, for
-    /// slots receiving the 188 loader, the XBL configuration that defines the replacement window. A direct
+    /// slots receiving the TB322FC 188 loader, the XBL configuration that defines the replacement window. A direct
     /// proof reads them again in every original-device capture, so a live loader that changed after the backup
     /// cannot receive AOSP metadata. Always empty for a repair proof, which keeps its own guarded roles.
     /// </summary>
@@ -128,23 +128,25 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
     }
 
     /// <summary>
-    /// First-install proof for a locked TB322FC. Every selected source slot is classified from the effective
-    /// (primary) AVB key of its current ABL. A slot whose primary key is AOSP keeps that live ABL; a slot
-    /// whose primary key is not AOSP is replaced with the pinned AOSP-capable 188 ABL. A secondary AOSP key
-    /// blob is not evidence: the live TB322FC OEM ABL carries one and still rejects the AOSP-signed chain.
-    /// The provider is invoked only when at least one selected slot needs that replacement, so an all-AOSP
+    /// First-install proof for a locked model that has a pinned AOSP-capable ABL (<see cref="PinnedAospAbl"/>:
+    /// TB322FC 188, TB710FU 279). Every selected source slot is classified from the effective (primary) AVB key
+    /// of its current ABL. A slot whose primary key is AOSP keeps that live ABL; a slot whose primary key is not
+    /// AOSP is replaced with the model's pinned loader. A secondary AOSP key blob is not evidence: the live
+    /// TB322FC OEM ABL and Lenovo's stock TB710FU ZUXOS 1.5.04.495 ABL both carry one and verify with the OEM
+    /// key. The provider is invoked only when at least one selected slot needs that replacement, so an all-AOSP
     /// source never stages the asset. Otherwise this returns null and the existing GBL / fail-closed gates decide.
     /// </summary>
     internal static async Task<BootMaintenanceAblRecovery?> CreateDirectAsync(
         InternalBackupSet current,
         BootloaderState lockState,
         IReadOnlyDictionary<string, string> sourceSlots,
-        Func<CancellationToken, Task<VerifiedEdlFile?>>? tb322fcAbl188Provider,
+        Func<CancellationToken, Task<VerifiedEdlFile?>>? pinnedAblProvider,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(sourceSlots);
-        if (current.Model != "TB322FC" || lockState != BootloaderState.Locked) return null;
+        PinnedAospAbl? asset = PinnedAospAbl.ForModel(current.Model);
+        if (asset is null || lockState != BootloaderState.Locked) return null;
 
         // Only the distinct source slots this install actually reads are authenticated. A target mapped to the
         // current slot by the strict inactive-slot proof never touches the other physical slot's vbmeta, so a
@@ -188,7 +190,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
                 acceptsAosp = IsAosp(primary.KeySha256);
 
                 // A GBL-capable loader is owned by the existing GBL route, even when its primary key
-                // is not AOSP. Replacing it with 188 would move that device onto an
+                // is not AOSP. Replacing it with the pinned loader would move that device onto an
                 // ABL-writing route for no reason.
                 if (!acceptsAosp && IsGblCapableAbl(abl, ct)) return null;
 
@@ -197,7 +199,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
             catch (InvalidDataException ex) when (EdlRawBootBuilder.IsAmbiguousAblAvbKey(ex))
             {
                 throw new InvalidDataException(
-                    "tb322fc-abl-key-ambiguous: the selected source ABL has tied primary AVB keys; "
+                    asset.Model.ToLowerInvariant() + "-abl-key-ambiguous: the selected source ABL has tied primary AVB keys; "
                     + "refusing install, slot " + slot + ".",
                     ex);
             }
@@ -217,38 +219,48 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         if (aospPrimarySlots.Count == selected.Count)
         {
             if (allRootsAosp) return null;
-            return CreateDirect("TB322FC", lockState, sourceSlots, roots, vbmetaSha256, primaryKeySha256, claims);
+            return CreateDirect(asset.Model, lockState, sourceSlots, roots, vbmetaSha256, primaryKeySha256, claims);
         }
 
-        // Builds without the optional 188 asset keep the upstream fail-closed behavior.
-        if (tb322fcAbl188Provider is null) return null;
+        // Builds without the optional pinned asset keep the upstream fail-closed behavior.
+        if (pinnedAblProvider is null) return null;
 
-        VerifiedEdlFile? tb322fcAbl188 = await tb322fcAbl188Provider(ct).ConfigureAwait(false);
-        if (tb322fcAbl188 is null)
+        VerifiedEdlFile? pinnedAbl = await pinnedAblProvider(ct).ConfigureAwait(false);
+        if (pinnedAbl is null)
         {
-            throw new InvalidOperationException(
-                "tb322fc-abl188-missing: a selected TB322FC ABL does not use the AOSP signing key as its "
-                + "effective key "
-                + "and this build does not embed the AOSP-capable 188 ABL.");
+            throw new InvalidOperationException(asset.MissingMessage);
         }
 
-        Tb322fcAbl188Assets.RequirePinnedCandidate(tb322fcAbl188);
-        byte[] candidate = await ReadAsync(tb322fcAbl188, ct).ConfigureAwait(false);
-        foreach (string slot in selected)
-        {
-            if (aospPrimarySlots.Contains(slot)) continue;
+        asset.RequirePinnedCandidate(pinnedAbl);
+        byte[] candidate = await ReadAsync(pinnedAbl, ct).ConfigureAwait(false);
 
-            ct.ThrowIfCancellationRequested();
-            VerifiedEdlFile xbl = Claim(current, "xbl_config_" + slot);
-            byte[] xblBytes = await ReadAsync(xbl, ct).ConfigureAwait(false);
-            if (!InternalSlotLoaderStructure.TryRecognize(candidate, xblBytes, ct, out _))
+        // The pinned bytes must themselves use the AOSP key as their effective key: that, not the file name,
+        // is what lets the locked loader accept the resigned chain.
+        if (!AblAcceptsAosp(candidate, ct))
+        {
+            throw new InvalidDataException(
+                asset.CodePrefix + "-invalid: the pinned " + asset.Label + " ABL does not use the AOSP signing key "
+                + "as its effective key.");
+        }
+
+        if (asset.RequiresXblWindow)
+        {
+            foreach (string slot in selected)
             {
-                throw new InvalidDataException(
-                    "tb322fc-abl188-window: the pinned 188 ABL does not match the current "
-                    + "xbl_config_" + slot + " loader window.");
-            }
+                if (aospPrimarySlots.Contains(slot)) continue;
 
-            claims.Add(xbl);
+                ct.ThrowIfCancellationRequested();
+                VerifiedEdlFile xbl = Claim(current, "xbl_config_" + slot);
+                byte[] xblBytes = await ReadAsync(xbl, ct).ConfigureAwait(false);
+                if (!InternalSlotLoaderStructure.TryRecognize(candidate, xblBytes, ct, out _))
+                {
+                    throw new InvalidDataException(
+                        asset.CodePrefix + "-window: the pinned " + asset.Label + " ABL does not match the current "
+                        + "xbl_config_" + slot + " loader window.");
+                }
+
+                claims.Add(xbl);
+            }
         }
 
         return CreateDirectWithAbl188(
@@ -258,7 +270,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
             roots,
             vbmetaSha256,
             current.Files,
-            tb322fcAbl188,
+            pinnedAbl,
             aospPrimarySlots,
             claims);
     }
@@ -283,7 +295,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         ArgumentNullException.ThrowIfNull(currentVbmetaSha256);
         ArgumentNullException.ThrowIfNull(primaryAblKeySha256);
 
-        if (model != "TB322FC" || lockState != BootloaderState.Locked) return null;
+        if (PinnedAospAbl.ForModel(model) is null || lockState != BootloaderState.Locked) return null;
 
         var selected = new SortedSet<string>(sourceSlots.Values, StringComparer.Ordinal);
         if (selected.Count == 0) return null;
@@ -324,9 +336,9 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
 
     /// <summary>
     /// The test-build trust decision: a selected source slot whose effective (primary) key is not the AOSP
-    /// signing key is replaced with the reviewed 188 ABL. Slots that already use that key keep their live
-    /// ABL. The candidate must cover the full captured abl_{slot} partition before the
-    /// replacement is authorized. This method performs no I/O and no write.
+    /// signing key is replaced with the model's reviewed pinned ABL (<see cref="PinnedAospAbl"/>). Slots that
+    /// already use that key keep their live ABL. The candidate must cover the full captured abl_{slot}
+    /// partition before the replacement is authorized. This method performs no I/O and no write.
     /// </summary>
     internal static BootMaintenanceAblRecovery? CreateDirectWithAbl188(
         string model,
@@ -345,14 +357,15 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         ArgumentNullException.ThrowIfNull(currentFiles);
         ArgumentNullException.ThrowIfNull(aospPrimarySlots);
 
-        if (model != "TB322FC" || lockState != BootloaderState.Locked) return null;
+        PinnedAospAbl? asset = PinnedAospAbl.ForModel(model);
+        if (asset is null || lockState != BootloaderState.Locked) return null;
 
         var selected = new SortedSet<string>(sourceSlots.Values, StringComparer.Ordinal);
         if (selected.Count == 0) return null;
         if (aospPrimarySlots.Any(slot => !selected.Contains(slot)))
         {
             throw new InvalidDataException(
-                "tb322fc-abl188-slots: AOSP-primary evidence was supplied for a slot that is not a selected source.");
+                asset.CodePrefix + "-slots: AOSP-primary evidence was supplied for a slot that is not a selected source.");
         }
 
         var roots = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -371,10 +384,7 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         if (replacementSlots.Length == 0 && roots.Values.All(IsAosp)) return null;
         if (replacementSlots.Length > 0 && candidate is null)
         {
-            throw new InvalidOperationException(
-                "tb322fc-abl188-missing: a selected TB322FC ABL does not use the AOSP signing key as its "
-                + "effective key "
-                + "and this build does not embed the AOSP-capable 188 ABL.");
+            throw new InvalidOperationException(asset.MissingMessage);
         }
 
         var replacements = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal);
@@ -382,19 +392,19 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
         foreach (string slot in replacementSlots)
         {
             VerifiedEdlFile replacement = candidate
-                ?? throw new InvalidOperationException("tb322fc-abl188-missing: replacement candidate is null.");
+                ?? throw new InvalidOperationException(asset.CodePrefix + "-missing: replacement candidate is null.");
 
             string role = "abl_" + slot;
             if (!currentFiles.TryGetValue(role, out EdlCapturedRegion? target) || target is null)
             {
                 throw new InvalidDataException(
-                    "tb322fc-abl188-target: the current backup carries no '" + role + "' target.");
+                    asset.CodePrefix + "-target: the current backup carries no '" + role + "' target.");
             }
 
             if (target.Length != replacement.Length)
             {
                 throw new InvalidDataException(
-                    "tb322fc-abl188-size: the pinned ABL is " + replacement.Length + " bytes, but the "
+                    asset.CodePrefix + "-size: the pinned ABL is " + replacement.Length + " bytes, but the "
                     + "current '" + role + "' partition is " + target.Length + " bytes.");
             }
 
@@ -402,11 +412,13 @@ internal sealed class BootMaintenanceAblRecovery : IDisposable
             replacementTargets.Add(role, target);
         }
 
-        // The live ABL of every selected source is guarded. The XBL configuration is also guarded for
-        // every slot that receives 188, because that is the exact loader window used to authorize it.
+        // The live ABL of every selected source is guarded. Where the pinned loader is authorized by the slot's
+        // XBL loader window (TB322FC 188), that XBL configuration is guarded too for every slot receiving it.
         string[] guardRoles = selected
             .Select(slot => "abl_" + slot)
-            .Concat(replacementSlots.Select(slot => "xbl_config_" + slot))
+            .Concat(asset.RequiresXblWindow
+                ? replacementSlots.Select(slot => "xbl_config_" + slot)
+                : Array.Empty<string>())
             .ToArray();
 
         return new BootMaintenanceAblRecovery(
