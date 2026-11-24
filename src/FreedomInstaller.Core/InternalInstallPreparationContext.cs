@@ -911,69 +911,6 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 services.DiagnosticBootSourcesVerified?.Invoke();
             }
 
-        private static async Task<bool> ShouldDeferProjectOnlyInactiveBToGblAsync(
-            IReadOnlyDictionary<string, EdlCapturedRegion> files,
-            bool isBundledAbl088,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!isBundledAbl088)
-            {
-                return false;
-            }
-
-            // Check if ancillary partitions are empty (factory-zero state)
-            foreach (string ancillary in new[] { "recovery_b", "vbmeta_system_b" })
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(
-                    Claim(files, ancillary),
-                    cancellationToken).ConfigureAwait(false))
-                {
-                    // Ancillary is non-empty, cannot defer
-                    return false;
-                }
-            }
-
-            // All conditions met: ABL088 is bundled and ancillaries are empty
-            return true;
-        }
-
-        private async Task CompleteDeferredProjectOnlyInactiveBAsync(
-            string profileId,
-            string currentSlot,
-            IReadOnlyDictionary<string, EdlCapturedRegion> files,
-            EdlRawBootTools tools,
-            ICommandRunner runner,
-            string evidenceDirectory,
-            Dictionary<string, EdlRawInactiveSlotBackup> inactiveTargets,
-            Dictionary<string, string> sourceSlots,
-            GblPreparationInputs gblInputs,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Get the effective ABL from GBL inputs (source slot "a")
-            if (!gblInputs.Sources.TryGetValue("a", out var sourceEvidence) || sourceEvidence is null)
-            {
-                throw new InvalidOperationException(
-                    "deferred-project-only-b-completion: cannot complete deferred validation without GBL source evidence for slot 'a'.");
-            }
-
-            // Use the effective ABL (which may be the pinned 088 replacement)
-            EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
-                profileId,
-                files,
-                tools,
-                runner,
-                evidenceDirectory,
-                cancellationToken,
-                sourceEvidence.EffectiveAbl).ConfigureAwait(false);
-
-            inactiveTargets["b"] = proof;
-        }
-
             IReadOnlyDictionary<string, EdlRawResignedAvbNode> avbRoots;
             if (gblInputs is null && preservedAvbRoles is null)
             {
@@ -1055,6 +992,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 gblInputs: gblInputs,
                 directAblGuardRoles: directAblProof?.AblGuardRoles,
                 directAblReplacements: directAblProof?.Replacements,
+                gblAblWrites: gblInputs is null ? null : GetGblAblWritePlan(gblInputs),
                 bootOnlyInactiveB: bootOnlyInactiveB);
 
             // A GBL run also creates one whole wrapper partition per slot beside the execution work, so the
@@ -1343,6 +1281,69 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         }
     }
 
+    private static async Task<bool> ShouldDeferProjectOnlyInactiveBToGblAsync(
+        IReadOnlyDictionary<string, EdlCapturedRegion> files,
+        bool isBundledAbl088,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!isBundledAbl088)
+        {
+            return false;
+        }
+
+        // Check if ancillary partitions are empty (factory-zero state)
+        foreach (string ancillary in new[] { "recovery_b", "vbmeta_system_b" })
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(
+                Claim(files, ancillary),
+                cancellationToken).ConfigureAwait(false))
+            {
+                // Ancillary is non-empty, cannot defer
+                return false;
+            }
+        }
+
+        // All conditions met: ABL088 is bundled and ancillaries are empty
+        return true;
+    }
+
+    private static async Task CompleteDeferredProjectOnlyInactiveBAsync(
+        string profileId,
+        string currentSlot,
+        IReadOnlyDictionary<string, EdlCapturedRegion> files,
+        EdlRawBootTools tools,
+        ICommandRunner runner,
+        string evidenceDirectory,
+        Dictionary<string, EdlRawInactiveSlotBackup> inactiveTargets,
+        Dictionary<string, string> sourceSlots,
+        GblPreparationInputs gblInputs,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Get the effective ABL from GBL inputs (source slot "a")
+        if (!gblInputs.Sources.TryGetValue("a", out var sourceEvidence) || sourceEvidence is null)
+        {
+            throw new InvalidOperationException(
+                "deferred-project-only-b-completion: cannot complete deferred validation without GBL source evidence for slot 'a'.");
+        }
+
+        // Use the effective ABL (which may be the pinned 088 replacement)
+        EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
+            profileId,
+            files,
+            tools,
+            runner,
+            evidenceDirectory,
+            cancellationToken,
+            sourceEvidence.EffectiveAbl).ConfigureAwait(false);
+
+        inactiveTargets["b"] = proof;
+    }
+
     /// <summary>
     /// Requires the schema-2 contract to describe the actual observed model and the actual expanded images.
     /// A declared optional Android profile group is checked strictly against the trusted profile and the
@@ -1574,6 +1575,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         GblPreparationInputs? gblInputs = null,
         IReadOnlyList<string>? directAblGuardRoles = null,
         IReadOnlyDictionary<string, VerifiedEdlFile>? directAblReplacements = null,
+        IReadOnlyDictionary<string, VerifiedEdlFile>? gblAblWrites = null,
         bool bootOnlyInactiveB = false)
     {
         long gptCapture = 0;
@@ -1647,6 +1649,17 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 "The direct metadata execution budget overflows.");
         }
 
+        if (gblAblWrites is not null)
+        {
+            foreach (VerifiedEdlFile candidate in gblAblWrites.Values)
+            {
+                planned = CheckedAdd(
+                    planned,
+                    candidate.Length,
+                    "The GBL ABL readback budget overflows.");
+            }
+        }
+
         if (gblInputs is not null)
         {
             // GBL preserves the stock metadata and produces no AOSP candidate nodes, so a candidate list beside
@@ -1663,20 +1676,6 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 planned,
                 RequireBudgetRegion(files, "efisp").Length,
                 "The GBL EFI write budget overflows.");
-
-            // Each GBL ABL replacement writes and reads back one full pinned 088 image into a new evidence
-            // file during execution; the pre-write guard capture of abl_<slot> and xbl_config_<slot> is already
-            // counted below through GetGblGuardRoles(gblInputs).
-            if (gblInputs.ReplacedSourceSlots.Count > 0 && gblInputs.ReplacementAbl is { } gblReplacementAbl)
-            {
-                foreach (string _ in gblInputs.ReplacedSourceSlots)
-                {
-                    planned = CheckedAdd(
-                        planned,
-                        gblReplacementAbl.Length,
-                        "The GBL ABL replacement readback budget overflows.");
-                }
-            }
 
             if (includeOriginalCapture)
             {
@@ -1815,6 +1814,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             _directGblPlan?.Inputs,
             _directAblGuardRoles.Count == 0 ? null : _directAblGuardRoles,
             _directAblReplacements.Count == 0 ? null : _directAblReplacements,
+            _directGblPlan is null ? null : GblAblWrites,
             bootOnlyInactiveB: _bootOnlyInactiveB);
 
         RequireDirectExecutionSpaceAvailable(
@@ -2384,10 +2384,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 .Select(role => role.StartsWith("abl_", StringComparison.Ordinal) ? role[4..] : role)
                 .OrderBy(slot => slot, StringComparer.Ordinal))
             .AsReadOnly();
-        state.GblAblReplacementSlots = new List<string>(
-            (_directGblPlan?.Inputs.ReplacedSourceSlots ?? Array.Empty<string>())
-                .OrderBy(slot => slot, StringComparer.Ordinal))
-            .AsReadOnly();
+        state.GblAblReplacementSlots = new List<string>(GblAblReplacementSlots).AsReadOnly();
+        state.GblAblCopySlots = new List<string>(GblAblCopySlots).AsReadOnly();
         state.PackageFingerprint = _package.ManifestFingerprint;
         state.PackageBindingSha256 = _package.BindingSha256;
         state.BackupManifestSha256 = _backupManifestSha256;

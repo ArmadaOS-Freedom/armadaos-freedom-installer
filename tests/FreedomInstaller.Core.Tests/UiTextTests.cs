@@ -364,7 +364,8 @@ public sealed class UiTextTests
 
         var replacementMode = text.Format(new UiMessage(
             "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
-            "a, b"));
+            "a, b",
+            "—"));
         Assert.Contains("a, b", replacementMode, StringComparison.Ordinal);
         Assert.Contains("088", replacementMode, StringComparison.Ordinal);
         Assert.DoesNotContain("{0}", replacementMode, StringComparison.Ordinal);

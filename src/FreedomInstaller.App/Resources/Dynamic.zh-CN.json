@@ -362,7 +362,7 @@
   "Dynamic.InternalInstall.Prepared.GblBootChainKeyMismatch": "备份中的启动验证资料不属于同一套匹配的签名链。请使用来自同一台平板、同一系统状态的完整备份，不要混用不同平板或不同系统状态的备份。本次安装尚未开始。",
   "Dynamic.InternalInstall.Prepared.GblRuntimeRegionUnknown": "无法从平板的启动资料确认一致的系统地区（PRC/ROW），或不同槽位的地区信息存在冲突。请保留安装诊断记录并向项目反馈；软件不会按界面语言或猜测选择地区。本次安装尚未开始。",
   "Dynamic.InternalInstall.Prepared.GblInstallMode": "安装方式：免解锁安装",
-  "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode": "安装方式：免解锁安装 + 兼容 GBL 的 088 原厂签名 ABL（替换槽位：{0}）。请保留原机 A/B ABL 备份与 9008 恢复能力。",
+  "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode": "安装方式：免解锁安装 + 兼容 GBL 的 088 原厂签名 ABL（替换槽位：{0}；复制槽位：{1}）。请保留原机 A/B ABL 备份与 9008 恢复能力。",
   "Dynamic.InternalInstall.Prepared.AospPreservedInstallMode": "安装方式：只写入 boot（AOSP 测试密钥签名），vbmeta、vbmeta_system、recovery 保持原样。",
   "Dynamic.InternalInstall.Prepared.Abl188InstallMode": "安装方式：AOSP 复签 + 支持 AOSP 的 188 ABL（替换槽位：{0}）。这是测试版，会修改 ABL；请务必保留原机 A/B ABL 备份与 9008 恢复能力。",
   "Dynamic.InternalInstall.Prepared.Tb710fuAblInstallMode": "安装方式：原厂 495 用联想密钥签名，改为 AOSP 复签 vbmeta、vbmeta_system、recovery 和 boot，并换成支持 AOSP 的 279 ABL（替换槽位：{0}）。这是测试版，会修改 ABL；请务必保留原机 A/B ABL 备份与 9008 恢复能力。",

@@ -441,6 +441,11 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
     /// replaces the <c>abl_a</c>/<c>abl_b</c> claims of the generated slot fixtures. It is measured like every
     /// other claim, so the device capture carries exactly those bytes; null keeps the existing defaults.
     /// </para>
+    /// <para>
+    /// <paramref name="usesArmadaBoot"/> selects the synthetic package's ARMADA boot shape.
+    /// <paramref name="configureReinstallOverlayAsync"/> can apply a durable test overlay after the initial
+    /// factory artifacts are written and before the recovery snapshot is captured.
+    /// </para>
     /// </summary>
     internal static async Task<DirectInstallReadyTestSession> CreateAsync(
         EdlToolchain toolchain,
@@ -465,7 +470,9 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         bool keepInactiveRecovery = false,
         bool useDirectAndroidDataErase = false,
         IReadOnlyDictionary<string, VerifiedEdlFile>? sourceOverrides = null,
-        Action<IB001SyntheticDevice, string>? configureInitialDevice = null)
+        Action<IB001SyntheticDevice, string>? configureInitialDevice = null,
+        bool usesArmadaBoot = false,
+        Func<IB001SyntheticDevice, EdlRawBootTools, ICommandRunner, InternalBackupSet, EdlRawPackageContract, string, Task>? configureReinstallOverlayAsync = null)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -507,7 +514,9 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
             // The raw package keeps its real 1 GiB streaming ext4 gzip, tiny Btrfs superblock, UUIDs, DTB
             // pair and truthful metadata; only the kernel payload is replaced by the BM ARM64 kernel.
             rawPackage = InternalInstallEdlRawSnapshotTests.RawPackage.Create(rawShared);
-            kernelPackage = new EdlRawBootBuilderTests.SyntheticPackage(deviceModel: toolchain.Model);
+            kernelPackage = new EdlRawBootBuilderTests.SyntheticPackage(
+                deviceModel: toolchain.Model,
+                usesArmadaBoot: usesArmadaBoot);
             rawPackage.RewriteArtifact("kernel", kernelPackage.Kernel);
 
             // The final common package may omit the optional Android FW/HWID constraint groups entirely;
@@ -834,6 +843,11 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 {
                     device.AddWriteOverlay(
                         region.Lun, region.StartSector, region.SectorCount, region.FilePath);
+                }
+                if (configureReinstallOverlayAsync is not null)
+                {
+                    await configureReinstallOverlayAsync(
+                        device, tools!, router, factoryRecovery, contract, root);
                 }
                 backup = await InternalInstallBackup.CreatePreparationSnapshotAsync(
                     client, factoryRecovery, backupParent);

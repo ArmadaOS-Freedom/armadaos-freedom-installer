@@ -93,6 +93,16 @@
                       WithCulture="false" />
   </ItemGroup>
 
+  <!-- TB710FU AOSP-capable loader: the CN ZUI 17.0.04.279 abl as one whole 1 MiB partition (the bytes the
+       ZUXOS 1.5.04.495 no-unlock supplement writes). Embedded byte-for-byte under a fixed logical name only
+       when BundledTb710fuAospAbl is passed; it replaces a locked stock 495 ABL that verifies with Lenovo's key. -->
+  <ItemGroup Condition="'$(BundledTb710fuAospAbl)' != '' and Exists('$(BundledTb710fuAospAbl)')">
+    <EmbeddedResource Include="$(BundledTb710fuAospAbl)"
+                      LogicalName="FreedomInstaller.Tb710fu.AospAbl.img"
+                      Link="tb710fu-abl-279.img"
+                      WithCulture="false" />
+  </ItemGroup>
+
   <!-- Upstream GBL attribution and the verbatim GNU GPL version 3 text shipped with those assets. -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\docs\GblRuntime-NOTICE.txt"
@@ -126,6 +136,11 @@
   <Target Name="RequireBundledTb323fuAbl088" BeforeTargets="PrepareForBuild">
     <Error Condition="'$(BundledTb323fuAbl088)' != '' and !Exists('$(BundledTb323fuAbl088)')"
            Text="BundledTb323fuAbl088 does not exist: $(BundledTb323fuAbl088)" />
+  </Target>
+
+  <Target Name="RequireBundledTb710fuAospAbl" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(BundledTb710fuAospAbl)' != '' and !Exists('$(BundledTb710fuAospAbl)')"
+           Text="BundledTb710fuAospAbl does not exist: $(BundledTb710fuAospAbl)" />
   </Target>
 
 </Project>

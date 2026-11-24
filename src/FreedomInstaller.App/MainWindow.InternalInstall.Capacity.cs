@@ -937,10 +937,12 @@ public partial class MainWindow
         if (prepared.BootTrustMode == InternalInstallBootTrustMode.GblPreserveOem)
         {
             var gblModeMessage = prepared.GblAblReplacementSlots.Count != 0
-                ? M(
-                    "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
-                    string.Join(", ", prepared.GblAblReplacementSlots))
-                : M("Dynamic.InternalInstall.Prepared.GblInstallMode");
+                || prepared.GblAblCopySlots.Count != 0
+                    ? M(
+                        "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
+                        string.Join(", ", prepared.GblAblReplacementSlots),
+                        string.Join(", ", prepared.GblAblCopySlots))
+                    : M("Dynamic.InternalInstall.Prepared.GblInstallMode");
             preparedSummaryMessage = M(
                 "Dynamic.InternalInstall.Execution.WithFailureDetails",
                 preparedSummaryMessage,

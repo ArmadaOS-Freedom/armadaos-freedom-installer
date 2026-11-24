@@ -1346,8 +1346,11 @@ public partial class MainWindow
                 M(
                     "Dynamic.InternalInstall.Execution.WithFailureDetails",
                     summary,
-                    prepared.GblAblReplacementSlots.Count != 0
-                        ? M("Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode", string.Join(", ", prepared.GblAblReplacementSlots))
+                    prepared.GblAblReplacementSlots.Count != 0 || prepared.GblAblCopySlots.Count != 0
+                        ? M(
+                            "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
+                            string.Join(", ", prepared.GblAblReplacementSlots),
+                            string.Join(", ", prepared.GblAblCopySlots))
                         : M("Dynamic.InternalInstall.Prepared.GblInstallMode")),
             InternalInstallBootTrustMode.AospPreserved =>
                 M("Dynamic.InternalInstall.Execution.WithFailureDetails", summary, M("Dynamic.InternalInstall.Prepared.AospPreservedInstallMode")),
@@ -1355,7 +1358,11 @@ public partial class MainWindow
                 M(
                     "Dynamic.InternalInstall.Execution.WithFailureDetails",
                     summary,
-                    M("Dynamic.InternalInstall.Prepared.Abl188InstallMode", string.Join(", ", prepared.Abl188ReplacementSlots))),
+                    M(
+                        prepared.AblReplacementKind == "tb710fu-279"
+                            ? "Dynamic.InternalInstall.Prepared.Tb710fuAblInstallMode"
+                            : "Dynamic.InternalInstall.Prepared.Abl188InstallMode",
+                        string.Join(", ", prepared.Abl188ReplacementSlots))),
             _ => summary,
         };
         SetText(

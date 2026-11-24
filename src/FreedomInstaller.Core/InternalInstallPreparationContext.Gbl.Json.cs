@@ -83,6 +83,40 @@ internal sealed partial class InternalInstallPreparationContext
             json.WriteEndArray();
             json.WriteEndObject();
         }
+
+        if (inputs.CopiedTargetSlots.Count > 0)
+        {
+            json.WriteStartObject("ablCopies");
+            json.WriteString("kind", "effective-source-abl");
+            json.WriteString("reason", "inactive-borrowed-slot-requires-effective-abl");
+            json.WriteStartArray("copies");
+            foreach (string target in SlotOrder)
+            {
+                if (!inputs.CopiedTargetSlots.Contains(target, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
+                string source = inputs.SourceSlots[target];
+                if (!inputs.Sources.TryGetValue(source, out GblSourceEvidence? sourceEvidence))
+                {
+                    throw new InvalidDataException(
+                        "gbl-source-material-mismatch: no verified source evidence for copied ABL source '" + source + "'.");
+                }
+
+                string role = "abl_" + target;
+                json.WriteStartObject();
+                json.WriteString("slot", target);
+                json.WriteString("role", role);
+                json.WriteString("sourceSlot", source);
+                json.WriteNumber("length", sourceEvidence.EffectiveAbl.Length);
+                json.WriteString("candidateSha256", sourceEvidence.EffectiveAbl.Sha256.ToUpperInvariant());
+                json.WriteString("currentSha256", RequireBackupRegion(BackupFiles, role).Sha256.ToUpperInvariant());
+                json.WriteEndObject();
+            }
+            json.WriteEndArray();
+            json.WriteEndObject();
+        }
         json.WriteEndObject();
 
         json.WriteStartArray("slots");
