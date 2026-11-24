@@ -22,6 +22,19 @@ public partial class MainWindow
     private bool _userdataUninstallRestoreStockBoot = true;
     private bool _userdataUninstallReclaimBackup = true;
 
+    /// <summary>
+    /// 快照父目录是按所选电脑恢复来源自动推导的（来源的上一级）：换来源时要一起作废，
+    /// 不能继续用旧来源所在的（可能只读的）卷。9008 会话保留，重试不会再重启平板。
+    /// </summary>
+    private bool _userdataUninstallBackupParentFromSource;
+
+    private void DropUserdataUninstallDerivedBackupParent()
+    {
+        if (!_userdataUninstallBackupParentFromSource) return;
+        _userdataUninstallBackupParentFromSource = false;
+        _internalInstallBackupParent = null;
+    }
+
     /// <summary>已提交的原厂引导恢复方案；仅在勾选恢复引导且准备成功时非 null。</summary>
     private BootMaintenancePrepared? _userdataUninstallStockPlan;
 
@@ -224,12 +237,20 @@ public partial class MainWindow
             return;
         var selectedOriginal = SelectedUserdataUninstallPcBackup;
         var workParent = _internalInstallBackupParent;
+        var workParentFromSource = _userdataUninstallBackupParentFromSource;
         if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
         {
+            workParentFromSource = false;
             if (!string.IsNullOrWhiteSpace(selectedOriginal) && Directory.Exists(selectedOriginal))
+            {
                 workParent = Directory.GetParent(Path.GetFullPath(selectedOriginal))?.FullName;
+                workParentFromSource = !string.IsNullOrWhiteSpace(workParent);
+            }
             if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
+            {
                 workParent = DefaultRecoveryOutputDirectory();
+                workParentFromSource = false;
+            }
             if (string.IsNullOrWhiteSpace(workParent)) return;
         }
         // 先作废上一次未写入的只读准备；再写入推导出的真实工作父目录（路径不同才写）。
@@ -238,6 +259,7 @@ public partial class MainWindow
         {
             ApplyInternalInstallBackupParent(workParent);
         }
+        _userdataUninstallBackupParentFromSource = workParentFromSource;
 
         // 尚无真实当前状态快照时，先等待与「开始备份」完全同一条流水线（不嵌套任何忙碌范围）。
         if (_internalInstallBackup is null)

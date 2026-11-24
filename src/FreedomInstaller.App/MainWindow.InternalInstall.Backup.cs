@@ -338,6 +338,8 @@ public partial class MainWindow
         InvalidateBootMaintenancePreparation();
 
         _internalInstallBackupParent = folder;
+        // 任何一次明确写入父目录都不再算“按卸载来源推导”；卸载准备推导时会在写入之后自己再标记。
+        _userdataUninstallBackupParentFromSource = false;
 
         if (previousBackup is not null)
         {
