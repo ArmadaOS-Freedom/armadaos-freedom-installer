@@ -1969,7 +1969,9 @@ public partial class MainWindow
     // Failure-log writes run off the UI thread, one after another; closing the window waits (bounded) for them.
     private Task _preparationFailureLogWrites = Task.CompletedTask;
     private bool _preparationFailureLogsFlushing;
-    private bool _preparationFailureLogsFlushed;
+    // The write chain the last bounded wait covered: a close that leaves the window open (a declined prompt) and later
+    // writes queue a new chain, which gets its own wait; the chain already waited for is not waited for twice.
+    private Task? _preparationFailureLogsWaited;
 
     private void QueuePreparationFailureLog(string details)
     {
@@ -1993,7 +1995,8 @@ public partial class MainWindow
             return true;
         }
 
-        if (_preparationFailureLogsFlushed || _preparationFailureLogWrites.IsCompleted)
+        var pending = _preparationFailureLogWrites;
+        if (pending.IsCompleted || ReferenceEquals(pending, _preparationFailureLogsWaited))
         {
             return false;
         }
@@ -2002,12 +2005,12 @@ public partial class MainWindow
         _preparationFailureLogsFlushing = true;
         try
         {
-            await Task.WhenAny(_preparationFailureLogWrites, Task.Delay(TimeSpan.FromSeconds(10)));
+            await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(10)));
         }
         finally
         {
             _preparationFailureLogsFlushing = false;
-            _preparationFailureLogsFlushed = true;
+            _preparationFailureLogsWaited = pending;
         }
 
         Close();
