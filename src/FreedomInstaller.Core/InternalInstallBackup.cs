@@ -763,7 +763,9 @@ public static partial class InternalInstallBackup
             && lockState == BootloaderState.Locked
             && Tb323fuAbl088Assets.IsBundled;
 
-        // Inspect both sealed ABL copies, each read exactly once from its held stream.
+        // Inspect both sealed ABL copies, each read exactly once from its held stream. The inactive copy is
+        // observation-only: an incompatible resource is never loaded here, because the backup does not yet
+        // know whether installation will use, replace, or copy that slot.
         for (int i = 0; i < roles.Length; i++)
         {
             token.ThrowIfCancellationRequested();
@@ -797,6 +799,9 @@ public static partial class InternalInstallBackup
 
             if (canReplaceWithPinned088 && sealedFile.Length == Tb323fuAbl088Assets.ImageLength)
             {
+                // The active slot is the one that can require this replacement at the first-install gate.
+                // Verify the embedded bytes now so a broken asset fails before any device write. The inactive
+                // slot remains observation-only and must not make this check depend on the resource.
                 _ = Tb323fuAbl088Assets.ReadVerifiedBytes(token);
                 observations[i] = roles[i] + "=replaceable";
             }
