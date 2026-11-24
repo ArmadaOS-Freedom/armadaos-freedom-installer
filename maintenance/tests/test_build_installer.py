@@ -510,11 +510,10 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(names, ["qcser.cat", "qcser.inf", "serial/amd64/qcusbser.sys"])
 
     def test_source_build_without_offline_pair_embeds_no_updater_resources(self):
-        # A normal complete source build may omit both optional legacy bootstrap
-        # inputs.  The props it writes then carry none of those properties, so
-        # the csproj conditions - read from the project file itself, not
-        # restated here - leave both resources out of the assembly and leave
-        # the bundle-version metadata unset.
+        # Prepare-only and non-publish source builds may omit both bootstrap
+        # inputs. The props they write then carry none of those properties, so
+        # the csproj conditions leave both resources out of the assembly and
+        # leave the bundle-version metadata unset.
         record, _, _, _ = self._run_prepare()
         props = _props_values(record["propsPath"])
         for prop in build_installer._OFFLINE_PROPERTY_NAMES:
@@ -603,6 +602,46 @@ class PrepareTests(unittest.TestCase):
                 )
         fetch_mock.assert_not_called()
         run_mock.assert_not_called()
+
+    def test_publish_single_file_gate_requires_both_offline_assets(self):
+        # The project gate must reject PublishSingleFile when either asset is
+        # absent, not only when only one half is set.
+        project = ElementTree.parse(str(_APP_CSPROJ)).getroot()
+        errors = {}
+        for target in project.findall("Target"):
+            for error in target.findall("Error"):
+                code = error.get("Code")
+                if code:
+                    errors[code] = error
+
+        for code, prop in (
+            ("FRDM1027", "BundledOfflineBootstrapScript"),
+            ("FRDM1029", "BundledOfflineUpdaterBundle"),
+        ):
+            with self.subTest(code=code):
+                error = errors[code]
+                condition = error.get("Condition") or ""
+                self.assertIn("'$(PublishSingleFile)' == 'true'", condition)
+                self.assertIn(f"'$({prop})' == ''", condition)
+                other = (
+                    "BundledOfflineUpdaterBundle"
+                    if prop == "BundledOfflineBootstrapScript"
+                    else "BundledOfflineBootstrapScript"
+                )
+                self.assertNotIn(f"'$({other})' != ''", condition)
+                self.assertNotIn(f"'$({other})' == ''", condition)
+                self.assertIn(prop, error.get("Text") or "")
+
+        for code, prop in (
+            ("FRDM1028", "BundledOfflineBootstrapScript"),
+            ("FRDM1030", "BundledOfflineUpdaterBundle"),
+        ):
+            with self.subTest(code=code):
+                error = errors[code]
+                condition = error.get("Condition") or ""
+                self.assertIn("'$(PublishSingleFile)' == 'true'", condition)
+                self.assertIn(f"'$({prop})' != ''", condition)
+                self.assertIn(f"!Exists('$({prop})')", condition)
 
     def test_offline_assets_bind_props_and_record(self):
         script, bundle = self._offline_assets()
@@ -1397,68 +1436,78 @@ class CliTests(unittest.TestCase):
                 self.assertIn(f"<{prop}>{value}</{prop}>", props_xml)
                 self.assertEqual(staged.read_bytes(), provided.read_bytes())
 
-    def test_publish_without_offline_assets_runs_prepare_then_publish(self):
-        # A normal complete single-EXE source build succeeds without the legacy
-        # bootstrap pair: the CLI prepares the inputs (passing the omitted pair
-        # through as absent) and then publishes the single EXE.
+    def test_publish_without_offline_assets_fails_before_prepare_or_publish(self):
+        # Any real single-EXE publish requires the paired offline update assets.
+        # Omitting both is refused by the CLI before prepare() reads the
+        # manifest, before any tool is fetched or compiled and before publish.
+        # argparse reports this as exit code 2 on stderr.
         with tempfile.TemporaryDirectory(prefix="bi cli \u2013 ") as tmp:
             tmp = Path(tmp)
-            repo_root = tmp / "repo & dst"
+            repo_root, _ = _build_fixture_repo(tmp / "repo & dst")
             work_dir = tmp / "work dir"
             output_dir = tmp / "publish out"
-            record = {"propsPath": str(work_dir / "build-inputs.props")}
-            order = []
-
-            def fake_prepare(root, work, **kwargs):
-                order.append("prepare")
-                return record
-
-            def fake_publish(published_record, published_output, env):
-                order.append("publish")
-                self.assertIs(published_record, record)
-                self.assertEqual(
-                    Path(published_output).resolve(), output_dir.resolve()
-                )
-                # The publish still runs in the controlled environment that
-                # belongs to this work directory.
-                self.assertEqual(
-                    Path(env["TMPDIR"]).resolve(), (work_dir / "tmp").resolve()
-                )
-
+            stderr = io.StringIO()
             with mock.patch.object(
                 fetch_build_inputs, "fetch_all"
             ) as fetch_mock, mock.patch.object(
                 build_installer, "_run"
             ) as run_mock, mock.patch.object(
-                build_installer, "prepare", side_effect=fake_prepare
+                build_installer, "_default_publish"
+            ) as publish_mock, mock.patch.object(
+                build_installer, "prepare"
             ) as prepare_mock, mock.patch.object(
-                build_installer, "_default_publish", side_effect=fake_publish
+                build_installer, "_HERE", repo_root / "maintenance"
+            ), contextlib.redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as caught:
+                    build_installer.main(
+                        [
+                            "--work-dir", str(work_dir),
+                            "--output-dir", str(output_dir),
+                            "--manifest", str(
+                                repo_root / "maintenance" / "build-inputs.json"
+                            ),
+                        ]
+                    )
+            self.assertEqual(caught.exception.code, 2)
+            message = stderr.getvalue()
+            self.assertIn("--offline-bootstrap-script", message)
+            self.assertIn("--offline-updater-bundle", message)
+            self.assertIn("--prepare-only", message)
+            prepare_mock.assert_not_called()
+            fetch_mock.assert_not_called()
+            run_mock.assert_not_called()
+            publish_mock.assert_not_called()
+
+    def test_prepare_only_may_omit_offline_assets(self):
+        # --prepare-only is the only CLI mode that may omit the paired offline
+        # update assets. It runs prepare() with both absent and never invokes
+        # dotnet publish; the props it leaves behind cannot publish a single EXE.
+        with tempfile.TemporaryDirectory(prefix="bi cli \u2013 ") as tmp:
+            tmp = Path(tmp)
+            repo_root, _ = _build_fixture_repo(tmp / "repo & dst")
+            work_dir = tmp / "work dir"
+            record = {"propsPath": str(work_dir / "build-inputs.props")}
+
+            with mock.patch.object(
+                build_installer, "prepare", return_value=record
+            ) as prepare_mock, mock.patch.object(
+                build_installer, "_default_publish"
             ) as publish_mock, mock.patch.object(
                 build_installer, "_HERE", repo_root / "maintenance"
-            ):
+            ), contextlib.redirect_stdout(io.StringIO()):
                 rc = build_installer.main(
-                    [
-                        "--work-dir", str(work_dir),
-                        "--output-dir", str(output_dir),
-                    ]
+                    ["--work-dir", str(work_dir), "--prepare-only"]
                 )
 
             self.assertEqual(rc, 0)
-            self.assertEqual(order, ["prepare", "publish"])
-            prepare_args, prepare_kwargs = prepare_mock.call_args
-            self.assertEqual(Path(prepare_args[0]).resolve(), repo_root.resolve())
-            self.assertEqual(Path(prepare_args[1]).resolve(), work_dir.resolve())
-            self.assertIsNone(prepare_kwargs["manifest_path"])
-            # The omitted pair is passed through as absent: never invented and
-            # never downloaded.
+            prepare_mock.assert_called_once()
+            _, prepare_kwargs = prepare_mock.call_args
             self.assertIsNone(prepare_kwargs["offline_bootstrap_script"])
             self.assertIsNone(prepare_kwargs["offline_updater_bundle"])
-            self.assertEqual(publish_mock.call_count, 1)
-            fetch_mock.assert_not_called()
-            run_mock.assert_not_called()
+            publish_mock.assert_not_called()
 
     def test_publish_with_only_one_offline_asset_fails_before_prepare_or_publish(self):
-        # Supplying one half of the optional legacy pair is still refused, and
+        # Supplying one half of the required publish pair is still refused, and
         # it is refused by the CLI before prepare() reads the manifest, before
         # any tool is compiled and before the publish step starts.  argparse
         # reports this as exit code 2 on stderr; the SystemExit payload itself
