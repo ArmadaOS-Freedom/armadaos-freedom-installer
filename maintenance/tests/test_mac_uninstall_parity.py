@@ -426,7 +426,9 @@ class MacUninstallParityTests(unittest.TestCase):
         # The already-in-9008 entry carries the saved backup identity: it must never opt in to direct erase.
         self.assertIn("HasCheckedUninstallDevice ? _uninstallDeviceCheck!.Android!.Identity : null", gate)
         self.assertIn("AndroidDataErasePreview.Matches(liveAndroid.Model, liveAndroid.Firmware)", gate)
-        self.assertNotIn("entry.AndroidIdentity", gate)
+        # ... and the build the 9008 entry accepted must match as well (the entry re-proof ignores the fingerprint).
+        self.assertIn("var enteredAndroid = entry.AndroidIdentity?.Identity;", gate)
+        self.assertIn("AndroidDataErasePreview.Matches(enteredAndroid.Model, enteredAndroid.Firmware)", gate)
 
     def test_tablet_backup_hash_is_recorded_only_after_a_successful_read(self):
         code = _code(MAC_CODE)

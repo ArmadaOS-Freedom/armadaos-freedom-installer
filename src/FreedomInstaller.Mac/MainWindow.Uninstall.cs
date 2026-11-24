@@ -1994,11 +1994,16 @@ public partial class MainWindow
                     });
 
                     // WPF #139: models whose Android data partitions are erased directly in 9008 (no factory reset).
-                    // Only the Android build read live by this session's check may opt in: on the already-in-9008 route
-                    // the entry carries the saved backup's identity, which says nothing about the build now installed.
+                    // Only an Android build read live in this session may opt in: on the already-in-9008 route the entry
+                    // carries the saved backup's identity, which says nothing about the build now installed. Both the
+                    // step-1 build and the build the 9008 entry accepted must match, since the entry re-proof compares
+                    // model, serial, display id and SoC serial but not the build fingerprint.
                     var liveAndroid = HasCheckedUninstallDevice ? _uninstallDeviceCheck!.Android!.Identity : null;
+                    var enteredAndroid = entry.AndroidIdentity?.Identity;
                     bool useDirectAndroidDataErase = liveAndroid is not null
-                        && AndroidDataErasePreview.Matches(liveAndroid.Model, liveAndroid.Firmware);
+                        && enteredAndroid is not null
+                        && AndroidDataErasePreview.Matches(liveAndroid.Model, liveAndroid.Firmware)
+                        && AndroidDataErasePreview.Matches(enteredAndroid.Model, enteredAndroid.Firmware);
                     if (capturedRestoreStock)
                     {
                         var stock = stockPrepared!;
