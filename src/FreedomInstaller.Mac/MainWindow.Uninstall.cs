@@ -1993,13 +1993,17 @@ public partial class MainWindow
                         }
                     });
 
+                    // WPF #139: models whose Android data partitions are erased directly in 9008 (no factory reset).
+                    bool useDirectAndroidDataErase = AndroidDataErasePreview.Matches(
+                        entry.AndroidIdentity.Identity.Model, entry.AndroidIdentity.Identity.Firmware);
                     if (capturedRestoreStock)
                     {
                         var stock = stockPrepared!;
                         backend = await Task.Run(
                             () => EdlUninstallBackend.CreatePreparedForStockRestoreAsync(
                                 client, tools, entry, assets, fresh, stock, workRoot,
-                                runner, backendProgress, token, capturedReclaimBackup),
+                                runner, backendProgress, token, capturedReclaimBackup,
+                                useDirectAndroidDataErase: useDirectAndroidDataErase),
                             token);
                     }
                     else
@@ -2016,7 +2020,8 @@ public partial class MainWindow
                         backend = await Task.Run(
                             () => EdlUninstallBackend.CreatePreparedAsync(
                                 client, tools, entry, assets, fresh, plan, currentSlot,
-                                workRoot, runner, backendProgress, token, capturedReclaimBackup),
+                                workRoot, runner, backendProgress, token, capturedReclaimBackup,
+                                useDirectAndroidDataErase: useDirectAndroidDataErase),
                             token);
                     }
 
@@ -2331,6 +2336,7 @@ public partial class MainWindow
         UninstallStage.ReclaimAndroidSpace => "Dynamic.UserdataUninstall.Runtime.Stage.ReclaimAndroidSpace",
         UninstallStage.InitializeAndroid => "Dynamic.UserdataUninstall.Runtime.Stage.InitializeAndroid",
         UninstallStage.AwaitingFactoryReset => "Dynamic.UserdataUninstall.Runtime.Stage.AwaitingFactoryReset",
+        UninstallStage.AwaitingAndroidBoot => "Dynamic.UserdataUninstall.Runtime.Stage.AwaitingAndroidBoot",
         _ => "Dynamic.UserdataUninstall.Runtime.Stage.Preflight",
     };
 
@@ -2487,7 +2493,9 @@ public partial class MainWindow
                     _uninstallLastResult = result;
                     _uninstallDisplayStage = result.Stage;
 
-                    if (result.Success && result.Stage == UninstallStage.AwaitingFactoryReset)
+                    if (result.Success
+                        && (result.Stage == UninstallStage.AwaitingFactoryReset
+                            || result.Stage == UninstallStage.AwaitingAndroidBoot))
                     {
                         // 全部写入与读回校验已由 Core 完成：这里才决定复位还是原厂引导恢复。
                         AppendUninstallLog(M("Dynamic.UserdataUninstall.Runtime.LogSuccess"));
@@ -2660,7 +2668,7 @@ public partial class MainWindow
         }
 
         var result = _uninstallLastResult;
-        if (result is { Success: true, Stage: UninstallStage.AwaitingFactoryReset })
+        if (result is { Success: true, Stage: UninstallStage.AwaitingFactoryReset or UninstallStage.AwaitingAndroidBoot })
         {
             // 写入校验完成但复位未被确认：如实说明，绝不写成完成。
             SetUninstallExitStatus(M("Dynamic.UserdataUninstall.Runtime.VerifiedUnknownReset"));
