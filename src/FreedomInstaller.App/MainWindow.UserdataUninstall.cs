@@ -28,6 +28,23 @@ public partial class MainWindow
     /// </summary>
     private bool _userdataUninstallBackupParentFromSource;
 
+    /// <summary>能在 <paramref name="directory"/> 里新建文件（建一个随即删除的探测文件）。</summary>
+    private static bool IsWritableDirectory(string? directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return false;
+        try
+        {
+            using var probe = new FileStream(
+                Path.Combine(directory, ".freedom-write-probe-" + Guid.NewGuid().ToString("N")),
+                FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
     private void DropUserdataUninstallDerivedBackupParent()
     {
         if (!_userdataUninstallBackupParentFromSource) return;
@@ -244,6 +261,8 @@ public partial class MainWindow
             if (!string.IsNullOrWhiteSpace(selectedOriginal) && Directory.Exists(selectedOriginal))
             {
                 workParent = Directory.GetParent(Path.GetFullPath(selectedOriginal))?.FullName;
+                // 来源在只读卷上时，来源的上一级写不了快照：改用默认缓存目录。
+                if (!IsWritableDirectory(workParent)) workParent = null;
                 workParentFromSource = !string.IsNullOrWhiteSpace(workParent);
             }
             if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
