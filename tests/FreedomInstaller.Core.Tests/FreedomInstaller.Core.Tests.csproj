@@ -127,6 +127,8 @@
          because the SDK's default None glob already claims these files. -->
     <None Update="Fixtures\Import\**\*" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures\update-package-v1\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\vendor\qualcomm\g5\abl_gbl_capable.img"
+          Link="Fixtures\tb323fu-abl088.img" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

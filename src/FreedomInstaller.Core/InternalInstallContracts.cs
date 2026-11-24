@@ -112,6 +112,13 @@ public enum InternalInstallStage
     /// was accepted by the bootloader.
     /// </summary>
     WritingAbl,
+
+    /// <summary>
+    /// The pinned TB323FU 088 ABL, used as an efisp/GBL-capable OEM-signed loader independent of firmware
+    /// version, is written whole to each planned slot and read back over the initial EDL session. It covers
+    /// only that write and its readback; it does not itself prove that the following boot was accepted.
+    /// </summary>
+    WritingGblAbl,
 }
 
 /// <summary>
@@ -408,6 +415,10 @@ public sealed class InternalInstallPrepared
 
         internal IReadOnlyList<string> Abl188ReplacementSlots = Array.Empty<string>();
 
+        internal IReadOnlyList<string> GblAblReplacementSlots = Array.Empty<string>();
+
+        internal IReadOnlyList<string> GblAblCopySlots = Array.Empty<string>();
+
         internal string? AblReplacementKind;
 
         internal string PackageFingerprint = string.Empty;
@@ -468,6 +479,8 @@ public sealed class InternalInstallPrepared
         FastbootLockState = state.FastbootLockState;
         BootTrustMode = state.BootTrustMode;
         Abl188ReplacementSlots = new List<string>(state.Abl188ReplacementSlots).AsReadOnly();
+        GblAblReplacementSlots = new List<string>(state.GblAblReplacementSlots).AsReadOnly();
+        GblAblCopySlots = new List<string>(state.GblAblCopySlots).AsReadOnly();
         AblReplacementKind = state.AblReplacementKind;
 
         PackageFingerprint = state.PackageFingerprint;
@@ -540,6 +553,18 @@ public sealed class InternalInstallPrepared
     /// TB710FU 279; see <see cref="AblReplacementKind"/>). Empty for every route that writes no ABL.
     /// </summary>
     public IReadOnlyList<string> Abl188ReplacementSlots { get; }
+
+    /// <summary>
+    /// The a/b slots whose live ABL is incompatible and is replaced by the pinned TB323FU GBL-capable 088
+    /// loader. A slot that merely receives a copy of another slot's effective ABL is not included.
+    /// </summary>
+    public IReadOnlyList<string> GblAblReplacementSlots { get; }
+
+    /// <summary>
+    /// The a/b slots that receive a copy of another slot's effective ABL. TB323FU project-only B is the
+    /// current case: an empty slot B receives slot A's original or already replaced 088 ABL.
+    /// </summary>
+    public IReadOnlyList<string> GblAblCopySlots { get; }
 
     /// <summary>
     /// The pinned loader written into <see cref="Abl188ReplacementSlots"/>: "tb322fc-188" or "tb710fu-279".

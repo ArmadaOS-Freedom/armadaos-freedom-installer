@@ -148,6 +148,7 @@ def _build_fixture_repo(root):
         "vendor/qualcomm/driver/serial/amd64/qcusbser.sys": DRIVER_SYS,
         "vendor/qualcomm/g4/firehose.melf": G4_MELF,
         "vendor/qualcomm/g4/abl_aosp_capable.img": b"fixture-aosp-capable-abl\n",
+        "vendor/qualcomm/g5/abl_gbl_capable.img": b"fixture-gbl-capable-abl\n",
         "vendor/qualcomm/tb710fu/firehose.melf": TB710FU_MELF,
         "vendor/qualcomm/tb710fu/abl_aosp_capable.img": b"fixture-tb710fu-aosp-capable-abl\n",
     }
@@ -441,6 +442,15 @@ class PrepareTests(unittest.TestCase):
         )
         self.assertIn(
             f"<BundledTb322fcAbl188>{build_installer._xml_escape(str(abl.resolve()))}</BundledTb322fcAbl188>",
+            props_xml,
+        )
+        g5_abl = Path(record["inputs"]["BundledTb323fuAbl088"])
+        self.assertEqual(
+            (self.repo_root / "vendor" / "qualcomm" / "g5" / "abl_gbl_capable.img").resolve(),
+            g5_abl.resolve(),
+        )
+        self.assertIn(
+            f"<BundledTb323fuAbl088>{build_installer._xml_escape(str(g5_abl.resolve()))}</BundledTb323fuAbl088>",
             props_xml,
         )
         tb710fu_abl = Path(record["inputs"]["BundledTb710fuAospAbl"])

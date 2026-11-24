@@ -55,6 +55,7 @@ _PROPERTY_NAMES = (
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
     "BundledTb322fcAbl188",
+    "BundledTb323fuAbl088",
     "BundledTb710fuAospAbl",
     "BundledPlatformToolsArchive",
 )

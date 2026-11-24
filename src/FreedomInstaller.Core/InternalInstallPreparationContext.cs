@@ -727,6 +727,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 bootOnlyInactiveB = true;
             }
 
+            bool pendingProjectOnlyInactiveB = false;
+            bool deferredProjectOnlyInactiveBToGbl = false;
             if (string.Equals(profile.Model, "TB323FU", StringComparison.Ordinal)
                 && string.Equals(deviceCheck.CurrentSlot, "a", StringComparison.Ordinal)
                 && deviceCheck.FastbootLockState == BootloaderState.Locked
@@ -743,29 +745,50 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
                 if (packageSnapshot.EdlRawContract.BootRecipe?.UsesArmadaBoot == true)
                 {
-                    EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
-                        profile.ProfileId,
+                    bool canDeferToPinned088 = await ShouldDeferProjectOnlyInactiveBToGblAsync(
                         backupFacts.Files,
-                        installAssets.Tools,
-                        services.CommandRunner,
-                        evidenceDirectory,
+                        Tb323fuAbl088Assets.IsBundled,
                         cancellationToken).ConfigureAwait(false);
-                    inactiveTargets["b"] = proof;
+                    if (canDeferToPinned088)
+                    {
+                        deferredProjectOnlyInactiveBToGbl = true;
+                    }
+                    else
+                    {
+                        EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
+                            profile.ProfileId,
+                            backupFacts.Files,
+                            installAssets.Tools,
+                            services.CommandRunner,
+                            evidenceDirectory,
+                            cancellationToken).ConfigureAwait(false);
+                        inactiveTargets["b"] = proof;
+                        pendingProjectOnlyInactiveB = true;
+                    }
                 }
             }
 
-            Dictionary<string, string> sourceSlots = await DetermineDirectSourceSlotsAsync(
-                profile.ProfileId,
-                deviceCheck.CurrentSlot,
-                backupFacts.Files,
-                inactiveTargets,
-                cancellationToken).ConfigureAwait(false);
+            Dictionary<string, string> sourceSlots = deferredProjectOnlyInactiveBToGbl
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["b"] = "a",
+                    ["a"] = "a",
+                }
+                : await DetermineDirectSourceSlotsAsync(
+                    profile.ProfileId,
+                    deviceCheck.CurrentSlot,
+                    backupFacts.Files,
+                    inactiveTargets,
+                    cancellationToken).ConfigureAwait(false);
 
             // Direct core readiness point: BindBackup re-verified source image hashes and
             // DetermineDirectSourceSlotsAsync checked both target source slots. Only now may a
             // diagnostic boot-source proof attach. Notify before the direct ABL/AVB chain gate so
             // failures in that gate are diagnosable. Direct installs only; nothing else changed.
-            services.DiagnosticBootSourcesVerified?.Invoke();
+            if (!deferredProjectOnlyInactiveBToGbl)
+            {
+                services.DiagnosticBootSourcesVerified?.Invoke();
+            }
 
             // A model on the AOSP-preserving boot-only route (TB710FU) keeps it while every selected source root
             // already is the AOSP key. A source with an OEM root (Lenovo's stock TB710FU ZUXOS 1.5.04.495) leaves
@@ -847,7 +870,45 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                     backupFacts,
                     evidenceDirectory,
                     claims,
+                    cancellationToken,
+                    allowBundledAblReplacement: true).ConfigureAwait(false);
+            }
+
+            if (pendingProjectOnlyInactiveB
+                && gblInputs?.Sources.TryGetValue("a", out GblSourceEvidence? projectDonorSourceA) == true
+                && projectDonorSourceA.Replaced)
+            {
+                if (inactiveTargets.TryGetValue("b", out EdlRawInactiveSlotBackup? liveAblProof))
+                {
+                    liveAblProof.Dispose();
+                    inactiveTargets.Remove("b");
+                }
+
+                inactiveTargets["b"] = await VerifyProjectOnlyInactiveBAsync(
+                    profile.ProfileId,
+                    backupFacts.Files,
+                    installAssets.Tools,
+                    services.CommandRunner,
+                    evidenceDirectory,
+                    cancellationToken,
+                    effectiveSourceAblA: projectDonorSourceA.EffectiveAbl).ConfigureAwait(false);
+            }
+
+            if (deferredProjectOnlyInactiveBToGbl)
+            {
+                await CompleteDeferredProjectOnlyInactiveBAsync(
+                    profile.ProfileId,
+                    deviceCheck.CurrentSlot,
+                    backupFacts.Files,
+                    installAssets.Tools,
+                    services.CommandRunner,
+                    evidenceDirectory,
+                    inactiveTargets,
+                    sourceSlots,
+                    gblInputs,
                     cancellationToken).ConfigureAwait(false);
+
+                services.DiagnosticBootSourcesVerified?.Invoke();
             }
 
             IReadOnlyDictionary<string, EdlRawResignedAvbNode> avbRoots;
@@ -931,6 +992,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 gblInputs: gblInputs,
                 directAblGuardRoles: directAblProof?.AblGuardRoles,
                 directAblReplacements: directAblProof?.Replacements,
+                gblAblWrites: gblInputs is null ? null : GetGblAblWritePlan(gblInputs),
                 bootOnlyInactiveB: bootOnlyInactiveB);
 
             // A GBL run also creates one whole wrapper partition per slot beside the execution work, so the
@@ -957,9 +1019,15 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
             Dictionary<string, long> actualRawLengths = new(StringComparer.Ordinal);
 
-            // The fixed write order is candidate b first, then candidate a. Each result is verified here and
-            // held by this context until Dispose, which deletes only the builder's own generated child.
-            foreach (string slot in SlotOrder)
+            // Execution write order stays fixed as candidate b first, then candidate a. When slot b is empty
+            // and borrows slot a as its source, slot a is built first from its effective (already downgraded
+            // when required) ABL material before building slot b from that same slot-a source, then reordered
+            // back to SlotOrder so _builtBoots and all downstream maps preserve their canonical b, a order.
+            string[] buildSlotOrder = string.Equals(sourceSlots["b"], "a", StringComparison.Ordinal)
+                ? new[] { "a", "b" }
+                : SlotOrder;
+
+            foreach (string slot in buildSlotOrder)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -986,6 +1054,11 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
                 try
                 {
+                    VerifiedEdlFile effectiveSourceAbl = gblInputs?.Sources.TryGetValue(sourceSlot, out var gblSource) == true
+                        && gblSource.Replaced
+                        ? gblSource.EffectiveAbl
+                        : Claim(backupFacts.Files, "abl_" + sourceSlot);
+
                     EdlRawBuiltBoot built = await EdlRawBootBuilder
                         .BuildAsync(
                             new EdlRawBootBuildRequest(
@@ -993,7 +1066,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                                 Claim(backupFacts.Files, "boot_" + sourceSlot),
                                 Claim(backupFacts.Files, "vendor_boot_" + sourceSlot),
                                 Claim(backupFacts.Files, "init_boot_" + sourceSlot),
-                                Claim(backupFacts.Files, "abl_" + sourceSlot),
+                                effectiveSourceAbl,
                                 Claim(backupFacts.Files, "xbl_config_" + sourceSlot),
                                 contract,
                                 ownAssets.Tools,
@@ -1014,7 +1087,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                         sourceSlot,
                         contract,
                         packageSnapshot,
-                        backupFacts.Files);
+                        backupFacts.Files,
+                        effectiveSourceAbl);
 
                     if (gblInputs is null && preservedAvbRoles is null && sourceSlot == slot)
                     {
@@ -1042,6 +1116,18 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                     inactiveTarget?.Dispose();
                     inactiveTargets.Remove(slot);
                 }
+            }
+
+            if (!ReferenceEquals(buildSlotOrder, SlotOrder))
+            {
+                var orderedBuilds = new List<EdlRawBuiltBoot>(SlotOrder.Length);
+                foreach (string slot in SlotOrder)
+                {
+                    orderedBuilds.Add(builds.Single(item => string.Equals(item.Slot, slot, StringComparison.Ordinal)));
+                }
+
+                builds.Clear();
+                builds.AddRange(orderedBuilds);
             }
 
             // Both built boots exist now, so the verified GBL plan is completed from what was actually built
@@ -1193,6 +1279,69 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 }
             }
         }
+    }
+
+    private static async Task<bool> ShouldDeferProjectOnlyInactiveBToGblAsync(
+        IReadOnlyDictionary<string, EdlCapturedRegion> files,
+        bool isBundledAbl088,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!isBundledAbl088)
+        {
+            return false;
+        }
+
+        // Check if ancillary partitions are empty (factory-zero state)
+        foreach (string ancillary in new[] { "recovery_b", "vbmeta_system_b" })
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(
+                Claim(files, ancillary),
+                cancellationToken).ConfigureAwait(false))
+            {
+                // Ancillary is non-empty, cannot defer
+                return false;
+            }
+        }
+
+        // All conditions met: ABL088 is bundled and ancillaries are empty
+        return true;
+    }
+
+    private static async Task CompleteDeferredProjectOnlyInactiveBAsync(
+        string profileId,
+        string currentSlot,
+        IReadOnlyDictionary<string, EdlCapturedRegion> files,
+        EdlRawBootTools tools,
+        ICommandRunner runner,
+        string evidenceDirectory,
+        Dictionary<string, EdlRawInactiveSlotBackup> inactiveTargets,
+        Dictionary<string, string> sourceSlots,
+        GblPreparationInputs gblInputs,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Get the effective ABL from GBL inputs (source slot "a")
+        if (!gblInputs.Sources.TryGetValue("a", out var sourceEvidence) || sourceEvidence is null)
+        {
+            throw new InvalidOperationException(
+                "deferred-project-only-b-completion: cannot complete deferred validation without GBL source evidence for slot 'a'.");
+        }
+
+        // Use the effective ABL (which may be the pinned 088 replacement)
+        EdlRawInactiveSlotBackup proof = await VerifyProjectOnlyInactiveBAsync(
+            profileId,
+            files,
+            tools,
+            runner,
+            evidenceDirectory,
+            cancellationToken,
+            sourceEvidence.EffectiveAbl).ConfigureAwait(false);
+
+        inactiveTargets["b"] = proof;
     }
 
     /// <summary>
@@ -1426,6 +1575,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         GblPreparationInputs? gblInputs = null,
         IReadOnlyList<string>? directAblGuardRoles = null,
         IReadOnlyDictionary<string, VerifiedEdlFile>? directAblReplacements = null,
+        IReadOnlyDictionary<string, VerifiedEdlFile>? gblAblWrites = null,
         bool bootOnlyInactiveB = false)
     {
         long gptCapture = 0;
@@ -1497,6 +1647,17 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 planned,
                 metadataReadback,
                 "The direct metadata execution budget overflows.");
+        }
+
+        if (gblAblWrites is not null)
+        {
+            foreach (VerifiedEdlFile candidate in gblAblWrites.Values)
+            {
+                planned = CheckedAdd(
+                    planned,
+                    candidate.Length,
+                    "The GBL ABL readback budget overflows.");
+            }
         }
 
         if (gblInputs is not null)
@@ -1653,6 +1814,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             _directGblPlan?.Inputs,
             _directAblGuardRoles.Count == 0 ? null : _directAblGuardRoles,
             _directAblReplacements.Count == 0 ? null : _directAblReplacements,
+            _directGblPlan is null ? null : GblAblWrites,
             bootOnlyInactiveB: _bootOnlyInactiveB);
 
         RequireDirectExecutionSpaceAvailable(
@@ -1674,7 +1836,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         string sourceSlot,
         EdlRawPackageContract contract,
         InternalInstallPackageSnapshot snapshot,
-        IReadOnlyDictionary<string, EdlCapturedRegion> files)
+        IReadOnlyDictionary<string, EdlCapturedRegion> files,
+        VerifiedEdlFile? effectiveAbl = null)
     {
         if (!string.Equals(built.Slot, slot, StringComparison.Ordinal))
         {
@@ -1703,7 +1866,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         RequireSource(actual, "current_boot", Claim(files, "boot_" + sourceSlot));
         RequireSource(actual, "vendor_boot", Claim(files, "vendor_boot_" + sourceSlot));
         RequireSource(actual, "init_boot", Claim(files, "init_boot_" + sourceSlot));
-        RequireSource(actual, "abl", Claim(files, "abl_" + sourceSlot));
+        RequireSource(actual, "abl", effectiveAbl ?? Claim(files, "abl_" + sourceSlot));
         RequireSource(actual, "xbl_config", Claim(files, "xbl_config_" + sourceSlot));
 
         if (built.BaseImage.Length != actual.BaseImageLength
@@ -2221,6 +2384,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 .Select(role => role.StartsWith("abl_", StringComparison.Ordinal) ? role[4..] : role)
                 .OrderBy(slot => slot, StringComparer.Ordinal))
             .AsReadOnly();
+        state.GblAblReplacementSlots = new List<string>(GblAblReplacementSlots).AsReadOnly();
+        state.GblAblCopySlots = new List<string>(GblAblCopySlots).AsReadOnly();
         state.PackageFingerprint = _package.ManifestFingerprint;
         state.PackageBindingSha256 = _package.BindingSha256;
         state.BackupManifestSha256 = _backupManifestSha256;

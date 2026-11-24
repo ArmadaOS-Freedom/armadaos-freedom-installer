@@ -61,6 +61,16 @@ internal sealed class GblDirectSourceFixture : IDisposable
     }
 
     internal GblDirectSourceFixture(string region, bool mismatchParentBootChild, ulong? androidTextOffset)
+        : this(region, mismatchParentBootChild, androidTextOffset, customAbl: null, customXbl: null)
+    {
+    }
+
+    internal GblDirectSourceFixture(
+        string region,
+        bool mismatchParentBootChild,
+        ulong? androidTextOffset,
+        VerifiedEdlFile? customAbl,
+        VerifiedEdlFile? customXbl)
     {
         Region = region;
         MismatchParentBootChild = mismatchParentBootChild;
@@ -115,8 +125,8 @@ internal sealed class GblDirectSourceFixture : IDisposable
 
             // Required public ABI inputs: pinned by length and full SHA before any use. No fallback,
             // and G5_ACTUAL is never consulted. Both slots share the same read-only public files.
-            VerifiedEdlFile abl = PinnedFile(AblVariable, relativeName: null, AblBytes, AblSha256);
-            VerifiedEdlFile xbl = PinnedFile(LoaderRootVariable, "xbl_config.elf", XblBytes, XblSha256);
+            VerifiedEdlFile abl = customAbl ?? PinnedFile(AblVariable, relativeName: null, AblBytes, AblSha256);
+            VerifiedEdlFile xbl = customXbl ?? PinnedFile(LoaderRootVariable, "xbl_config.elf", XblBytes, XblSha256);
 
             EfispSource = CreateEfispSource();
 

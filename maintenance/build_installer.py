@@ -64,6 +64,7 @@ _PROPERTY_NAMES = (
     "BundledGblPrcEfi",
     "BundledGblRowEfi",
     "BundledTb322fcAbl188",
+    "BundledTb323fuAbl088",
     "BundledTb710fuAospAbl",
 )
 
@@ -191,6 +192,7 @@ def _xml_escape(text):
 # its digest is always checked (a custom manifest cannot silently skip one).
 _REQUIRED_VENDOR_FILES = {
     "BundledTb322fcAbl188": "vendor/qualcomm/g4/abl_aosp_capable.img",
+    "BundledTb323fuAbl088": "vendor/qualcomm/g5/abl_gbl_capable.img",
     "BundledTb710fuAospAbl": "vendor/qualcomm/tb710fu/abl_aosp_capable.img",
 }
 
