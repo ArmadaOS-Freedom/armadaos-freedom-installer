@@ -31,7 +31,7 @@ body:
     id: description
     attributes:
       label: 问题描述 / Problem
-      description: 在哪一步出错、复现步骤，附安装日志或截图。Which step failed and how to reproduce; attach the installer log or screenshots.
+      description: 在哪一步出错、复现步骤，附安装日志或截图，公开上传前请检查诊断包、日志及截图的原始序列号、本机路径、凭据，含敏感信息只私下分享。Which step failed and how to reproduce; attach the installer log or screenshots; before uploading publicly, check the diagnostic bundle, logs and screenshots for original serial numbers, local paths and credentials, and share anything sensitive only privately.
     validations:
       required: true
 

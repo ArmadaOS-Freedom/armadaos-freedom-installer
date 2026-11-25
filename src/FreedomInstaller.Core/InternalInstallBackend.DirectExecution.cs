@@ -141,8 +141,7 @@ public sealed partial class InternalInstallBackend
                 RequireCapturedRegion("boot_a"), gblBoots["a"].EffectiveCandidate, "boot_a");
 
             var gblAblWrites = _context.GblAblWrites;
-            // A replaced active slot A must land before B is populated from it. The normal two-source route
-            // keeps the frozen b, a order.
+            // The frozen copy plan fixes the write order; slot A precedes B only when B borrows A.
             string[] gblSlotOrder = _context.GblAblCopySlots.Contains("b", StringComparer.Ordinal)
                 ? new[] { "a", "b" }
                 : new[] { "b", "a" };
@@ -343,9 +342,8 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
-        // On the GBL-preserving route every planned ABL write is written whole and read back in fixed b, a
-        // order immediately after efisp and before boot_b and boot_a. A replaced active slot A therefore lands
-        // first when B borrows A, then that effective A loader is copied to B before either boot wrapper.
+        // On the GBL-preserving route every planned ABL write comes from the frozen plan above and is written
+        // whole and read back before boot_b and boot_a, immediately after efisp.
         for (int index = 0; index < gblAblRegions.Count; index++)
         {
             InternalArtifactRegion region = gblAblRegions[index];
@@ -363,12 +361,7 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
-        // If B slot was empty and borrowed A's ABL, copy A's loader to B after A is written.
-        // This ensures B slot has the same functional ABL as A for subsequent boot operations.
-        // GblAblCopySlots are already handled above in the gblAblRegions loop from the unified write plan.
-        // No additional copy is needed here; the plan execution above has already written all copies.
-
-        // The fixed candidate order is b then a; it is never selectable by a caller.
+        // The frozen candidate order is b then a; it is never selectable by a caller.
         await WriteExecutionRegionAsync(
                 _initialEdl,
                 run,

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using FreedomInstaller.Core;
@@ -236,7 +237,7 @@ public sealed class Tb323fuGblAblReplacementTests
             string[] recordedSlots = entries.EnumerateArray()
                 .Select(entry => entry.GetProperty("slot").GetString()!)
                 .ToArray();
-            Assert.Equal(expectedPreparedReplacementSlots, recordedSlots);
+            Assert.Equal(expectedPreparedReplacementSlots.OrderBy(slot => slot, StringComparer.Ordinal), recordedSlots);
             foreach (JsonElement entry in entries.EnumerateArray())
             {
                 string slot = entry.GetProperty("slot").GetString()!;
@@ -273,20 +274,18 @@ public sealed class Tb323fuGblAblReplacementTests
         Assert.Equal(11 + expectedWriteSlotOrder.Length, writes.Count);
         AssertFullWrite(writes[7], session.Backup.Files["efisp"]);
 
-        AssertFullWrite(writes[8], session.Backup.Files["boot_b"]);
-        AssertFullWrite(writes[9], session.Backup.Files["boot_a"]);
-
         for (int index = 0; index < expectedWriteSlotOrder.Length; index++)
         {
             string slot = expectedWriteSlotOrder[index];
             EdlCapturedRegion targetAbl = session.Backup.Files["abl_" + slot];
-            IB001Write ablWrite = writes[10 + index];
+            IB001Write ablWrite = writes[8 + index];
             AssertFullWrite(ablWrite, targetAbl);
             Assert.Equal(Tb323fuAbl088Assets.ImageSha256, ablWrite.Sha256, ignoreCase: true);
         }
 
-        int miscIndex = 10 + expectedWriteSlotOrder.Length;
-        AssertBcbWrite(writes[miscIndex], session.Backup.Files["misc"]);
+        int bootBIndex = 8 + expectedWriteSlotOrder.Length;
+        AssertFullWrite(writes[bootBIndex], session.Backup.Files["boot_b"]);
+        AssertFullWrite(writes[bootBIndex + 1], session.Backup.Files["boot_a"]);
 
         if (!slotAIncompatible)
         {
@@ -297,6 +296,8 @@ public sealed class Tb323fuGblAblReplacementTests
         {
             Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files["abl_b"]));
         }
+
+        AssertBcbWrite(writes[10 + expectedWriteSlotOrder.Length], session.Backup.Files["misc"]);
 
         foreach (string metadataRole in MetadataRoles)
         {
@@ -311,14 +312,14 @@ public sealed class Tb323fuGblAblReplacementTests
     }
 
     [Fact]
-    public async Task LockedTb323fu_EmptyInactiveSlotB_ReplacesOnlyActiveSlotAWhenSlotAIsIncompatible()
+    public async Task LockedTb323fu_EmptyInactiveSlotB_ReplacesActiveAblAndCopiesItToB()
     {
         if (!Tb323fuAbl088Assets.IsBundled)
         {
             return;
         }
 
-        string caseDir = _g5.NewCaseDirectory(nameof(LockedTb323fu_EmptyInactiveSlotB_ReplacesOnlyActiveSlotAWhenSlotAIsIncompatible));
+        string caseDir = _g5.NewCaseDirectory(nameof(LockedTb323fu_EmptyInactiveSlotB_ReplacesActiveAblAndCopiesItToB));
         VerifiedEdlFile incompatibleAblA = WriteDeterministicFile(
             caseDir,
             "abl-a-055.img",
@@ -345,22 +346,31 @@ public sealed class Tb323fuGblAblReplacementTests
         InternalInstallPrepared prepared = session.Backend.Prepared;
         Assert.Equal(InternalInstallBootTrustMode.GblPreserveOem, prepared.BootTrustMode);
         Assert.Equal(new[] { "a" }, prepared.GblAblReplacementSlots);
+        Assert.Equal(new[] { "b" }, prepared.GblAblCopySlots);
         Assert.True(prepared.AvbSlots["b"].NonbootableSystem);
+        Assert.Equal(Tb323fuAbl088Assets.ImageLength, session.Backup.Files["abl_b"].Length);
 
         InternalInstallResult result = await session.Backend.ExecuteAsync(
             prepared.ConfirmationId,
             userdataEraseConfirmed: true);
 
-        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.True(result.Outcome == InternalInstallOutcome.InstallationCompleted,
+            $"Outcome: {result.Outcome}; stage: {result.LastVerifiedStage}; error: {result.ErrorCode}; diagnostic: {result.Diagnostic}");
         Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
-        Assert.Equal(12, session.EdlRunner.Writes.Count);
-        AssertFullWrite(session.EdlRunner.Writes[7], session.Backup.Files["efisp"]);
-        AssertFullWrite(session.EdlRunner.Writes[8], session.Backup.Files["abl_a"]);
-        Assert.Equal(Tb323fuAbl088Assets.ImageSha256, session.EdlRunner.Writes[8].Sha256, ignoreCase: true);
-        AssertFullWrite(session.EdlRunner.Writes[9], session.Backup.Files["boot_b"]);
-        AssertFullWrite(session.EdlRunner.Writes[10], session.Backup.Files["boot_a"]);
-        AssertBcbWrite(session.EdlRunner.Writes[11], session.Backup.Files["misc"]);
-        Assert.DoesNotContain(session.EdlRunner.Writes, write => OverlapsRegion(write, session.Backup.Files["abl_b"]));
+        var writes = session.EdlRunner.Writes;
+        Assert.Equal(13, writes.Count);
+        AssertFullWrite(writes[7], session.Backup.Files["efisp"]);
+        AssertFullWrite(writes[8], session.Backup.Files["abl_a"]);
+        Assert.Equal(Tb323fuAbl088Assets.ImageSha256, writes[8].Sha256, ignoreCase: true);
+        AssertFullWrite(writes[9], session.Backup.Files["abl_b"]);
+        Assert.Equal(writes[8].Sha256, writes[9].Sha256, ignoreCase: true);
+        AssertFullWrite(writes[10], session.Backup.Files["boot_b"]);
+        AssertFullWrite(writes[11], session.Backup.Files["boot_a"]);
+        AssertBcbWrite(writes[12], session.Backup.Files["misc"]);
+        foreach (string role in MetadataRoles)
+        {
+            Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files[role]));
+        }
     }
 
     [Fact]
@@ -399,9 +409,11 @@ public sealed class Tb323fuGblAblReplacementTests
         InternalInstallPrepared prepared = session.Backend.Prepared;
         Assert.Equal(InternalInstallBootTrustMode.GblPreserveOem, prepared.BootTrustMode);
         Assert.Equal(new[] { "a" }, prepared.GblAblReplacementSlots);
+        Assert.Equal(new[] { "b" }, prepared.GblAblCopySlots);
         Assert.Equal("a", prepared.AvbSlots["b"].SourceSlot);
         Assert.True(prepared.AvbSlots["b"].NonbootableSystem);
         Assert.Equal("a", prepared.SlotMaterials["b"].Slot);
+        Assert.Equal(Tb323fuAbl088Assets.ImageLength, session.Backup.Files["abl_b"].Length);
         Assert.Equal(
             Tb323fuAbl088Assets.ImageSha256,
             prepared.SlotMaterials["a"].SourceSha256["abl"],
@@ -420,22 +432,25 @@ public sealed class Tb323fuGblAblReplacementTests
             prepared.ConfirmationId,
             userdataEraseConfirmed: true);
 
-        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.True(result.Outcome == InternalInstallOutcome.InstallationCompleted,
+            $"Outcome: {result.Outcome}; stage: {result.LastVerifiedStage}; error: {result.ErrorCode}; diagnostic: {result.Diagnostic}");
         Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
         Assert.Equal(new[] { "b", "a" }, result.VerifiedSlots);
         Assert.Equal(1, session.EdlRunner.ResetCount);
 
         var writes = session.EdlRunner.Writes;
-        Assert.Equal(12, writes.Count);
+        Assert.Equal(13, writes.Count);
         AssertFullWrite(writes[7], session.Backup.Files["efisp"]);
         AssertFullWrite(writes[8], session.Backup.Files["abl_a"]);
         Assert.Equal(Tb323fuAbl088Assets.ImageSha256, writes[8].Sha256, ignoreCase: true);
-        AssertFullWrite(writes[9], session.Backup.Files["boot_b"]);
-        AssertFullWrite(writes[10], session.Backup.Files["boot_a"]);
-        AssertBcbWrite(writes[11], session.Backup.Files["misc"]);
-        Assert.NotEqual(session.Backup.Files["boot_b"].Sha256, writes[9].Sha256, StringComparer.OrdinalIgnoreCase);
+        AssertFullWrite(writes[9], session.Backup.Files["abl_b"]);
+        Assert.Equal(writes[8].Sha256, writes[9].Sha256, ignoreCase: true);
+        AssertFullWrite(writes[10], session.Backup.Files["boot_b"]);
+        AssertFullWrite(writes[11], session.Backup.Files["boot_a"]);
+        AssertBcbWrite(writes[12], session.Backup.Files["misc"]);
+        Assert.NotEqual(session.Backup.Files["boot_b"].Sha256, writes[10].Sha256, StringComparer.OrdinalIgnoreCase);
 
-        foreach (string role in new[] { "vendor_boot_b", "init_boot_b", "abl_b", "xbl_config_b", "vbmeta_b", "vbmeta_system_b", "recovery_b" })
+        foreach (string role in new[] { "vendor_boot_b", "init_boot_b", "xbl_config_b", "vbmeta_b", "vbmeta_system_b", "recovery_b" })
         {
             Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files[role]));
         }
@@ -584,7 +599,29 @@ public sealed class Tb323fuGblAblReplacementTests
     }
 
     [Fact]
-    public async Task LockedTb323fu_ProjectOnlyInactiveBOver128MiBRaw_DefersBudgetUntilEffective088Abl()
+    public Task LockedTb323fu_ReinstallChecksInactiveBootBudgetAndRejectsIncompleteArmadaBootImage() =>
+        VerifyInactiveBootBudgetOnReinstallAsync(signedBootFixture: null);
+
+    [SignedBootFixtureFact]
+    public Task LockedTb323fu_SignedArmadaBootReinstallAutomaticallySelectsReplacementAbl() =>
+        VerifyInactiveBootBudgetOnReinstallAsync(
+            Environment.GetEnvironmentVariable(SignedBootFixtureFactAttribute.FixtureVariable)!);
+
+    private sealed class SignedBootFixtureFactAttribute : FactAttribute
+    {
+        public const string FixtureVariable = "TB323FU_SIGNED_BOOT_FIXTURE_DIR";
+
+        public SignedBootFixtureFactAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(FixtureVariable)))
+            {
+                Skip = "Provide the TB323FU direct-package descriptor and signed ARMADA_BOOT payload using "
+                    + FixtureVariable + ".";
+            }
+        }
+    }
+
+    private async Task VerifyInactiveBootBudgetOnReinstallAsync(string? signedBootFixture)
     {
         if (!Tb323fuAbl088Assets.IsBundled)
         {
@@ -592,30 +629,21 @@ public sealed class Tb323fuGblAblReplacementTests
         }
 
         string caseDir = _g5.NewCaseDirectory(
-            nameof(LockedTb323fu_ProjectOnlyInactiveBOver128MiBRaw_DefersBudgetUntilEffective088Abl));
-        VerifiedEdlFile compatibleAbl088 = await Tb323fuAbl088Assets.StageAsync(caseDir, CancellationToken.None);
-        VerifiedEdlFile incompatibleAblA = WriteDeterministicFile(
-            caseDir,
-            "abl-a-055.img",
-            Tb323fuAbl088Assets.ImageLength,
-            0x51);
+            nameof(LockedTb323fu_ReinstallChecksInactiveBootBudgetAndRejectsIncompleteArmadaBootImage));
+        VerifiedEdlFile compatibleAbl = await Tb323fuAbl088Assets.StageAsync(caseDir, CancellationToken.None);
+        VerifiedEdlFile incompatibleAbl = WriteDeterministicFile(
+            caseDir, "abl-a-055.img", Tb323fuAbl088Assets.ImageLength, 0x51);
         VerifiedEdlFile xbl = WriteVerifiedFile(caseDir, "xbl-gen5.elf", BuildSyntheticGen5XblConfig());
 
         using var source = new GblDirectSourceFixture(
             region: "PRC",
             mismatchParentBootChild: false,
             androidTextOffset: null,
-            customAbl: incompatibleAblA,
+            customAbl: incompatibleAbl,
             customXbl: xbl);
 
-        byte[] zeroVbmeta = new byte[4096];
-        VerifiedEdlFile zeroVbmetaFile = WriteVerifiedFile(caseDir, "vbmeta-b-zero.bin", zeroVbmeta);
-        var overrides = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal)
-        {
-            ["abl_a"] = incompatibleAblA,
-        };
-
-        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+        string? media = signedBootFixture is null ? null : CreateSignedBootMedia(signedBootFixture, caseDir);
+        Task<DirectInstallReadyTestSession> PrepareAsync() => DirectInstallReadyTestSession.CreateAsync(
             _g5.Toolchain,
             _raw,
             currentSlot: "a",
@@ -625,73 +653,131 @@ public sealed class Tb323fuGblAblReplacementTests
             observedFastbootLockState: BootloaderState.Locked,
             gblSources: source,
             reinstallAndroidGiB: 16,
-            sourceOverrides: overrides,
+            mediaPath: media,
             usesArmadaBoot: true,
-            configureReinstallOverlayAsync: async (device, tools, runner, factoryBackup, contract, workRoot) =>
+            configureReinstallOverlayAsync: VerifyPreviousBootAsync,
+            expectedNativeCalls: media is null ? 6 : 11);
+
+        if (media is not null)
+        {
+            using DirectInstallReadyTestSession prepared = await PrepareAsync();
+            Assert.Equal(new[] { "a" }, prepared.Backend.Prepared.GblAblReplacementSlots);
+            Assert.True(prepared.Backend.Prepared.AvbSlots["b"].NonbootableSystem);
+            Assert.Empty(prepared.EdlRunner.Writes);
+            Assert.Equal(0, prepared.EdlRunner.ResetCount);
+        }
+        else
+        {
+            // The ordinary fixture only has an ext4 superblock. It may not pass
+            // the signed ARMADA_BOOT gate or reach reinstall preparation.
+            InvalidOperationException rejectedPackage = await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => { using DirectInstallReadyTestSession _ = await PrepareAsync(); });
+            Assert.StartsWith("maintenance-installed-linux-mismatch:", rejectedPackage.Message, StringComparison.Ordinal);
+            Assert.Contains("extents feature", rejectedPackage.Message, StringComparison.Ordinal);
+        }
+
+        async Task VerifyPreviousBootAsync(
+            IB001SyntheticDevice device,
+            EdlRawBootTools tools,
+            ICommandRunner runner,
+            InternalBackupSet factoryBackup,
+            EdlRawPackageContract _,
+            string workRoot)
+        {
+            string evidence = Path.Combine(workRoot, "reinstall-project-b");
+            Directory.CreateDirectory(evidence);
+
+            VerifiedEdlFile Claim(string role)
             {
-                string stageDir = Path.Combine(workRoot, "reinstall-project-b");
-                Directory.CreateDirectory(stageDir);
+                EdlCapturedRegion file = factoryBackup.Files[role];
+                return new VerifiedEdlFile(file.FilePath, file.Length, file.Sha256);
+            }
 
-                // Build an earlier-installed legacy composite B whose unpacked raw exceeds the 128 MiB
-                // fallback budget (130 MiB BSS-expanded Linux payload + runtime > 128 MiB), while fitting
-                // inside the ~253 MiB budget proven by the effective 088 ABL + Gen5 XBL window.
-                using var priorBPackage = new EdlRawBootBuilderTests.SyntheticPackage(
-                    deviceModel: "TB323FU",
-                    usesArmadaBoot: false);
-                byte[] largeKernel = (byte[])priorBPackage.Kernel.Clone();
-                BinaryPrimitives.WriteUInt64LittleEndian(largeKernel.AsSpan(16, 8), 130UL * 1024 * 1024);
-                priorBPackage.ReplaceKernel(largeKernel);
+            using var priorPackage = new EdlRawBootBuilderTests.SyntheticPackage(deviceModel: "TB323FU");
+            byte[] kernel = (byte[])priorPackage.Kernel.Clone();
+            BinaryPrimitives.WriteUInt64LittleEndian(kernel.AsSpan(16, 8), 130UL * 1024 * 1024);
+            priorPackage.ReplaceKernel(kernel);
 
-                EdlCapturedRegion bootA = factoryBackup.Files["boot_a"];
-                EdlCapturedRegion vendorA = factoryBackup.Files["vendor_boot_a"];
-                EdlCapturedRegion initA = factoryBackup.Files["init_boot_a"];
-                EdlCapturedRegion xblA = factoryBackup.Files["xbl_config_a"];
-                EdlCapturedRegion bootB = factoryBackup.Files["boot_b"];
+            VerifiedEdlFile bootA = Claim("boot_a");
+            VerifiedEdlFile vendorA = Claim("vendor_boot_a");
+            VerifiedEdlFile initA = Claim("init_boot_a");
+            VerifiedEdlFile xblA = Claim("xbl_config_a");
+            VerifiedEdlFile vendorB = Claim("vendor_boot_b");
+            VerifiedEdlFile initB = Claim("init_boot_b");
+            VerifiedEdlFile ablB = Claim("abl_b");
+            VerifiedEdlFile xblB = Claim("xbl_config_b");
+            VerifiedEdlFile rootA = Claim("vbmeta_a");
 
-                using EdlRawInactiveSlotBackup donorProof = await EdlRawInactiveSlotBackup.VerifyBootOnlyInactiveBAsync(
-                    factoryBackup.ProfileId,
-                    new VerifiedEdlFile(bootB.FilePath, bootB.Length, bootB.Sha256),
-                    new VerifiedEdlFile(factoryBackup.Files["vendor_boot_b"].FilePath, factoryBackup.Files["vendor_boot_b"].Length, factoryBackup.Files["vendor_boot_b"].Sha256),
-                    new VerifiedEdlFile(factoryBackup.Files["init_boot_b"].FilePath, factoryBackup.Files["init_boot_b"].Length, factoryBackup.Files["init_boot_b"].Sha256),
-                    new VerifiedEdlFile(factoryBackup.Files["abl_b"].FilePath, factoryBackup.Files["abl_b"].Length, factoryBackup.Files["abl_b"].Sha256),
-                    new VerifiedEdlFile(factoryBackup.Files["xbl_config_b"].FilePath, factoryBackup.Files["xbl_config_b"].Length, factoryBackup.Files["xbl_config_b"].Sha256),
-                    CancellationToken.None);
+            using EdlRawInactiveSlotBackup donor = await EdlRawInactiveSlotBackup.VerifyBootOnlyInactiveBAsync(
+                factoryBackup.ProfileId, Claim("boot_b"), vendorB, initB, ablB, xblB, CancellationToken.None);
+            using EdlRawBuiltBoot prior = await EdlRawBootBuilder.BuildAsync(
+                new EdlRawBootBuildRequest(
+                    "b", bootA, vendorA, initA, compatibleAbl, xblA, priorPackage.Contract, tools, evidence, donor),
+                runner,
+                CancellationToken.None);
 
-                using EdlRawBuiltBoot builtB = await EdlRawBootBuilder.BuildAsync(
-                    new EdlRawBootBuildRequest(
-                        "b",
-                        new VerifiedEdlFile(bootA.FilePath, bootA.Length, bootA.Sha256),
-                        new VerifiedEdlFile(vendorA.FilePath, vendorA.Length, vendorA.Sha256),
-                        new VerifiedEdlFile(initA.FilePath, initA.Length, initA.Sha256),
-                        compatibleAbl088,
-                        new VerifiedEdlFile(xblA.FilePath, xblA.Length, xblA.Sha256),
-                        priorBPackage.Contract,
-                        tools,
-                        stageDir,
-                        donorProof),
-                    runner,
-                    CancellationToken.None);
+            Assert.True(prior.PackedRaw.Length > 128L * 1024 * 1024);
 
-                Assert.True(builtB.PackedRaw.Length > 134_217_728L);
+            // Exercise the read-only proof against the complete test-signed boot candidate. It must
+            // reject the fallback budget and authenticate and decode the same bytes with the measured budget.
+            Task<CurrentBootInitializedInactiveProof> VerifyWithAblAsync(VerifiedEdlFile abl) =>
+                EdlRawBootBuilder.VerifyInitializedInactiveSlotAsync(
+                    factoryBackup.ProfileId, "a", "b", bootA, vendorA, initA, abl, xblA,
+                    prior.CandidateBoot, vendorB, initB, ablB, xblB, rootA, tools, runner, evidence);
 
-                string wrappedBootBPath = Path.Combine(stageDir, "installed-gbl-boot_b.img");
-                using EdlRawGblPreservedBoot wrappedB = await EdlRawBootBuilder.PreserveOriginalSignedBootMetadataAsync(
-                    builtB,
-                    new VerifiedEdlFile(bootA.FilePath, bootA.Length, bootA.Sha256),
-                    wrappedBootBPath,
-                    CancellationToken.None);
-
-                string durableBootBPath = Path.Combine(stageDir, "overlay-boot_b.img");
-                File.Copy(wrappedB.EffectiveCandidate.Path, durableBootBPath, overwrite: true);
-                device.AddWriteOverlay(bootB.Lun, bootB.StartSector, bootB.SectorCount, durableBootBPath);
-                _ = zeroVbmetaFile;
+            InvalidDataException tooLarge = await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            {
+                using CurrentBootInitializedInactiveProof proof = await VerifyWithAblAsync(Claim("abl_a"));
             });
+            Assert.Contains("exceeds the bounded decode limit", tooLarge.Message, StringComparison.Ordinal);
 
-        InternalInstallPrepared prepared = session.Backend.Prepared;
-        Assert.Equal(InternalInstallBootTrustMode.GblPreserveOem, prepared.BootTrustMode);
-        Assert.Equal(new[] { "a" }, prepared.GblAblReplacementSlots);
-        Assert.Equal("a", prepared.AvbSlots["b"].SourceSlot);
-        Assert.True(prepared.AvbSlots["b"].NonbootableSystem);
+            using CurrentBootInitializedInactiveProof proven = await VerifyWithAblAsync(compatibleAbl);
+            Assert.Equal("a", proven.SourceSlot);
+            Assert.Equal("b", proven.TargetSlot);
+            Assert.Equal(compatibleAbl.Sha256, proven.SourceMaterial.SourceSha256["abl"], ignoreCase: true);
+            Assert.Equal(prior.PackedRaw.Length, proven.ProjectRaw.Length);
+            Assert.Equal(prior.PackedRaw.Sha256, proven.ProjectRaw.Sha256, ignoreCase: true);
+
+            EdlCapturedRegion bootB = factoryBackup.Files["boot_b"];
+            string overlay = Path.Combine(evidence, "overlay-boot-b.img");
+            File.Copy(prior.CandidateBoot.Path, overlay);
+            device.AddWriteOverlay(bootB.Lun, bootB.StartSector, bootB.SectorCount, overlay);
+        }
+    }
+
+    private static string CreateSignedBootMedia(string fixture, string caseDir)
+    {
+        string media = Path.Combine(caseDir, "signed-armada-boot-media");
+        Directory.CreateDirectory(media);
+        foreach (string relative in new[]
+        {
+            "images/linux-boot.ext4.gz", "boot/kernel.img", "boot/initramfs.img",
+            "boot/dtb-normal.img", "boot/dtb-diagnostic.img", "runtime/runtime.bin",
+        })
+        {
+            string target = Path.Combine(media, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(Path.Combine(fixture, Path.GetFileName(relative)), target);
+        }
+
+        JsonObject descriptor = JsonNode.Parse(File.ReadAllText(Path.Combine(fixture, "package.json")))!.AsObject();
+        JsonObject rootImage = descriptor["artifacts"]!.AsArray().Select(item => item!.AsObject())
+            .Single(item => item["role"]!.GetValue<string>() == "linux-root-raw");
+
+        // Preparation reads the root superblock. A synthetic root keeps the
+        // published UUID without importing a whole Linux root filesystem.
+        // ARMADA_BOOT and all of its signed payloads are the original bytes.
+        Guid rootUuid = Guid.Parse(rootImage["fsUuid"]!.GetValue<string>());
+        byte[] rawRoot = SyntheticRawImages.CreateRootImage(rootUuid);
+        byte[] gzRoot = SyntheticRawImages.Gzip(rawRoot);
+        File.WriteAllBytes(Path.Combine(media, "images", "linux-root.btrfs.gz"), gzRoot);
+        rootImage["bytes"] = gzRoot.LongLength;
+        rootImage["sha256"] = Convert.ToHexString(SHA256.HashData(gzRoot));
+        rootImage["expandedBytes"] = rawRoot.LongLength;
+        rootImage["expandedSha256"] = Convert.ToHexString(SHA256.HashData(rawRoot));
+
+        File.WriteAllText(Path.Combine(media, "package.json"), descriptor.ToJsonString());
+        return media;
     }
 
     [Fact]
@@ -746,7 +832,7 @@ public sealed class Tb323fuGblAblReplacementTests
 
         InternalInstallPrepared prepared = session.Backend.Prepared;
         Assert.Equal(InternalInstallBootTrustMode.GblPreserveOem, prepared.BootTrustMode);
-        Assert.Equal(new[] { "a", "b" }, prepared.GblAblReplacementSlots);
+        Assert.Equal(new[] { "b", "a" }, prepared.GblAblReplacementSlots);
 
         EdlCapturedRegion ablA = session.Backup.Files["abl_a"];
         EdlCapturedRegion ablB = session.Backup.Files["abl_b"];
