@@ -514,9 +514,7 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
             // The raw package keeps its real 1 GiB streaming ext4 gzip, tiny Btrfs superblock, UUIDs, DTB
             // pair and truthful metadata; only the kernel payload is replaced by the BM ARM64 kernel.
             rawPackage = InternalInstallEdlRawSnapshotTests.RawPackage.Create(rawShared);
-            kernelPackage = new EdlRawBootBuilderTests.SyntheticPackage(
-                deviceModel: toolchain.Model,
-                usesArmadaBoot: usesArmadaBoot);
+            kernelPackage = new EdlRawBootBuilderTests.SyntheticPackage(deviceModel: toolchain.Model);
             rawPackage.RewriteArtifact("kernel", kernelPackage.Kernel);
 
             // The final common package may omit the optional Android FW/HWID constraint groups entirely;
@@ -526,6 +524,10 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 metadata.Remove("edlProfile");
                 var compatibility = metadata["bootCompatibility"]!.AsObject();
                 compatibility.Remove("firmwareVersions");
+                if (usesArmadaBoot)
+                {
+                    metadata["bootRecipe"]!["linuxBootSource"] = "armada-boot-v1";
+                }
 
                 // Only the G5 model declares its own package identity and compatibility pair; every other
                 // model keeps the snapshot's original metadata and default constraint groups byte for byte.
@@ -598,9 +600,10 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
 
             if (zeroSlot is not null)
             {
-                // The factory-uninitialized target is the existing all-zero fixture; the device still pads
-                // every one of its five claims to the real partition, so the backup captures padded zeros.
-                InactiveSlotBackupFixture inactiveTarget = InactiveSlotBackupFixture.Create(workspace);
+                // An empty ABL still occupies its original partition. The synthetic GPT derives
+                // the partition size from the claim, so keep the target's ABL length when zeroing it.
+                InactiveSlotBackupFixture inactiveTarget = InactiveSlotBackupFixture.Create(
+                    workspace, ablLength: sources["abl_" + zeroSlot].Length);
 
                 if (corruptZeroBoot)
                 {
@@ -825,6 +828,10 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
 
             EdlRawPackageContract contract =
                 PackageReader.ReadEdlRawContract(imported.PackageDirectory, toolchain.Model);
+            if (usesArmadaBoot)
+            {
+                Assert.True(contract.BootRecipe.UsesArmadaBoot);
+            }
 
             // Both optional Android FW/HWID constraint groups are omitted and read back as absent.
             Assert.Null(contract.EdlProfileId);
