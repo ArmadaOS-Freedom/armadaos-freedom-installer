@@ -44,6 +44,14 @@ python3 -B maintenance/build_installer.py \
 
 两个参数必须同时提供：真实单 EXE 发布缺少其中任意一个都会在读取清单、下载、编译或打包之前立即报错；只给其中一个同样被拒绝。MSBuild 的 `PublishSingleFile` 闸门也分别以 `FRDM1027` / `FRDM1029` 拒绝完全缺失，并以 `FRDM1028` / `FRDM1030` 拒绝路径不存在。提供后仍执行全部既有校验：存在、可读、普通文件与 256 MiB（与 SSH 上传上限一致）压缩体积，以及更新包内 `manifest.json` 的身份、入口、必需能力、成员大小与 SHA-256；清单版本写入 props 与程序集元数据，安装器只按该版本核对安装回执与部署后探测结果，不按文件名猜测版本，也不在代码里写死版本号。
 
+## GitHub Actions 双平台发布构建
+
+在安装器仓库的 **Actions → Build installer release → Run workflow** 选择 `main`，填写正式使用的 `system_image_digest`（`sha256:…`）。系统镜像来自 `ghcr.io/armadaos-freedom/armadaos-freedom`，应选用已包含离线更新器的 ARM64 镜像。可通过 `docker buildx imagetools inspect ghcr.io/armadaos-freedom/armadaos-freedom:testing` 查看测试频道当前的摘要。
+
+正式构建按该工作流的运行编号分配补丁版本，首轮为 `1.1.6`，下一轮为 `1.1.7`。新启动的运行会获得新编号，即使稍后失败。GitHub Actions 的重新运行沿用原编号和版本。普通 CI 和 `CI` 中使用 `package_test_version` 发起的打包验证不占用正式版本号。
+
+同一次运行从指定镜像生成一份引导脚本和离线更新器包。Windows x64 和 macOS Apple silicon 使用相同的安装器提交、发布版本和离线组件。Actions 的产物分别包含 `ArmadaOS-Freedom-Installer-1.1.6.exe`、`ArmadaOS-Freedom-Installer-1.1.6-macOS-arm64.zip` 及各自的 SHA-256。Mac ZIP 内含已本地签名的 `.app`。两个产物都可从该次 Actions 运行下载。
+
 ## macOS 版
 
 在 Apple 芯片的 Mac 上安装 .NET SDK 10 和 Xcode 命令行工具（`xcode-select --install`），在仓库根目录运行：
@@ -52,7 +60,7 @@ python3 -B maintenance/build_installer.py \
 python3 -B maintenance/build_installer_macos.py --work-dir "$PWD/artifacts/build-macos" --output-dir "$PWD/artifacts/publish-macos"
 ```
 
-产物为 `artifacts/publish-macos/ArmadaOS Freedom Installer.app`，未签名、未公证，首次打开时需在“系统设置 → 隐私与安全性”中确认。脚本复用 Windows 构建的清单、厂商文件与下载校验：edl-ng 编译为 osx-arm64，打包工具用 `tools/build-boot-packers-macos.sh` 编为通用二进制，libusb 取自同一个已固定哈希的 LibUsbDotNet 包中的 `runtimes/osx-arm64/native/libusb-1.0.dylib`，再按本次产物生成固定哈希，用 `package_edl.py --platform macos-arm64` 制作各型号（TB322FC、TB323FU、TB710FU）9008 工具包（不含 Python）。adb 和 fastboot 取自清单中固定哈希的 Google macOS 版 platform-tools（`platformToolsMacos`），嵌入程序，首次运行时解压到 `~/Library/Application Support/FreedomInstaller/platform-tools`。
+产物为 `artifacts/publish-macos/ArmadaOS Freedom Installer.app`，使用 ad hoc 签名，首次打开时可能需要在“系统设置 → 隐私与安全性”中确认。脚本复用 Windows 构建的清单、厂商文件与下载校验：edl-ng 编译为 osx-arm64，打包工具用 `tools/build-boot-packers-macos.sh` 编为通用二进制，libusb 取自同一个已固定哈希的 LibUsbDotNet 包中的 `runtimes/osx-arm64/native/libusb-1.0.dylib`，再按本次产物生成固定哈希，用 `package_edl.py --platform macos-arm64` 制作各型号（TB322FC、TB323FU、TB710FU）9008 工具包（不含 Python）。adb 和 fastboot 取自清单中固定哈希的 Google macOS 版 platform-tools（`platformToolsMacos`），嵌入程序，首次运行时解压到 `~/Library/Application Support/FreedomInstaller/platform-tools`。
 
 ## 构建流程
 
