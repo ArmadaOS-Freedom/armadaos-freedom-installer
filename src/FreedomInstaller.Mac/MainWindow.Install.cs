@@ -1993,6 +1993,9 @@ public partial class MainWindow
     // The write chain the last bounded wait covered: a close that leaves the window open (a declined prompt) and later
     // writes queue a new chain, which gets its own wait; the chain already waited for is not waited for twice.
     private Task? _preparationFailureLogsWaited;
+    // The deadline of the close request being served, passed to the helper's own Close(): a write chain queued during
+    // the wait shares the same ten seconds instead of starting a second wait. A later user close gets a fresh one.
+    private DateTime? _preparationFailureLogsCloseDeadline;
 
     private void QueuePreparationFailureLog(string details)
     {
@@ -2022,11 +2025,20 @@ public partial class MainWindow
             return false;
         }
 
+        var deadline = _preparationFailureLogsCloseDeadline ?? DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        var remaining = deadline - DateTime.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+        {
+            // This close request already used its ten seconds: go on to the remaining close checks.
+            _preparationFailureLogsWaited = pending;
+            return false;
+        }
+
         e.Cancel = true;
         _preparationFailureLogsFlushing = true;
         try
         {
-            await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(10)));
+            await Task.WhenAny(pending, Task.Delay(remaining));
         }
         finally
         {
@@ -2034,7 +2046,17 @@ public partial class MainWindow
             _preparationFailureLogsWaited = pending;
         }
 
-        Close();
+        // The re-entrant closing handler reads the deadline synchronously, before its first await.
+        _preparationFailureLogsCloseDeadline = deadline;
+        try
+        {
+            Close();
+        }
+        finally
+        {
+            _preparationFailureLogsCloseDeadline = null;
+        }
+
         return true;
     }
 
