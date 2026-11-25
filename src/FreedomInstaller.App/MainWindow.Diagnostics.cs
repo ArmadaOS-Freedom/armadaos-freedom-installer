@@ -32,6 +32,7 @@ public partial class MainWindow
 
     private bool _diagnosticExporting;
     private bool _showingDiagnostics;
+    private bool _returnToSupportAfterDiagnostics;
     private string? _diagnosticDestinationPath;
     private IReadOnlyList<DiagnosticBootFile> _diagnosticBootSnapshot = Array.Empty<DiagnosticBootFile>();
     private bool _diagnosticAblAvailable;
@@ -120,6 +121,20 @@ public partial class MainWindow
     private void OnExportDiagnostics(object sender, RoutedEventArgs e)
     {
         if (_closed) return;
+
+        if (_showingDiagnostics)
+        {
+            if (_showingSupport)
+            {
+                _showingSupport = false;
+                ApplyFunctionView();
+            }
+            return;
+        }
+
+        _returnToSupportAfterDiagnostics = _showingSupport;
+        _showingSupport = false;
+
         ShowDiagnosticPage();
     }
 
@@ -185,6 +200,8 @@ public partial class MainWindow
     {
         if (_diagnosticExporting) return;
         _showingDiagnostics = false;
+        _showingSupport = _returnToSupportAfterDiagnostics;
+        _returnToSupportAfterDiagnostics = false;
         ApplyFunctionView();
     }
 
