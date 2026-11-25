@@ -559,7 +559,9 @@ public partial class MainWindow
             SetModernUserdataUninstallExitStatus(M("Dynamic.UserdataUninstall.Exit.Probing"));
             try
             {
-                await client.ProbeAsync(0, false, CancellationToken.None);
+                // 首次 Sahara 证明还没拿到（例如第一次探测在加载器启动前就失败）时必须用首次探测，
+                // 否则 EdlClient 直接拒绝，重插线也无法重试（与维护流程的退出相同）。
+                await client.ProbeAsync(0, initialLoader: !client.HasInitialSaharaProof, CancellationToken.None);
             }
             catch (Exception exception)
             {

@@ -639,6 +639,7 @@ public partial class MainWindow
             if (sourceChanged)
             {
                 ClearUserdataUninstallRecoverySource();
+                DropUserdataUninstallDerivedBackupParent();
             }
 
             InvalidateModernUserdataUninstallPreparation();

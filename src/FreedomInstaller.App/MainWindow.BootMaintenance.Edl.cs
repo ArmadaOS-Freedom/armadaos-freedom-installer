@@ -138,6 +138,8 @@ public partial class MainWindow
                 return;
             }
 
+            // 用户明确选的目录（哪怕和现在的相同）：换恢复来源时不再作废它。
+            _userdataUninstallBackupParentFromSource = false;
             ApplyInternalInstallBackupParent(folder);
             parent = folder;
         }
