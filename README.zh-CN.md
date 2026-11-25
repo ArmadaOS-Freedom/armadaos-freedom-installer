@@ -24,7 +24,7 @@ ArmadaOS Freedom 安装助手是 [ArmadaOS Freedom](https://github.com/ArmadaOS-
 |---|---|---|
 | 联想拯救者 Y700 四代 | TB322FC | 机身安装；Windows 版支持维护、卸载、备份与恢复 |
 | 联想拯救者 Y700 五代 | TB323FU | 机身安装；Windows 版支持维护、卸载、备份与恢复 |
-| 联想小新 Pad Pro GT | TB710FU | 机身安装；Windows 版支持全局备份与只读校验 |
+| 联想小新 Pad Pro GT | TB710FU | 机身安装；离线升级；Windows 版支持全局备份与只读校验 |
 
 **Windows 版**提供上述安装与维护功能；**macOS 版目前只提供机身安装**。TB710FU 的维护、卸载和全局恢复暂未开放，TF／microSD 卡系统安装也暂不提供。
 
