@@ -1,0 +1,39 @@
+name: Build installer release
+
+on:
+  workflow_dispatch:
+    inputs:
+      system_image_digest:
+        description: "Pinned ARM64 ArmadaOS image digest (sha256:...)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Assign a release version to this run
+    runs-on: ubuntu-24.04
+    outputs:
+      release_version: ${{ steps.version.outputs.release_version }}
+    steps:
+      - name: Check out installer source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Compute the shared installer version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(PYTHONPATH=maintenance python3 -B -c 'import os; from build_installer_release import version_for_run; print(version_for_run("1.1.6", int(os.environ["GITHUB_RUN_NUMBER"])))')
+          printf 'release_version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'Installer release version: %s\n' "$version" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: version
+    uses: ./.github/workflows/release-installer.yml
+    with:
+      version: ${{ needs.version.outputs.release_version }}
+      system_image_digest: ${{ inputs.system_image_digest }}

@@ -8,15 +8,28 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      package_test_version:
+        description: "Version for a Windows and Mac packaging test"
+        type: string
+      system_image_digest:
+        description: "Pinned ARM64 ArmadaOS image digest (sha256:...)"
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.package_test_version || 'checks' }}
+  cancel-in-progress: ${{ inputs.package_test_version == '' }}
 
 jobs:
+  test-installer-packages:
+    if: github.event_name == 'workflow_dispatch' && (inputs.package_test_version != '' || inputs.system_image_digest != '')
+    uses: ./.github/workflows/release-installer.yml
+    with:
+      version: ${{ inputs.package_test_version }}
+      system_image_digest: ${{ inputs.system_image_digest }}
   build-windows:
     name: Build all projects (Windows, Release)
     runs-on: windows-2025
@@ -72,6 +85,7 @@ jobs:
   # input is public: the checked-in vendor files plus the pinned downloads in
   # maintenance/build-inputs.json. The bundle is not notarized.
   build-macos:
+    if: github.event_name != 'workflow_dispatch' || (inputs.package_test_version == '' && inputs.system_image_digest == '')
     name: Build the macOS installer (Apple silicon)
     runs-on: macos-15
     timeout-minutes: 60
