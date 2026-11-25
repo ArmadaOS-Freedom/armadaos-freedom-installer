@@ -6,6 +6,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -143,6 +144,22 @@ public static class DiagnosticBundle
         return result;
     }
 
+    private static string SanitizeExportText(
+        string text,
+        IReadOnlyList<string> redactions,
+        string? serial)
+    {
+        string result = Sanitize(text, redactions);
+        if (serial is { Length: > 0 and < 4 } && !string.IsNullOrWhiteSpace(serial))
+        {
+            // Short values are removed as ADB tokens so common letters or digits
+            // do not corrupt arbitrary words elsewhere in the log.
+            string pattern = @"(?<![A-Za-z0-9_.-])" + Regex.Escape(serial) + @"(?![A-Za-z0-9_.-])";
+            result = Regex.Replace(result, pattern, "[redacted]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+        return result;
+    }
+
     /// <summary>
     /// Exports the diagnostic bundle to <paramref name="destination"/>. All validation,
     /// including aliasing checks against unselected/invalid sources, happens before any
@@ -175,10 +192,10 @@ public static class DiagnosticBundle
 
         IReadOnlyList<string> redactions = request.Redactions ?? Array.Empty<string>();
         string? lastCheckedDeviceSerial = request.LastCheckedDeviceSerial;
-        if (IsPlausibleLocalAdbSerial(lastCheckedDeviceSerial))
+        if (lastCheckedDeviceSerial is { Length: >= 4 })
         {
             var withTarget = new List<string>(redactions);
-            withTarget.Add(lastCheckedDeviceSerial!);
+            withTarget.Add(lastCheckedDeviceSerial);
             redactions = withTarget;
         }
         IReadOnlyList<DiagnosticBootFile> supplied = request.BootFiles ?? Array.Empty<DiagnosticBootFile>();
@@ -204,7 +221,7 @@ public static class DiagnosticBundle
                     zip,
                     "summary.txt",
                     Utf8NoBom.GetBytes(AppendLastCheckedDeviceSerialIfRequested(
-                        Sanitize(request.Summary ?? string.Empty, redactions),
+                        SanitizeExportText(request.Summary ?? string.Empty, redactions, lastCheckedDeviceSerial),
                         lastCheckedDeviceSerial,
                         request.IncludeLastCheckedDeviceSerial)));
 
@@ -213,7 +230,7 @@ public static class DiagnosticBundle
                     zip,
                     "installer.log",
                     Utf8NoBom.GetBytes(AppendLastCheckedDeviceSerialIfRequested(
-                        Sanitize(request.Log ?? string.Empty, redactions),
+                        SanitizeExportText(request.Log ?? string.Empty, redactions, lastCheckedDeviceSerial),
                         lastCheckedDeviceSerial,
                         request.IncludeLastCheckedDeviceSerial)));
 
@@ -223,7 +240,9 @@ public static class DiagnosticBundle
                     var environment = new SortedDictionary<string, string?>(StringComparer.Ordinal);
                     foreach (var pair in request.HostEnvironment)
                     {
-                        environment[pair.Key] = pair.Value is null ? null : Sanitize(pair.Value, redactions);
+                        environment[pair.Key] = pair.Value is null
+                            ? null
+                            : SanitizeExportText(pair.Value, redactions, lastCheckedDeviceSerial);
                     }
                     WriteEntry(zip, "environment.json", JsonSerializer.SerializeToUtf8Bytes(environment, JsonOptions));
                 }

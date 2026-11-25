@@ -264,19 +264,52 @@ public sealed class DiagnosticBundleTests : IDisposable
         // 非法（多行/控制字符）序列号被忽略：不写入 LastCheckedDeviceSerial 行。
         File.Delete(dest);
         var invalidReq = new DiagnosticExportRequest(
-            "s\n", "l\n",
+            "target=" + invalidMultiline + "\n",
+            "target=" + invalidMultiline + "\n",
             Array.Empty<string>(),
             Array.Empty<DiagnosticBootFile>(),
             false, false)
         {
+            HostEnvironment = new Dictionary<string, string?> { ["DIAG_TEST_VALUE"] = invalidMultiline },
             LastCheckedDeviceSerial = invalidMultiline,
             IncludeLastCheckedDeviceSerial = true,
         };
         await DiagnosticBundle.ExportAsync(dest, invalidReq);
         var zip2 = ReadZip(dest);
-        string logText2 = Encoding.UTF8.GetString(zip2["installer.log"]);
-        Assert.DoesNotContain("LastCheckedDeviceSerial=", logText2, StringComparison.Ordinal);
-        Assert.DoesNotContain("malicious=true", logText2, StringComparison.Ordinal);
+        foreach (string entry in new[] { "summary.txt", "installer.log", "environment.json" })
+        {
+            string text = Encoding.UTF8.GetString(zip2[entry]);
+            Assert.DoesNotContain("LastCheckedDeviceSerial=", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("malicious=true", text, StringComparison.Ordinal);
+            Assert.Contains("[redacted]", text);
+        }
+    }
+
+    [Theory]
+    [InlineData("A")]
+    [InlineData("A_")]
+    [InlineData("A.B")]
+    public async Task Default_bundle_masks_short_serial_tokens_without_altering_other_values(string serial)
+    {
+        string other = serial + "-else";
+        string knownSecret = $"secret {serial} text";
+        string message = $"target={serial.ToLowerInvariant()}; other={other}; note={knownSecret}";
+        string dest = Path.Combine(_root, "short.zip");
+        var request = new DiagnosticExportRequest(
+            message, message, new[] { "els", knownSecret }, Array.Empty<DiagnosticBootFile>(), false, false)
+        {
+            LastCheckedDeviceSerial = serial,
+            HostEnvironment = new Dictionary<string, string?> { ["DIAG_TEST_VALUE"] = message },
+        };
+
+        await DiagnosticBundle.ExportAsync(dest, request);
+
+        var zip = ReadZip(dest);
+        string expected = "target=[redacted]; other=" + other + "; note=[redacted]";
+        Assert.Equal(expected, Encoding.UTF8.GetString(zip["summary.txt"]));
+        Assert.Equal(expected, Encoding.UTF8.GetString(zip["installer.log"]));
+        using var environment = JsonDocument.Parse(zip["environment.json"]);
+        Assert.Equal(expected, environment.RootElement.GetProperty("DIAG_TEST_VALUE").GetString());
     }
 
     private static int CountOccurrences(string text, string needle)

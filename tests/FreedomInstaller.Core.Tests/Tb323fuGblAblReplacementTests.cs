@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
@@ -353,7 +353,8 @@ public sealed class Tb323fuGblAblReplacementTests
             prepared.ConfirmationId,
             userdataEraseConfirmed: true);
 
-        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.True(result.Outcome == InternalInstallOutcome.InstallationCompleted,
+            $"Outcome: {result.Outcome}; stage: {result.LastVerifiedStage}; error: {result.ErrorCode}; diagnostic: {result.Diagnostic}");
         Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
         var writes = session.EdlRunner.Writes;
         Assert.Equal(13, writes.Count);
@@ -430,7 +431,8 @@ public sealed class Tb323fuGblAblReplacementTests
             prepared.ConfirmationId,
             userdataEraseConfirmed: true);
 
-        Assert.Equal(InternalInstallOutcome.InstallationCompleted, result.Outcome);
+        Assert.True(result.Outcome == InternalInstallOutcome.InstallationCompleted,
+            $"Outcome: {result.Outcome}; stage: {result.LastVerifiedStage}; error: {result.ErrorCode}; diagnostic: {result.Diagnostic}");
         Assert.Equal(InternalInstallWriteState.AllVerified, result.WriteState);
         Assert.Equal(new[] { "b", "a" }, result.VerifiedSlots);
         Assert.Equal(1, session.EdlRunner.ResetCount);
