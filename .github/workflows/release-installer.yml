@@ -42,6 +42,24 @@ jobs:
         with:
           remove-codeql: true
 
+      - name: Enable containerd image storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          # System images can exceed the legacy overlay2 layer limit.
+          config=/etc/docker/daemon.json
+          staged=$(mktemp)
+          trap 'rm -f -- "$staged"' EXIT
+          if sudo test -f "$config"; then
+            sudo jq '.features["containerd-snapshotter"] = true' "$config" > "$staged"
+          else
+            printf '%s\n' '{"features":{"containerd-snapshotter":true}}' > "$staged"
+          fi
+          sudo install -D -m 0644 "$staged" "$config"
+          sudo systemctl restart docker
+          docker info --format '{{json .DriverStatus}}' | \
+            jq -e 'any(.[]; .[0] == "driver-type" and .[1] == "io.containerd.snapshotter.v1")'
+
       - name: Pull the exact system image
         shell: bash
         id: system
