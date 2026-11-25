@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using FreedomInstaller.Core;
@@ -598,7 +599,29 @@ public sealed class Tb323fuGblAblReplacementTests
     }
 
     [Fact]
-    public async Task LockedTb323fu_ReinstallChecksInactiveBootBudgetAndRejectsIncompleteArmadaBootImage()
+    public Task LockedTb323fu_ReinstallChecksInactiveBootBudgetAndRejectsIncompleteArmadaBootImage() =>
+        VerifyInactiveBootBudgetOnReinstallAsync(signedBootFixture: null);
+
+    [SignedBootFixtureFact]
+    public Task LockedTb323fu_SignedArmadaBootReinstallAutomaticallySelectsReplacementAbl() =>
+        VerifyInactiveBootBudgetOnReinstallAsync(
+            Environment.GetEnvironmentVariable(SignedBootFixtureFactAttribute.FixtureVariable)!);
+
+    private sealed class SignedBootFixtureFactAttribute : FactAttribute
+    {
+        public const string FixtureVariable = "TB323FU_SIGNED_BOOT_FIXTURE_DIR";
+
+        public SignedBootFixtureFactAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(FixtureVariable)))
+            {
+                Skip = "Provide the TB323FU direct-package descriptor and signed ARMADA_BOOT payload using "
+                    + FixtureVariable + ".";
+            }
+        }
+    }
+
+    private async Task VerifyInactiveBootBudgetOnReinstallAsync(string? signedBootFixture)
     {
         if (!Tb323fuAbl088Assets.IsBundled)
         {
@@ -619,26 +642,39 @@ public sealed class Tb323fuGblAblReplacementTests
             customAbl: incompatibleAbl,
             customXbl: xbl);
 
-        InvalidOperationException rejectedPackage = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-        {
-            using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
-                _g5.Toolchain,
-                _raw,
-                currentSlot: "a",
-                zeroSlot: "b",
-                bootOnlyInactiveB: true,
-                avbSourceKind: DirectAvbSourceKind.Oem,
-                observedFastbootLockState: BootloaderState.Locked,
-                gblSources: source,
-                reinstallAndroidGiB: 16,
-                usesArmadaBoot: true,
-                configureReinstallOverlayAsync: VerifyPreviousBootAsync);
-        });
+        string? media = signedBootFixture is null ? null : CreateSignedBootMedia(signedBootFixture, caseDir);
+        Task<DirectInstallReadyTestSession> PrepareAsync() => DirectInstallReadyTestSession.CreateAsync(
+            _g5.Toolchain,
+            _raw,
+            currentSlot: "a",
+            zeroSlot: "b",
+            bootOnlyInactiveB: true,
+            avbSourceKind: DirectAvbSourceKind.Oem,
+            observedFastbootLockState: BootloaderState.Locked,
+            gblSources: source,
+            reinstallAndroidGiB: 16,
+            mediaPath: media,
+            usesArmadaBoot: true,
+            configureReinstallOverlayAsync: VerifyPreviousBootAsync,
+            expectedNativeCalls: media is null ? 6 : 11);
 
-        // The ordinary raw-package fixture has only an ext4 superblock. Advertising ARMADA_BOOT
-        // must reach the full filesystem verifier and fail before selecting the reinstall boot plan.
-        Assert.StartsWith("maintenance-installed-linux-mismatch:", rejectedPackage.Message, StringComparison.Ordinal);
-        Assert.Contains("extents feature", rejectedPackage.Message, StringComparison.Ordinal);
+        if (media is not null)
+        {
+            using DirectInstallReadyTestSession prepared = await PrepareAsync();
+            Assert.Equal(new[] { "a" }, prepared.Backend.Prepared.GblAblReplacementSlots);
+            Assert.True(prepared.Backend.Prepared.AvbSlots["b"].NonbootableSystem);
+            Assert.Empty(prepared.EdlRunner.Writes);
+            Assert.Equal(0, prepared.EdlRunner.ResetCount);
+        }
+        else
+        {
+            // The ordinary fixture only has an ext4 superblock. It may not pass
+            // the signed ARMADA_BOOT gate or reach reinstall preparation.
+            InvalidOperationException rejectedPackage = await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => { using DirectInstallReadyTestSession _ = await PrepareAsync(); });
+            Assert.StartsWith("maintenance-installed-linux-mismatch:", rejectedPackage.Message, StringComparison.Ordinal);
+            Assert.Contains("extents feature", rejectedPackage.Message, StringComparison.Ordinal);
+        }
 
         async Task VerifyPreviousBootAsync(
             IB001SyntheticDevice device,
@@ -707,6 +743,41 @@ public sealed class Tb323fuGblAblReplacementTests
             File.Copy(prior.CandidateBoot.Path, overlay);
             device.AddWriteOverlay(bootB.Lun, bootB.StartSector, bootB.SectorCount, overlay);
         }
+    }
+
+    private static string CreateSignedBootMedia(string fixture, string caseDir)
+    {
+        string media = Path.Combine(caseDir, "signed-armada-boot-media");
+        Directory.CreateDirectory(media);
+        foreach (string relative in new[]
+        {
+            "images/linux-boot.ext4.gz", "boot/kernel.img", "boot/initramfs.img",
+            "boot/dtb-normal.img", "boot/dtb-diagnostic.img", "runtime/runtime.bin",
+        })
+        {
+            string target = Path.Combine(media, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(Path.Combine(fixture, Path.GetFileName(relative)), target);
+        }
+
+        JsonObject descriptor = JsonNode.Parse(File.ReadAllText(Path.Combine(fixture, "package.json")))!.AsObject();
+        JsonObject rootImage = descriptor["artifacts"]!.AsArray().Select(item => item!.AsObject())
+            .Single(item => item["role"]!.GetValue<string>() == "linux-root-raw");
+
+        // Preparation reads the root superblock. A synthetic root keeps the
+        // published UUID without importing a whole Linux root filesystem.
+        // ARMADA_BOOT and all of its signed payloads are the original bytes.
+        Guid rootUuid = Guid.Parse(rootImage["fsUuid"]!.GetValue<string>());
+        byte[] rawRoot = SyntheticRawImages.CreateRootImage(rootUuid);
+        byte[] gzRoot = SyntheticRawImages.Gzip(rawRoot);
+        File.WriteAllBytes(Path.Combine(media, "images", "linux-root.btrfs.gz"), gzRoot);
+        rootImage["bytes"] = gzRoot.LongLength;
+        rootImage["sha256"] = Convert.ToHexString(SHA256.HashData(gzRoot));
+        rootImage["expandedBytes"] = rawRoot.LongLength;
+        rootImage["expandedSha256"] = Convert.ToHexString(SHA256.HashData(rawRoot));
+
+        File.WriteAllText(Path.Combine(media, "package.json"), descriptor.ToJsonString());
+        return media;
     }
 
     [Fact]

@@ -472,7 +472,8 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         IReadOnlyDictionary<string, VerifiedEdlFile>? sourceOverrides = null,
         Action<IB001SyntheticDevice, string>? configureInitialDevice = null,
         bool usesArmadaBoot = false,
-        Func<IB001SyntheticDevice, EdlRawBootTools, ICommandRunner, InternalBackupSet, EdlRawPackageContract, string, Task>? configureReinstallOverlayAsync = null)
+        Func<IB001SyntheticDevice, EdlRawBootTools, ICommandRunner, InternalBackupSet, EdlRawPackageContract, string, Task>? configureReinstallOverlayAsync = null,
+        int expectedNativeCalls = 6)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -908,7 +909,7 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
             }
 
             Assert.Equal(currentSlot, backend.Prepared.CurrentSlot);
-            Assert.Equal(6, oracle.Calls);
+            Assert.Equal(expectedNativeCalls, oracle.Calls);
 
             transferred = true;
             return new DirectInstallReadyTestSession(
