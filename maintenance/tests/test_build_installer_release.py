@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import argparse
 from pathlib import Path
+import plistlib
 import struct
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -46,6 +48,35 @@ class InstallerReleaseTests(unittest.TestCase):
                 "BundledOfflineUpdaterVersion": "1.0.0",
             }.items():
                 self.assertEqual(document.findtext(f".//{name}"), value)
+
+    def test_macos_verifies_the_managed_assembly_for_a_dotted_launcher_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = root / "Installer.app"
+            contents = app / "Contents"
+            macos_dir = contents / "MacOS"
+            macos_dir.mkdir(parents=True)
+            version = "1.1.6"
+            revision = "e" * 40
+            launcher_name = "FreedomInstaller.Mac"
+            with (contents / "Info.plist").open("wb") as stream:
+                plistlib.dump({
+                    "CFBundleExecutable": launcher_name,
+                    "CFBundleShortVersionString": version,
+                    "CFBundleVersion": version,
+                }, stream)
+            script = root / "bootstrap"
+            script.write_bytes(b"bootstrap content")
+            bundle = root / "updater"
+            bundle.write_bytes(b"bundle content")
+            assembly = macos_dir / f"{launcher_name}.dll"
+            assembly.write_bytes(
+                f"{version}+{revision}".encode("utf-8") + script.read_bytes() + bundle.read_bytes()
+            )
+
+            with patch.object(release.subprocess, "check_output", return_value="arm64\n") as lipo:
+                release.verify_macos_app(app, version, revision, script, bundle)
+            lipo.assert_called_once_with(["lipo", "-archs", macos_dir / launcher_name], text=True)
 
     def test_packages_must_have_matching_version_and_both_offline_components(self):
         with tempfile.TemporaryDirectory() as directory:

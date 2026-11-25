@@ -68,6 +68,20 @@ def verify_payload(binary, version, revision, script, bundle, *, windows_binary)
             raise SystemExit(f"Release does not embed the validated {resource.name}")
 
 
+def verify_macos_app(app, version, revision, script, bundle):
+    contents = app / "Contents"
+    with (contents / "Info.plist").open("rb") as stream:
+        info = plistlib.load(stream)
+    if (info["CFBundleShortVersionString"] != version
+            or info["CFBundleVersion"] != version):
+        raise SystemExit("macOS bundle version differs from the release version")
+    launcher = contents / "MacOS" / info["CFBundleExecutable"]
+    if subprocess.check_output(["lipo", "-archs", launcher], text=True).strip() != "arm64":
+        raise SystemExit("Mac installer is not Apple silicon arm64")
+    assembly = launcher.with_name(f"{launcher.name}.dll")
+    verify_payload(assembly, version, revision, script, bundle, windows_binary=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", required=True, choices=("win-x64", "macos-arm64"))
@@ -108,17 +122,7 @@ def main():
     dist.mkdir(parents=True, exist_ok=True)
     if on_mac:
         app = macos.publish(source, record, work_dir / "published-app", env)
-        contents = app / "Contents"
-        with (contents / "Info.plist").open("rb") as stream:
-            info = plistlib.load(stream)
-        if (info["CFBundleShortVersionString"] != args.version
-                or info["CFBundleVersion"] != args.version):
-            raise SystemExit("macOS bundle version differs from the release version")
-        launcher = contents / "MacOS" / info["CFBundleExecutable"]
-        if subprocess.check_output(["lipo", "-archs", launcher], text=True).strip() != "arm64":
-            raise SystemExit("Mac installer is not Apple silicon arm64")
-        verify_payload(launcher.with_suffix(".dll"), args.version, args.source_revision,
-                       script, bundle, windows_binary=False)
+        verify_macos_app(app, args.version, args.source_revision, script, bundle)
         artifact = dist / f"{name}-macOS-arm64.zip"
         subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, artifact],
                        check=True)
