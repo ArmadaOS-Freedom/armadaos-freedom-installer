@@ -759,8 +759,13 @@ public static partial class InternalInstallBackup
         SealedFile?[] sealedFiles = { haveActive ? activeSealed : null, inactiveSealed };
         string[] observations = new string[roles.Length];
         string? activeReason = null;
+        bool canReplaceWithPinned088 = string.Equals(model, "TB323FU", StringComparison.Ordinal)
+            && lockState == BootloaderState.Locked
+            && Tb323fuAbl088Assets.IsBundled;
 
-        // Inspect both sealed ABL copies, each read exactly once from its held stream.
+        // Inspect both sealed ABL copies, each read exactly once from its held stream. The inactive copy is
+        // observation-only: an incompatible resource is never loaded here, because the backup does not yet
+        // know whether installation will use, replace, or copy that slot.
         for (int i = 0; i < roles.Length; i++)
         {
             token.ThrowIfCancellationRequested();
@@ -778,28 +783,32 @@ public static partial class InternalInstallBackup
             byte[] raw = await ReadHeldAsync(sealedFile.Stream, sealedFile.Length, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
 
-            if (raw.AsSpan().IndexOfAnyExcept((byte)0) < 0)
+            bool zeroFilled = raw.AsSpan().IndexOfAnyExcept((byte)0) < 0;
+            string? reason = zeroFilled ? "decode failure" : GetFirstInstallAblIncompatibility(raw, token);
+            if (reason is null)
             {
-                observations[i] = roles[i] + "=zero-filled";
-                if (i == 0)
-                {
-                    activeReason = "decode failure";
-                }
+                observations[i] = roles[i] + "=compatible";
                 continue;
             }
 
-            string? reason = GetFirstInstallAblIncompatibility(raw, token);
-            if (reason is not null)
+            observations[i] = roles[i] + (zeroFilled ? "=zero-filled" : "=incompatible");
+            if (i != 0)
             {
-                observations[i] = roles[i] + "=incompatible";
-                if (i == 0)
-                {
-                    activeReason = reason;
-                }
                 continue;
             }
 
-            observations[i] = roles[i] + "=compatible";
+            if (canReplaceWithPinned088 && sealedFile.Length == Tb323fuAbl088Assets.ImageLength)
+            {
+                // The active slot is the one that can require this replacement at the first-install gate.
+                // Verify the embedded bytes now so a broken asset fails before any device write. The inactive
+                // slot remains observation-only and must not make this check depend on the resource.
+                _ = Tb323fuAbl088Assets.ReadVerifiedBytes(token);
+                observations[i] = roles[i] + "=replaceable";
+            }
+            else
+            {
+                activeReason = reason;
+            }
         }
 
         if (!haveActive || activeReason is not null)

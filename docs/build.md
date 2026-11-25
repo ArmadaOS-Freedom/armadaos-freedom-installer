@@ -69,7 +69,7 @@ python3 -B maintenance/build_installer_macos.py --work-dir "$PWD/artifacts/build
 | Python | python.org 官方 3.14.8 Windows AMD64 嵌入式 ZIP。 |
 | libusb DLL | 从 LibUsbDotNet 3.0.167-alpha 官方 NuGet 包提取 Windows x64 文件，与原安装器使用的 DLL 内容一致。 |
 | GBL EFI | 从 miner7222/gbl_root_baldur 的 6.2.192-mod2 固定版本取得 PRC / ROW 文件；源码仓库与提交记录在清单中。 |
-| 四代、五代、TB710FU 加载器 | 原件分别在 `vendor/qualcomm/g4`、`vendor/qualcomm/g5`、`vendor/qualcomm/tb710fu`，各自独立打包。TB710FU 的加载器取自 ZUXOS 1.5.04.495 免解锁补充包的 `EDL/xbl_s_devprg_ns.melf`。四代目录另含可接受 AOSP 签名链的 ABL，来源固件 TB322FC ZUXOS 1.1.11.188；它不是固件版本绑定镜像，只在实时 ABL 不接受 AOSP 签名链时按槽位替换。 |
+| 四代、五代、TB710FU 加载器 | 原件分别在 `vendor/qualcomm/g4`、`vendor/qualcomm/g5`、`vendor/qualcomm/tb710fu`，各自独立打包。TB710FU 的加载器取自 ZUXOS 1.5.04.495 免解锁补充包的 `EDL/xbl_s_devprg_ns.melf`。四代目录另含可接受 AOSP 签名链的 ABL（来源 TB322FC ZUXOS 1.1.11.188），五代目录另含支持加载 efisp 的原厂签名 ABL（来源 TB323FU ZUXOS 2.0.12.088）；两者均不是固件版本绑定镜像，只在实时 ABL 不满足对应免解锁条件时按槽位替换。 |
 | Qualcomm 驱动 | 2.1.5.2 AMD64 原始文件在 `vendor/qualcomm/driver`，保留签名和 `serial/amd64` 目录结构。 |
 | ADB / Fastboot 驱动 | Google USB Driver r13 与 OPLUS 11.0.0000.00000 的 AMD64 原件在 `vendor/android`，保留 INF、CAT 与配套 DLL。构建时按固定哈希校验并压缩嵌入，来源见该目录的 `NOTICE.txt`。 |
 | AOSP 测试素材 | 官方公开的 RSA4096 测试文件在 `vendor/aosp`，附官方出处、哈希和上游许可原文。 |

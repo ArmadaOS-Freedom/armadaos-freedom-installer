@@ -34,6 +34,15 @@
     <ProjectReference Include="..\FreedomInstaller.Core\FreedomInstaller.Core.csproj" />
   </ItemGroup>
 
+  <!-- Private direct Android-erase opt-in, the same MSBuild property pair as the WPF project: both must be present
+       together and produce paired AssemblyMetadata; a lone or blank value embeds nothing and the default stays off. -->
+  <ItemGroup Condition="'$(DirectAndroidEraseModel)' != '' and '$(DirectAndroidEraseBuildFingerprint)' != ''">
+    <AssemblyMetadata Include="DirectAndroidEraseModel"
+                      Value="$(DirectAndroidEraseModel)" />
+    <AssemblyMetadata Include="DirectAndroidEraseBuildFingerprint"
+                      Value="$(DirectAndroidEraseBuildFingerprint)" />
+  </ItemGroup>
+
   <!-- The WPF window's text catalog code and both catalogs, shared as files so both front ends show the same
        words. Mac.*.json only adds the few lines that name the Mac host instead of Windows. -->
   <ItemGroup>
@@ -45,6 +54,8 @@
     <Compile Include="..\FreedomInstaller.App\OfflineUpdateSessionCatalog.cs" Link="Shared\OfflineUpdateSessionCatalog.cs" />
     <Compile Include="..\FreedomInstaller.App\OfflineUpdateRecoveryCatalog.cs" Link="Shared\OfflineUpdateRecoveryCatalog.cs" />
     <Compile Include="..\FreedomInstaller.App\OfflineBootstrapAssets.cs" Link="Shared\OfflineBootstrapAssets.cs" />
+    <!-- The direct Android-erase opt-in check (reads this assembly's own metadata; see below). -->
+    <Compile Include="..\FreedomInstaller.App\AndroidDataErasePreview.cs" Link="Shared\AndroidDataErasePreview.cs" />
     <EmbeddedResource Include="..\FreedomInstaller.App\Resources\Static.*.json"
                       Link="Shared\Resources\%(Filename)%(Extension)"
                       LogicalName="FreedomInstaller.Strings.%(Filename).json"

@@ -85,6 +85,46 @@ internal sealed partial class InternalInstallPreparationContext
         return roles.AsReadOnly();
     }
 
+    /// <summary>
+    /// Whether any selected source slot of an AOSP-preserving model carries a non-empty root vbmeta signed by a
+    /// key other than the AOSP signing key (TB710FU: Lenovo's stock ZUXOS 1.5.04.495). Such a source cannot take
+    /// the boot-only route and is classified by the ABL proof instead. An empty root is skipped, and a root that
+    /// does not authenticate is not OEM evidence: the boot-only gate then refuses it exactly as before.
+    /// </summary>
+    private static async Task<bool> AnyDirectSourceRootIsOemAsync(
+        IReadOnlyDictionary<string, string> sourceSlots,
+        BackupFacts backup,
+        CancellationToken ct)
+    {
+        foreach (string source in new SortedSet<string>(sourceSlots.Values, StringComparer.Ordinal))
+        {
+            ct.ThrowIfCancellationRequested();
+
+            VerifiedEdlFile root = Claim(backup.Files, "vbmeta_" + source);
+            if (await EdlRawBootBuilder.CurrentBootDetectEmptyAsync(root, ct).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            EdlRawOriginalBootChainFacts facts;
+            try
+            {
+                facts = await EdlRawBootBuilder.AuthenticatePreservedBootChainAsync(root, ct).ConfigureAwait(false);
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+
+            if (!SameSha(facts.PublicKeySha256, EdlRawBootBuilder.SigningPublicKeySha256))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     internal VerifiedEdlFile GblEfispCandidate => RequireDirectGblPlan().Inputs.EfispCandidate;
 
     internal EdlCapturedRegion GblEfispTarget => RequireDirectGblPlan().Inputs.EfispTarget;
@@ -373,17 +413,26 @@ internal sealed partial class InternalInstallPreparationContext
             return;
         }
 
-        // Only the two files this preparation staged are removed. The backup, the caller's own input and the
+        // Only the files this preparation staged are removed. The backup, the caller's own input and the
         // evidence reports stay untouched, and no directory is enumerated.
         TryDeleteGblStaged(inputs.RuntimeAsset.Path);
         TryDeleteGblStaged(inputs.EfispCandidate.Path);
+        if (inputs.ReplacementAbl is { } replacementAbl)
+        {
+            TryDeleteGblStaged(replacementAbl.Path);
+        }
     }
 
     private sealed record GblAblBytes(VerifiedEdlFile Bound, byte[] Raw, byte[] Pe);
 
     private static string GblSha256Hex(ReadOnlySpan<byte> bytes) => Sha256Text.Hex(bytes).ToUpperInvariant();
 
-    private static GblAblBytes ReadGblAblBytes(string role, VerifiedEdlFile bound, List<HeldClaim> claims, CancellationToken ct)
+    private static bool TryReadGblAblBytes(
+        string role,
+        VerifiedEdlFile bound,
+        List<HeldClaim> claims,
+        CancellationToken ct,
+        out GblAblBytes? decoded)
     {
         var raw = ReadGblHeldBytes(role, bound, claims, ct);
         if (!SameSha(GblSha256Hex(raw), bound.Sha256))
@@ -393,11 +442,23 @@ internal sealed partial class InternalInstallPreparationContext
 
         if (!InternalSlotLoaderStructure.TryDecodeAblForGbl(raw, ct, out var pe))
         {
+            decoded = null;
+            return false;
+        }
+
+        decoded = new GblAblBytes(bound, raw, pe);
+        return true;
+    }
+
+    private static GblAblBytes ReadGblAblBytes(string role, VerifiedEdlFile bound, List<HeldClaim> claims, CancellationToken ct)
+    {
+        if (!TryReadGblAblBytes(role, bound, claims, ct, out var decoded) || decoded is null)
+        {
             throw new InvalidOperationException(
                 "requires-compatible-bootloader: indeterminate first-candidate parseability for '" + role + "'.");
         }
 
-        return new GblAblBytes(bound, raw, pe);
+        return decoded;
     }
 
     // Early input factory only: no Ready gate, no final VerifiedGblPlan and no child binding.
@@ -408,7 +469,8 @@ internal sealed partial class InternalInstallPreparationContext
         BackupFacts backup,
         string evidenceDirectory,
         List<HeldClaim> claims,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowBundledAblReplacement = false)
     {
         if (fastbootLockState == BootloaderState.Unlocked)
         {
@@ -464,109 +526,212 @@ internal sealed partial class InternalInstallPreparationContext
             return null;
         }
 
-        var decoded = new Dictionary<string, GblAblBytes>(StringComparer.Ordinal);
-        string? runtimeSelectedSourceSlot = null;
+        bool canReplaceWithPinned088 = allowBundledAblReplacement
+            && fastbootLockState == BootloaderState.Locked
+            && string.Equals(backup.Model, "TB323FU", StringComparison.Ordinal)
+            && Tb323fuAbl088Assets.IsBundled;
+        int initialClaimCount = claims.Count;
+        VerifiedEdlFile? stagedReplacement = null;
+        GblAblBytes? replacementAblBytes = null;
+        DetectionResult? replacementEntry = null;
 
-        foreach (var target in new[] { "a", "b" })
+        try
         {
-            ct.ThrowIfCancellationRequested();
-
-            if (!sourceSlots.TryGetValue(target, out var source) || string.IsNullOrEmpty(source))
+            async Task<(GblAblBytes Effective, DetectionResult Entry, bool Replaced)> ResolveSourceAblAsync(string source)
             {
-                throw new InvalidDataException("gbl-source-map-incomplete: missing source for target '" + target + "'.");
+                string ablRole = "abl_" + source;
+                VerifiedEdlFile liveClaim = Claim(backup.Files, ablRole);
+                bool liveParsed = TryReadGblAblBytes(ablRole, liveClaim, claims, ct, out var liveDecoded);
+                DetectionResult? liveEntry = liveParsed && liveDecoded is not null
+                    ? EfispLoadDetector.Detect(liveDecoded.Pe)
+                    : null;
+                if (liveDecoded is not null && liveEntry?.Status == EfispLoad.Yes)
+                {
+                    return (liveDecoded, liveEntry, false);
+                }
+
+                if (!canReplaceWithPinned088)
+                {
+                    if (!liveParsed)
+                    {
+                        throw new InvalidOperationException(
+                            "requires-compatible-bootloader: indeterminate first-candidate parseability for '" + ablRole + "'.");
+                    }
+
+                    throw new InvalidOperationException(
+                        "requires-compatible-bootloader: static entry unavailable or undetermined from "
+                        + ablRole + ": " + liveEntry!.Reason);
+                }
+
+                if (liveClaim.Length != Tb323fuAbl088Assets.ImageLength)
+                {
+                    throw new InvalidDataException(
+                        "tb323fu-abl088-size: the pinned ABL is " + Tb323fuAbl088Assets.ImageLength
+                        + " bytes, but the current '" + ablRole + "' partition is " + liveClaim.Length + " bytes.");
+                }
+
+                if (stagedReplacement is null)
+                {
+                    stagedReplacement = await Tb323fuAbl088Assets.StageAsync(evidenceDirectory, ct).ConfigureAwait(false);
+                    Tb323fuAbl088Assets.RequirePinnedCandidate(stagedReplacement);
+                    HoldStagedAsset("tb323fu-abl-088", stagedReplacement, claims, ct);
+                    byte[] replacementRaw = ReadGblHeldBytes("tb323fu-abl-088", stagedReplacement, claims, ct);
+                    if (!InternalSlotLoaderStructure.TryDecodeAblForGbl(replacementRaw, ct, out byte[] replacementPe))
+                    {
+                        throw new InvalidOperationException(
+                            "tb323fu-abl088-invalid: the pinned image is not an efisp-loading TB323FU ABL container.");
+                    }
+
+                    var detected = EfispLoadDetector.Detect(replacementPe);
+                    if (detected.Status != EfispLoad.Yes)
+                    {
+                        throw new InvalidOperationException(
+                            "tb323fu-abl088-invalid: the pinned image does not report EfispLoad.Yes.");
+                    }
+
+                    replacementAblBytes = new GblAblBytes(stagedReplacement, replacementRaw, replacementPe);
+                    replacementEntry = detected;
+                }
+
+                string xblRole = "xbl_config_" + source;
+                VerifiedEdlFile xblClaim = Claim(backup.Files, xblRole);
+                byte[] xblRaw = ReadGblHeldBytes(xblRole, xblClaim, claims, ct);
+                if (!SameSha(GblSha256Hex(xblRaw), xblClaim.Sha256))
+                {
+                    throw new InvalidDataException(
+                        "gbl-abl-bytes-mismatch: '" + xblRole + "' does not match the verified source.");
+                }
+
+                if (!InternalSlotLoaderStructure.TryRecognize(replacementAblBytes!.Raw, xblRaw, ct, out _))
+                {
+                    throw new InvalidDataException(
+                        "tb323fu-abl088-window: the pinned 088 ABL does not match the current "
+                        + xblRole + " loader window.");
+                }
+
+                return (replacementAblBytes, replacementEntry!, true);
             }
 
-            // A source that is not its own target stays empty by the strict five-zero rule.
-            if (!string.Equals(source, target, StringComparison.Ordinal))
+            var resolved = new Dictionary<string, (GblAblBytes Effective, DetectionResult Entry, bool Replaced)>(StringComparer.Ordinal);
+            string? runtimeSelectedSourceSlot = null;
+
+            foreach (var target in new[] { "a", "b" })
             {
-                continue;
+                ct.ThrowIfCancellationRequested();
+
+                if (!sourceSlots.TryGetValue(target, out var source) || string.IsNullOrEmpty(source))
+                {
+                    throw new InvalidDataException("gbl-source-map-incomplete: missing source for target '" + target + "'.");
+                }
+
+                // A source that is not its own target stays empty by the strict five-zero rule.
+                if (!string.Equals(source, target, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                resolved[source] = await ResolveSourceAblAsync(source).ConfigureAwait(false);
+                runtimeSelectedSourceSlot = source;
+                break;
             }
 
-            var role = "abl_" + target;
-            decoded[source] = ReadGblAblBytes(role, Claim(backup.Files, role), claims, ct);
-            runtimeSelectedSourceSlot = source;
-            break;
-        }
-
-        if (runtimeSelectedSourceSlot is null)
-        {
-            throw new InvalidOperationException(
-                "requires-compatible-bootloader: no parseable abl_a or abl_b is bound in the verified backup.");
-        }
-
-        var evidence = new Dictionary<string, GblSourceEvidence>(StringComparer.Ordinal);
-        GblRuntimeRegion? commonRegion = null;
-
-        foreach (var source in sources)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            if (!decoded.TryGetValue(source, out var abl))
-            {
-                var ablRole = "abl_" + source;
-                abl = ReadGblAblBytes(ablRole, Claim(backup.Files, ablRole), claims, ct);
-                decoded[source] = abl;
-            }
-
-            var entry = EfispLoadDetector.Detect(abl.Pe);
-            if (entry.Status != EfispLoad.Yes)
+            if (runtimeSelectedSourceSlot is null)
             {
                 throw new InvalidOperationException(
-                    "requires-compatible-bootloader: static entry unavailable or undetermined from " + ("abl_" + source) + ": " + entry.Reason);
+                    "requires-compatible-bootloader: no parseable abl_a or abl_b is bound in the verified backup.");
             }
 
-            var vendorRole = "vendor_boot_" + source;
-            var region = ReadGblRuntimeRegion(ReadGblHeldBytes(vendorRole, Claim(backup.Files, vendorRole), claims, ct), ct);
-            if (region is null)
+            var evidence = new Dictionary<string, GblSourceEvidence>(StringComparer.Ordinal);
+            var replacedSourceSlots = new List<string>(sources.Count);
+            GblRuntimeRegion? commonRegion = null;
+
+            foreach (var source in sources)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (!resolved.TryGetValue(source, out var sourceAbl))
+                {
+                    sourceAbl = await ResolveSourceAblAsync(source).ConfigureAwait(false);
+                    resolved[source] = sourceAbl;
+                }
+
+                var vendorRole = "vendor_boot_" + source;
+                var region = ReadGblRuntimeRegion(ReadGblHeldBytes(vendorRole, Claim(backup.Files, vendorRole), claims, ct), ct);
+                if (region is null)
+                {
+                    throw new InvalidOperationException(
+                        "gbl-runtime-region-unknown: '" + vendorRole + "' carries no exact PRC/ROW product_region.");
+                }
+
+                if (commonRegion is null)
+                {
+                    commonRegion = region;
+                }
+                else if (commonRegion != region)
+                {
+                    throw new InvalidOperationException(
+                        "gbl-runtime-region-unknown: conflicting product_region across source slots ('" + vendorRole + "').");
+                }
+
+                VerifiedEdlFile liveAblClaim = Claim(backup.Files, "abl_" + source);
+                if (sourceAbl.Replaced)
+                {
+                    replacedSourceSlots.Add(source);
+                }
+
+                evidence[source] = new GblSourceEvidence(
+                    source,
+                    liveAblClaim,
+                    sourceAbl.Effective.Bound,
+                    sourceAbl.Replaced,
+                    GblSha256Hex(sourceAbl.Effective.Pe),
+                    sourceAbl.Entry,
+                    region.Value,
+                    parentFacts[source]);
+            }
+
+            replacedSourceSlots.Sort(StringComparer.Ordinal);
+
+            var runtimeRegion = evidence[runtimeSelectedSourceSlot].Region;
+
+            if (!backup.Files.TryGetValue("efisp", out var efispTarget))
             {
                 throw new InvalidOperationException(
-                    "gbl-runtime-region-unknown: '" + vendorRole + "' carries no exact PRC/ROW product_region.");
+                    "requires-complete-backup-with-efisp: a new complete backup containing efisp is required.");
             }
 
-            if (commonRegion is null)
-            {
-                commonRegion = region;
-            }
-            else if (commonRegion != region)
-            {
-                throw new InvalidOperationException(
-                    "gbl-runtime-region-unknown: conflicting product_region across source slots ('" + vendorRole + "').");
-            }
+            var (runtimeAsset, candidate) = await StageGblEfispAsync(runtimeRegion, efispTarget, evidenceDirectory, claims, ct)
+                .ConfigureAwait(false);
 
-            evidence[source] = new GblSourceEvidence(
-                source,
-                abl.Bound,
-                GblSha256Hex(abl.Pe),
-                entry,
-                region.Value,
-                parentFacts[source]);
+            return new GblPreparationInputs(
+                currentSlot,
+                sourceSlots,
+                evidence,
+                runtimeSelectedSourceSlot,
+                runtimeRegion,
+                efispTarget,
+                runtimeAsset,
+                candidate,
+                stagedReplacement,
+                replacedSourceSlots);
         }
-
-        var runtimeRegion = evidence[runtimeSelectedSourceSlot].Region;
-
-        if (!backup.Files.TryGetValue("efisp", out var efispTarget))
+        catch
         {
-            throw new InvalidOperationException(
-                "requires-complete-backup-with-efisp: a new complete backup containing efisp is required.");
+            ReleaseGblClaims(claims, initialClaimCount);
+            if (stagedReplacement is not null)
+            {
+                TryDeleteGblStaged(stagedReplacement.Path);
+            }
+
+            throw;
         }
-
-        var (runtimeAsset, candidate) = await StageGblEfispAsync(runtimeRegion, efispTarget, evidenceDirectory, claims, ct)
-            .ConfigureAwait(false);
-
-        return new GblPreparationInputs(
-            currentSlot,
-            sourceSlots,
-            evidence,
-            runtimeSelectedSourceSlot,
-            runtimeRegion,
-            efispTarget,
-            runtimeAsset,
-            candidate);
     }
 
     private sealed record GblSourceEvidence(
         string SourceSlot,
         VerifiedEdlFile Abl,
+        VerifiedEdlFile EffectiveAbl,
+        bool Replaced,
         string PeSha256,
         DetectionResult Entry,
         GblRuntimeRegion Region,
@@ -582,7 +747,9 @@ internal sealed partial class InternalInstallPreparationContext
             GblRuntimeRegion runtimeRegion,
             EdlCapturedRegion efispTarget,
             VerifiedEdlFile runtimeAsset,
-            VerifiedEdlFile efispCandidate)
+            VerifiedEdlFile efispCandidate,
+            VerifiedEdlFile? replacementAbl = null,
+            IReadOnlyList<string>? replacedSourceSlots = null)
         {
             CurrentSlot = currentSlot ?? throw new ArgumentNullException(nameof(currentSlot));
             SourceSlots = CopyReadOnlyMap(sourceSlots ?? throw new ArgumentNullException(nameof(sourceSlots)));
@@ -592,6 +759,40 @@ internal sealed partial class InternalInstallPreparationContext
             EfispTarget = efispTarget;
             RuntimeAsset = runtimeAsset;
             EfispCandidate = efispCandidate;
+            ReplacementAbl = replacementAbl;
+            ReplacedSourceSlots = Array.AsReadOnly((replacedSourceSlots ?? Array.Empty<string>()).ToArray());
+            var copySourceSlots = new SortedSet<string>(StringComparer.Ordinal);
+            var copiedTargetSlots = new List<string>(2);
+            foreach (string target in new[] { "a", "b" })
+            {
+                string source = SourceSlots[target];
+                if (string.Equals(source, target, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!Sources.TryGetValue(source, out GblSourceEvidence? sourceEvidence))
+                {
+                    throw new ArgumentException(
+                        "A copied GBL ABL target requires verified source evidence for '" + source + "'.",
+                        nameof(sources));
+                }
+
+                copySourceSlots.Add(source);
+                copiedTargetSlots.Add(target);
+            }
+
+            CopiedSourceSlots = Array.AsReadOnly(copySourceSlots.ToArray());
+            CopiedTargetSlots = Array.AsReadOnly(copiedTargetSlots.ToArray());
+            if (ReplacedSourceSlots.Count > 0 && ReplacementAbl is null)
+            {
+                throw new ArgumentException("Replaced source slots require a staged replacement ABL.", nameof(replacementAbl));
+            }
+
+            if (ReplacedSourceSlots.Count == 0 && ReplacementAbl is not null)
+            {
+                throw new ArgumentException("A staged replacement ABL requires at least one replaced source slot.", nameof(replacementAbl));
+            }
         }
 
         internal string CurrentSlot { get; }
@@ -609,6 +810,14 @@ internal sealed partial class InternalInstallPreparationContext
         internal VerifiedEdlFile RuntimeAsset { get; }
 
         internal VerifiedEdlFile EfispCandidate { get; }
+
+        internal VerifiedEdlFile? ReplacementAbl { get; }
+
+        internal IReadOnlyList<string> ReplacedSourceSlots { get; }
+
+        internal IReadOnlyList<string> CopiedSourceSlots { get; }
+
+        internal IReadOnlyList<string> CopiedTargetSlots { get; }
     }
 
     private sealed class VerifiedGblPlan
@@ -673,7 +882,7 @@ internal sealed partial class InternalInstallPreparationContext
 
         var selectedMaterial = selectedEntry.SlotMaterial;
         if (!selectedMaterial.SourceSha256.TryGetValue("abl", out var materialAbl)
-            || !SameSha(materialAbl, selectedSource.Abl.Sha256))
+            || !SameSha(materialAbl, selectedSource.EffectiveAbl.Sha256))
         {
             throw new InvalidDataException(
                 "gbl-source-material-mismatch: 'abl' hash for slot '" + selected + "' disagrees with the verified source.");
@@ -696,9 +905,9 @@ internal sealed partial class InternalInstallPreparationContext
                 "gbl-abl-bytes-mismatch: '" + currentXblRole + "' does not match the verified source.");
         }
 
-        var selectedAblRole = "abl_" + selected;
-        var selectedAblRaw = ReadGblHeldBytes(selectedAblRole, selectedSource.Abl, claims, ct);
-        if (!SameSha(GblSha256Hex(selectedAblRaw), selectedSource.Abl.Sha256))
+        var selectedAblRole = selectedSource.Replaced ? "tb323fu-abl-088" : "abl_" + selected;
+        var selectedAblRaw = ReadGblHeldBytes(selectedAblRole, selectedSource.EffectiveAbl, claims, ct);
+        if (!SameSha(GblSha256Hex(selectedAblRaw), selectedSource.EffectiveAbl.Sha256))
         {
             throw new InvalidDataException(
                 "gbl-abl-bytes-mismatch: '" + selectedAblRole + "' does not match the verified source.");
@@ -739,6 +948,13 @@ internal sealed partial class InternalInstallPreparationContext
                 {
                     throw new InvalidDataException(
                         "gbl-source-material-mismatch: material for target '" + target + "' reports slot '" + sourceMaterial.Slot + "'.");
+                }
+
+                if (!sourceMaterial.SourceSha256.TryGetValue("abl", out var targetMaterialAbl)
+                    || !SameSha(targetMaterialAbl, sourceEvidence.EffectiveAbl.Sha256))
+                {
+                    throw new InvalidDataException(
+                        "gbl-source-material-mismatch: 'abl' hash for target '" + target + "' disagrees with the verified source.");
                 }
 
                 var selectedBudget = selectedMaterial.LoaderBudget;
@@ -835,9 +1051,27 @@ internal sealed partial class InternalInstallPreparationContext
             }
 
             roles.Add("abl_" + source);
+            roles.Add("xbl_config_" + source);
             roles.Add("recovery_" + source);
             roles.Add("vbmeta_system_" + source);
             roles.Add("vbmeta_" + source);
+        }
+
+        foreach (var replacedSlot in inputs.ReplacedSourceSlots)
+        {
+            roles.Add("abl_" + replacedSlot);
+            roles.Add("xbl_config_" + replacedSlot);
+        }
+
+        foreach (string copiedTarget in inputs.CopiedTargetSlots)
+        {
+            roles.Add("abl_" + copiedTarget);
+        }
+
+        // Ensure xbl_config for all sources with loader budgets are included in guard roles
+        foreach (var source in inputs.Sources.Keys)
+        {
+            roles.Add("xbl_config_" + source);
         }
 
         return roles
@@ -845,6 +1079,36 @@ internal sealed partial class InternalInstallPreparationContext
             .OrderBy(role => role, StringComparer.Ordinal)
             .ToList()
             .AsReadOnly();
+    }
+
+    private static IReadOnlyDictionary<string, VerifiedEdlFile> GetGblAblWritePlan(GblPreparationInputs inputs)
+    {
+        var writes = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal);
+        if (inputs.ReplacementAbl is { } replacement)
+        {
+            foreach (string slot in inputs.ReplacedSourceSlots)
+            {
+                writes["abl_" + slot] = replacement;
+            }
+        }
+
+        foreach (string target in inputs.CopiedTargetSlots)
+        {
+            string source = inputs.SourceSlots[target];
+            if (!inputs.Sources.TryGetValue(source, out GblSourceEvidence? sourceEvidence))
+            {
+                throw new InvalidDataException(
+                    "gbl-source-material-mismatch: no verified source evidence for copied ABL source '" + source + "'.");
+            }
+
+            if (!writes.TryAdd("abl_" + target, sourceEvidence.EffectiveAbl))
+            {
+                throw new InvalidDataException(
+                    "gbl-abl-write-plan-conflict: target '" + target + "' has both a replacement and a copy.");
+            }
+        }
+
+        return new ReadOnlyDictionary<string, VerifiedEdlFile>(writes);
     }
 
     private static void DisposeGblBoots(VerifiedGblPlan? plan)
@@ -863,4 +1127,113 @@ internal sealed partial class InternalInstallPreparationContext
     internal IReadOnlyList<string> GblGuardRoles => GetGblGuardRoles(RequireDirectGblPlan().Inputs);
 
     internal IReadOnlyDictionary<string, long> GblRuntimeRawBounds => RequireDirectGblPlan().RuntimeRawBounds;
+
+    internal IReadOnlyDictionary<string, VerifiedEdlFile> GblAblReplacements
+    {
+        get
+        {
+            if (_directGblPlan?.Inputs is not { } inputs)
+            {
+                return new ReadOnlyDictionary<string, VerifiedEdlFile>(
+                    new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal));
+            }
+
+            var map = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal);
+            foreach (string slot in inputs.ReplacedSourceSlots)
+            {
+                if (inputs.ReplacementAbl is null)
+                {
+                    throw new InvalidDataException(
+                        "gbl-abl-write-plan-conflict: a replaced source slot has no staged replacement ABL.");
+                }
+
+                map["abl_" + slot] = inputs.ReplacementAbl;
+            }
+
+            return new ReadOnlyDictionary<string, VerifiedEdlFile>(map);
+        }
+    }
+
+    internal IReadOnlyDictionary<string, VerifiedEdlFile> GblAblCopies
+    {
+        get
+        {
+            if (_directGblPlan?.Inputs is not { } inputs)
+            {
+                return new ReadOnlyDictionary<string, VerifiedEdlFile>(
+                    new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal));
+            }
+
+            var plan = GetGblAblWritePlan(inputs);
+            var replacements = new HashSet<string>(
+                inputs.ReplacedSourceSlots.Select(slot => "abl_" + slot),
+                StringComparer.Ordinal);
+            var copies = new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal);
+            foreach (string target in inputs.CopiedTargetSlots)
+            {
+                string role = "abl_" + target;
+                if (!replacements.Contains(role))
+                {
+                    copies[role] = plan[role];
+                }
+            }
+
+            return new ReadOnlyDictionary<string, VerifiedEdlFile>(copies);
+        }
+    }
+
+    internal IReadOnlyDictionary<string, VerifiedEdlFile> GblAblWrites
+    {
+        get
+        {
+            return _directGblPlan?.Inputs is { } inputs
+                ? GetGblAblWritePlan(inputs)
+                : new ReadOnlyDictionary<string, VerifiedEdlFile>(
+                    new Dictionary<string, VerifiedEdlFile>(StringComparer.Ordinal));
+        }
+    }
+
+    internal IReadOnlyList<string> GblAblReplacementSlots
+    {
+        get
+        {
+            if (_directGblPlan?.Inputs is not { ReplacedSourceSlots.Count: > 0 } inputs)
+            {
+                return Array.Empty<string>();
+            }
+
+            var ordered = new List<string>(inputs.ReplacedSourceSlots.Count);
+            foreach (var slot in SlotOrder)
+            {
+                if (inputs.ReplacedSourceSlots.Contains(slot, StringComparer.Ordinal))
+                {
+                    ordered.Add(slot);
+                }
+            }
+
+            return ordered.AsReadOnly();
+        }
+    }
+
+    internal IReadOnlyList<string> GblAblCopySlots
+    {
+        get
+        {
+            if (_directGblPlan?.Inputs is not { CopiedTargetSlots.Count: > 0 } inputs)
+            {
+                return Array.Empty<string>();
+            }
+
+            var ordered = new List<string>(inputs.CopiedTargetSlots.Count);
+            foreach (string slot in SlotOrder)
+            {
+                if (inputs.CopiedTargetSlots.Contains(slot, StringComparer.Ordinal))
+                {
+                    ordered.Add(slot);
+                }
+            }
+
+            return ordered.AsReadOnly();
+        }
+    }
 }

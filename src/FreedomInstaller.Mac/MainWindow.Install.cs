@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
@@ -125,9 +125,12 @@ public partial class MainWindow
         (_internalInstallClient is not null && !_internalInstallExitVerified)
         || (_internalInstallClient is null && _internalInstallEntryAttempted);
 
-    /// <summary>The tablet is (or may be) in 9008 for this window, from the install wizard or the global page.</summary>
+    /// <summary>The tablet is (or may be) in 9008 for this window, from the install wizard or another device page.</summary>
     private bool HasLiveDeviceSession =>
-        HasInternalInstallDeviceSession || HasGlobalRecoveryProtectedState || HasBootMaintenanceDeviceSession;
+        HasInternalInstallDeviceSession
+        || HasGlobalRecoveryProtectedState
+        || HasBootMaintenanceDeviceSession
+        || HasUninstallDeviceSession;
 
     /// <summary>An entry to 9008 was attempted but produced no client, so neither a reset nor a verified return is possible here.</summary>
     private bool HasUnconfirmedEdlEntry => _internalInstallClient is null && _internalInstallEntryAttempted;
@@ -274,6 +277,7 @@ public partial class MainWindow
         RefreshGlobalRecoveryActions();
         RefreshOfflineUpgradeActions();
         RefreshBootMaintenanceActions();
+        RefreshUninstallActions();
     }
 
     private async Task RunBusyAsync(Func<CancellationToken, Task> work)
@@ -1346,9 +1350,26 @@ public partial class MainWindow
         summary = prepared.BootTrustMode switch
         {
             InternalInstallBootTrustMode.GblPreserveOem =>
-                M("Dynamic.InternalInstall.Execution.WithFailureDetails", summary, M("Dynamic.InternalInstall.Prepared.GblInstallMode")),
+                M(
+                    "Dynamic.InternalInstall.Execution.WithFailureDetails",
+                    summary,
+                    prepared.GblAblReplacementSlots.Count != 0
+                        ? M(
+                            "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
+                            string.Join(", ", prepared.GblAblReplacementSlots),
+                            string.Join(", ", prepared.GblAblCopySlots))
+                        : M("Dynamic.InternalInstall.Prepared.GblInstallMode")),
             InternalInstallBootTrustMode.AospPreserved =>
                 M("Dynamic.InternalInstall.Execution.WithFailureDetails", summary, M("Dynamic.InternalInstall.Prepared.AospPreservedInstallMode")),
+            _ when prepared.Abl188ReplacementSlots.Count != 0 =>
+                M(
+                    "Dynamic.InternalInstall.Execution.WithFailureDetails",
+                    summary,
+                    M(
+                        prepared.AblReplacementKind == "tb710fu-279"
+                            ? "Dynamic.InternalInstall.Prepared.Tb710fuAblInstallMode"
+                            : "Dynamic.InternalInstall.Prepared.Abl188InstallMode",
+                        string.Join(", ", prepared.Abl188ReplacementSlots))),
             _ => summary,
         };
         SetText(

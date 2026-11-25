@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.IO;
 using System.Threading;
@@ -936,10 +936,17 @@ public partial class MainWindow
         // 免解锁安装才追加一行短安装方式：它只是保留下来的嵌套消息，随整段一起重渲染。
         if (prepared.BootTrustMode == InternalInstallBootTrustMode.GblPreserveOem)
         {
+            var gblModeMessage = prepared.GblAblReplacementSlots.Count != 0
+                || prepared.GblAblCopySlots.Count != 0
+                    ? M(
+                        "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
+                        string.Join(", ", prepared.GblAblReplacementSlots),
+                        string.Join(", ", prepared.GblAblCopySlots))
+                    : M("Dynamic.InternalInstall.Prepared.GblInstallMode");
             preparedSummaryMessage = M(
                 "Dynamic.InternalInstall.Execution.WithFailureDetails",
                 preparedSummaryMessage,
-                M("Dynamic.InternalInstall.Prepared.GblInstallMode"));
+                gblModeMessage);
         }
         else if (prepared.BootTrustMode == InternalInstallBootTrustMode.AospPreserved)
         {
@@ -954,7 +961,9 @@ public partial class MainWindow
                 "Dynamic.InternalInstall.Execution.WithFailureDetails",
                 preparedSummaryMessage,
                 M(
-                    "Dynamic.InternalInstall.Prepared.Abl188InstallMode",
+                    prepared.AblReplacementKind == "tb710fu-279"
+                        ? "Dynamic.InternalInstall.Prepared.Tb710fuAblInstallMode"
+                        : "Dynamic.InternalInstall.Prepared.Abl188InstallMode",
                     string.Join(", ", prepared.Abl188ReplacementSlots)));
         }
 

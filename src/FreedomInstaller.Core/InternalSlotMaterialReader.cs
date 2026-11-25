@@ -173,10 +173,27 @@ public static class InternalSlotMaterialReader
     // TB710FU (ZUXOS 1.5.04.495 loaders; A and B are identical). Its xbl_config also reserves the
     // Kernel region memory@A8000000 / 0x10000000, so the same 256 MiB window arithmetic applies.
     private const string Tb710fuProfile = "tb710fu-abl495-xbl-config-ramdisk-derived";
-    private const string Tb710fuAblSha256 = "6cfa16e65c2dadd0fc557dd356e6c383c693b4c3b7f0a651d92bb9f6e38b74a8";
     private const long Tb710fuAblBytes = 1048576;
-    private const string Tb710fuXblSha256 = "388eb4d311993e9b314f058d11f1fb1b486ed2536090b086ea95ffbbc9ec9ce6";
     private const long Tb710fuXblBytes = 245760;
+
+    // Whole-partition sha256 of the reviewed TB710FU loaders.
+    //  - ABL: the AOSP-capable CN ZUI 17.0.04.279 loader of the no-unlock chain (PinnedAospAbl.Tb710fu), and Lenovo's
+    //    stock ZUXOS 1.5.04.495 loader. The stock one verifies with Lenovo's key, so an AOSP-signed boot never runs
+    //    under it: the install replaces it with the 279 loader first.
+    //  - xbl_config: the build the no-unlock chain shipped with, and Lenovo's stock ZUXOS 1.5.04.495 build. The two
+    //    differ only in the signature block at the end (bytes 217761-218420); the configuration, Kernel region
+    //    memory@A8000000 / 0x10000000 included, is byte-identical.
+    private static readonly string[] Tb710fuAblSha256 =
+    {
+        "6cfa16e65c2dadd0fc557dd356e6c383c693b4c3b7f0a651d92bb9f6e38b74a8",
+        "1cdc214a8f5cbd24878ccba205cf71c61be998696181d0933e3500113f326d72",
+    };
+
+    private static readonly string[] Tb710fuXblSha256 =
+    {
+        "388eb4d311993e9b314f058d11f1fb1b486ed2536090b086ea95ffbbc9ec9ce6",
+        "ee165befc3fcac316f9c2ea0cd609207774ae5351af554a8706da29a7c90c0a4",
+    };
     private const int KnownPage = 4096;
     private const int KnownV4Headers = 3;
 
@@ -784,8 +801,8 @@ public static class InternalSlotMaterialReader
             v4HeaderCount == KnownV4Headers;
 
         bool knownTb710fu =
-            string.Equals(ablSha256, Tb710fuAblSha256, StringComparison.Ordinal) &&
-            string.Equals(xblSha256, Tb710fuXblSha256, StringComparison.Ordinal) &&
+            Array.IndexOf(Tb710fuAblSha256, ablSha256) >= 0 &&
+            Array.IndexOf(Tb710fuXblSha256, xblSha256) >= 0 &&
             ablBytes == Tb710fuAblBytes &&
             xblBytes == Tb710fuXblBytes &&
             pageSize == KnownPage &&
@@ -805,7 +822,7 @@ public static class InternalSlotMaterialReader
                     Tb710fuProfile,
                     room,
                     true,
-                    "identified the TB710FU ZUXOS 495 ABL/xbl_config full sha256+length (same on A and B), page 4096, three validated v4 headers; xbl_config Kernel region memory@A8000000 size 0x10000000; a 155 MiB unpacked kShimC boot was booted on this loader pair",
+                    "identified a reviewed TB710FU ABL/xbl_config full sha256+length (CN 279 or stock ZUXOS 495 ABL; no-unlock or stock ZUXOS 495 xbl_config, identical apart from the signature block), page 4096, three validated v4 headers; xbl_config Kernel region memory@A8000000 size 0x10000000; a 155 MiB unpacked kShimC boot was booted on the CN 279 ABL with the no-unlock xbl_config",
                     $"max_raw_bytes = 268435456 - 524288 - align_up({total}, 4096) - 8192 - 2097152");
             }
 

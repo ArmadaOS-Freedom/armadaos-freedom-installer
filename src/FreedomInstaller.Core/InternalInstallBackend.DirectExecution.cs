@@ -106,6 +106,8 @@ public sealed partial class InternalInstallBackend
 
         var metadataRegions = new List<InternalArtifactRegion>();
         var ablRegions = new List<InternalArtifactRegion>();
+        var gblAblRegions = new List<InternalArtifactRegion>();
+        IReadOnlyList<string> orderedGblAblSlots;
 
         if (_context.DirectBootTrustMode == InternalInstallBootTrustMode.GblPreserveOem)
         {
@@ -137,9 +139,38 @@ public sealed partial class InternalInstallBackend
 
             candidateA = MakeExecutionRegion(
                 RequireCapturedRegion("boot_a"), gblBoots["a"].EffectiveCandidate, "boot_a");
+
+            var gblAblWrites = _context.GblAblWrites;
+            // A replaced active slot A must land before B is populated from it. The normal two-source route
+            // keeps the frozen b, a order.
+            string[] gblSlotOrder = _context.GblAblCopySlots.Contains("b", StringComparer.Ordinal)
+                ? new[] { "a", "b" }
+                : new[] { "b", "a" };
+            var orderedGblAblWrites = new List<string>(gblSlotOrder.Length);
+            foreach (string slot in gblSlotOrder)
+            {
+                string role = "abl_" + slot;
+                if (gblAblWrites.TryGetValue(role, out VerifiedEdlFile? candidate))
+                {
+                    gblAblRegions.Add(
+                        MakeExecutionRegion(RequireCapturedRegion(role), candidate, role));
+                    orderedGblAblWrites.Add(role);
+                }
+            }
+
+            if (gblAblRegions.Count != gblAblWrites.Count)
+            {
+                throw new InvalidOperationException(
+                    DirectExecutionAvbMetadataMismatchCode + ": the prepared GBL ABL write map has "
+                    + gblAblWrites.Count + " targets but only " + gblAblRegions.Count
+                    + " fixed-slot regions were built.");
+            }
+
+            orderedGblAblSlots = orderedGblAblWrites;
         }
         else
         {
+            orderedGblAblSlots = Array.Empty<string>();
             candidateB = MakeExecutionRegion(
                 RequireCapturedRegion("boot_b"), _context.DirectBoots["b"].CandidateBoot, "boot_b");
 
@@ -295,8 +326,9 @@ public sealed partial class InternalInstallBackend
             .ConfigureAwait(false);
 
         // On the GBL-preserving route the efisp runtime region is the eighth device write: after the four GPT
-        // regions, the board archive and the two Linux images, and still before both boot candidates, the misc
-        // overlay and the reset. The AOSP-resigned route has no runtime region and writes nothing here.
+        // regions, the board archive and the two Linux images, and still before any replaced 088 ABL, both boot
+        // candidates, the misc overlay and the reset. The AOSP-resigned route has no runtime region and writes
+        // nothing here.
         if (gblRuntime != null)
         {
             await WriteExecutionRegionAsync(
@@ -310,6 +342,31 @@ public sealed partial class InternalInstallBackend
                     ct)
                 .ConfigureAwait(false);
         }
+
+        // On the GBL-preserving route every planned ABL write is written whole and read back in fixed b, a
+        // order immediately after efisp and before boot_b and boot_a. A replaced active slot A therefore lands
+        // first when B borrows A, then that effective A loader is copied to B before either boot wrapper.
+        for (int index = 0; index < gblAblRegions.Count; index++)
+        {
+            InternalArtifactRegion region = gblAblRegions[index];
+            string slot = orderedGblAblSlots[index][4..];
+
+            await WriteExecutionRegionAsync(
+                    _initialEdl,
+                    run,
+                    InternalInstallStage.WritingGblAbl,
+                    slot,
+                    region,
+                    true,
+                    progress,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        // If B slot was empty and borrowed A's ABL, copy A's loader to B after A is written.
+        // This ensures B slot has the same functional ABL as A for subsequent boot operations.
+        // GblAblCopySlots are already handled above in the gblAblRegions loop from the unified write plan.
+        // No additional copy is needed here; the plan execution above has already written all copies.
 
         // The fixed candidate order is b then a; it is never selectable by a caller.
         await WriteExecutionRegionAsync(

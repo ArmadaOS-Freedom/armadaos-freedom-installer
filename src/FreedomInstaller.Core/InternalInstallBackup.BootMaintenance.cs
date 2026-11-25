@@ -36,6 +36,7 @@ public static partial class InternalInstallBackup
     private enum BootMaintenanceSourcePurpose
     {
         StockOriginal,
+        StockRestore,
         ProjectTemplate,
         BootloaderRecovery,
     }
@@ -110,6 +111,16 @@ public static partial class InternalInstallBackup
     {
         return OpenBootMaintenanceSourceAsync(
             client, currentBackup, backupDirectory, BootMaintenanceSourcePurpose.StockOriginal, token);
+    }
+
+    internal static Task<InternalBackupSet> OpenBootMaintenanceStockRestoreAsync(
+        EdlClient client,
+        InternalBackupSet currentBackup,
+        string backupDirectory,
+        CancellationToken token = default)
+    {
+        return OpenBootMaintenanceSourceAsync(
+            client, currentBackup, backupDirectory, BootMaintenanceSourcePurpose.StockRestore, token);
     }
 
     /// <summary>
@@ -619,8 +630,13 @@ public static partial class InternalInstallBackup
                 " byte sectors (" + current.Length + " bytes).");
         }
 
-        if (purpose == BootMaintenanceSourcePurpose.StockOriginal
-            && Array.IndexOf(BootMaintenanceChainRoles, BootMaintenanceStemOf(role)) >= 0
+        string stem = BootMaintenanceStemOf(role);
+        bool requireSameBytes = purpose == BootMaintenanceSourcePurpose.StockOriginal
+            ? Array.IndexOf(BootMaintenanceChainRoles, stem) >= 0
+            : purpose == BootMaintenanceSourcePurpose.StockRestore
+                && Array.IndexOf(BootMaintenanceChainRoles, stem) >= 0
+                && !string.Equals(stem, "abl", StringComparison.Ordinal);
+        if (requireSameBytes
             && !string.Equals(source.Sha256, current.Sha256, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException(
