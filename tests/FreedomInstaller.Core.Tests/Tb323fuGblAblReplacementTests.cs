@@ -271,7 +271,6 @@ public sealed class Tb323fuGblAblReplacementTests
             .ToArray();
 
         Assert.Equal(11 + expectedWriteSlotOrder.Length, writes.Count);
-        Assert.Equal(11 + expectedWriteSlotOrder.Length, writes.Count);
         AssertFullWrite(writes[7], session.Backup.Files["efisp"]);
 
         AssertFullWrite(writes[8], session.Backup.Files["boot_b"]);
@@ -288,6 +287,9 @@ public sealed class Tb323fuGblAblReplacementTests
 
         int miscIndex = 10 + expectedWriteSlotOrder.Length;
         AssertBcbWrite(writes[miscIndex], session.Backup.Files["misc"]);
+
+        if (!slotAIncompatible)
+        {
             Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files["abl_a"]));
         }
 
@@ -295,8 +297,6 @@ public sealed class Tb323fuGblAblReplacementTests
         {
             Assert.DoesNotContain(writes, write => OverlapsRegion(write, session.Backup.Files["abl_b"]));
         }
-
-        AssertBcbWrite(writes[10 + expectedWriteSlotOrder.Length], session.Backup.Files["misc"]);
 
         foreach (string metadataRole in MetadataRoles)
         {
@@ -627,7 +627,6 @@ public sealed class Tb323fuGblAblReplacementTests
             reinstallAndroidGiB: 16,
             sourceOverrides: overrides,
             usesArmadaBoot: true,
-            expectedNativeCalls: null,
             configureReinstallOverlayAsync: async (device, tools, runner, factoryBackup, contract, workRoot) =>
             {
                 string stageDir = Path.Combine(workRoot, "reinstall-project-b");
