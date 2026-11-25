@@ -22,6 +22,36 @@ public partial class MainWindow
     private bool _userdataUninstallRestoreStockBoot = true;
     private bool _userdataUninstallReclaimBackup = true;
 
+    /// <summary>
+    /// 快照父目录是按所选电脑恢复来源自动推导的（来源的上一级）：换来源时要一起作废，
+    /// 不能继续用旧来源所在的（可能只读的）卷。9008 会话保留，重试不会再重启平板。
+    /// </summary>
+    private bool _userdataUninstallBackupParentFromSource;
+
+    /// <summary>能在 <paramref name="directory"/> 里新建文件（建一个随即删除的探测文件）。</summary>
+    private static bool IsWritableDirectory(string? directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return false;
+        try
+        {
+            using var probe = new FileStream(
+                Path.Combine(directory, ".freedom-write-probe-" + Guid.NewGuid().ToString("N")),
+                FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private void DropUserdataUninstallDerivedBackupParent()
+    {
+        if (!_userdataUninstallBackupParentFromSource) return;
+        _userdataUninstallBackupParentFromSource = false;
+        _internalInstallBackupParent = null;
+    }
+
     /// <summary>已提交的原厂引导恢复方案；仅在勾选恢复引导且准备成功时非 null。</summary>
     private BootMaintenancePrepared? _userdataUninstallStockPlan;
 
@@ -224,12 +254,35 @@ public partial class MainWindow
             return;
         var selectedOriginal = SelectedUserdataUninstallPcBackup;
         var workParent = _internalInstallBackupParent;
+        var workParentFromSource = _userdataUninstallBackupParentFromSource;
         if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
         {
+            workParentFromSource = false;
             if (!string.IsNullOrWhiteSpace(selectedOriginal) && Directory.Exists(selectedOriginal))
+            {
                 workParent = Directory.GetParent(Path.GetFullPath(selectedOriginal))?.FullName;
+                // 来源在只读卷上时，来源的上一级写不了快照：改用默认缓存目录。
+                if (!IsWritableDirectory(workParent)) workParent = null;
+                workParentFromSource = !string.IsNullOrWhiteSpace(workParent);
+            }
             if (string.IsNullOrWhiteSpace(workParent) || !Directory.Exists(workParent))
-                workParent = DefaultRecoveryOutputDirectory();
+            {
+                try
+                {
+                    workParent = DefaultRecoveryOutputDirectory();
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    // 缓存目录建不出来：按准备失败报告并留在来源页；保护状态与 9008 会话不变，异常不逃出 async void。
+                    _userdataUninstallError = exception.Message;
+                    RenderUserdataUninstallPreparationError();
+                    AppendLocalizedLog(M(
+                        "Dynamic.RawValue",
+                        $"{exception.GetType().FullName}: {exception.Message}"));
+                    return;
+                }
+                workParentFromSource = false;
+            }
             if (string.IsNullOrWhiteSpace(workParent)) return;
         }
         // 先作废上一次未写入的只读准备；再写入推导出的真实工作父目录（路径不同才写）。
@@ -238,6 +291,7 @@ public partial class MainWindow
         {
             ApplyInternalInstallBackupParent(workParent);
         }
+        _userdataUninstallBackupParentFromSource = workParentFromSource;
 
         // 尚无真实当前状态快照时，先等待与「开始备份」完全同一条流水线（不嵌套任何忙碌范围）。
         if (_internalInstallBackup is null)

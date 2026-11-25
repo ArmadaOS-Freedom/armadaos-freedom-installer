@@ -106,6 +106,8 @@ public sealed partial class InternalInstallBackend
 
         var metadataRegions = new List<InternalArtifactRegion>();
         var ablRegions = new List<InternalArtifactRegion>();
+        var gblAblRegions = new List<InternalArtifactRegion>();
+        IReadOnlyList<string> orderedGblAblSlots;
 
         if (_context.DirectBootTrustMode == InternalInstallBootTrustMode.GblPreserveOem)
         {
@@ -137,9 +139,37 @@ public sealed partial class InternalInstallBackend
 
             candidateA = MakeExecutionRegion(
                 RequireCapturedRegion("boot_a"), gblBoots["a"].EffectiveCandidate, "boot_a");
+
+            var gblAblWrites = _context.GblAblWrites;
+            // The frozen copy plan fixes the write order; slot A precedes B only when B borrows A.
+            string[] gblSlotOrder = _context.GblAblCopySlots.Contains("b", StringComparer.Ordinal)
+                ? new[] { "a", "b" }
+                : new[] { "b", "a" };
+            var orderedGblAblWrites = new List<string>(gblSlotOrder.Length);
+            foreach (string slot in gblSlotOrder)
+            {
+                string role = "abl_" + slot;
+                if (gblAblWrites.TryGetValue(role, out VerifiedEdlFile? candidate))
+                {
+                    gblAblRegions.Add(
+                        MakeExecutionRegion(RequireCapturedRegion(role), candidate, role));
+                    orderedGblAblWrites.Add(role);
+                }
+            }
+
+            if (gblAblRegions.Count != gblAblWrites.Count)
+            {
+                throw new InvalidOperationException(
+                    DirectExecutionAvbMetadataMismatchCode + ": the prepared GBL ABL write map has "
+                    + gblAblWrites.Count + " targets but only " + gblAblRegions.Count
+                    + " fixed-slot regions were built.");
+            }
+
+            orderedGblAblSlots = orderedGblAblWrites;
         }
         else
         {
+            orderedGblAblSlots = Array.Empty<string>();
             candidateB = MakeExecutionRegion(
                 RequireCapturedRegion("boot_b"), _context.DirectBoots["b"].CandidateBoot, "boot_b");
 
@@ -295,8 +325,9 @@ public sealed partial class InternalInstallBackend
             .ConfigureAwait(false);
 
         // On the GBL-preserving route the efisp runtime region is the eighth device write: after the four GPT
-        // regions, the board archive and the two Linux images, and still before both boot candidates, the misc
-        // overlay and the reset. The AOSP-resigned route has no runtime region and writes nothing here.
+        // regions, the board archive and the two Linux images, and still before any replaced 088 ABL, both boot
+        // candidates, the misc overlay and the reset. The AOSP-resigned route has no runtime region and writes
+        // nothing here.
         if (gblRuntime != null)
         {
             await WriteExecutionRegionAsync(
@@ -311,7 +342,26 @@ public sealed partial class InternalInstallBackend
                 .ConfigureAwait(false);
         }
 
-        // The fixed candidate order is b then a; it is never selectable by a caller.
+        // On the GBL-preserving route every planned ABL write comes from the frozen plan above and is written
+        // whole and read back before boot_b and boot_a, immediately after efisp.
+        for (int index = 0; index < gblAblRegions.Count; index++)
+        {
+            InternalArtifactRegion region = gblAblRegions[index];
+            string slot = orderedGblAblSlots[index][4..];
+
+            await WriteExecutionRegionAsync(
+                    _initialEdl,
+                    run,
+                    InternalInstallStage.WritingGblAbl,
+                    slot,
+                    region,
+                    true,
+                    progress,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        // The frozen candidate order is b then a; it is never selectable by a caller.
         await WriteExecutionRegionAsync(
                 _initialEdl,
                 run,

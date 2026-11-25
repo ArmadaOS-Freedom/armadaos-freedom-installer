@@ -2055,10 +2055,6 @@ public partial class MainWindow : Window
         BackToFunctionsButton.IsEnabled = !_busy;
         HomeCards.IsEnabled = !_busy && !_showingEnvironment && !_showingGlobalRecovery && EnvironmentIsReady;
 
-        // 支持页入口与页内返回按钮同样只按空闲状态启用，不影响任何功能或设备状态。
-        SupportProjectButton.IsEnabled = !_busy;
-        SupportBackButton.IsEnabled = !_busy;
-
         DetectButton.IsEnabled = !_busy && hasTransport;
         CheckBootloaderButton.IsEnabled = !_busy && hasTransport && _identity is not null;
         DevicesCombo.IsEnabled = !_busy && _devices.Count > 0;

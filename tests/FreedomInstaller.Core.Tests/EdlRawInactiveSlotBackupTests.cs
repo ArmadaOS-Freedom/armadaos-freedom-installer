@@ -356,7 +356,8 @@ internal sealed class InactiveSlotBackupFixture
 
     internal static InactiveSlotBackupFixture Create(
         EdlRawBootBuilderTests.Workspace workspace,
-        long bootLength = BootPartitionBytes)
+        long bootLength = BootPartitionBytes,
+        long ablLength = ZeroFileBytes)
     {
         string root = Path.Combine(workspace.Root, "inactive-target-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -365,7 +366,7 @@ internal sealed class InactiveSlotBackupFixture
             Boot = CreateZeroFile(Path.Combine(root, "boot-b.img"), bootLength),
             VendorBoot = CreateZeroFile(Path.Combine(root, "vendor-b.img"), ZeroFileBytes),
             InitBoot = CreateZeroFile(Path.Combine(root, "init-b.img"), ZeroFileBytes),
-            Abl = CreateZeroFile(Path.Combine(root, "abl-b.bin"), ZeroFileBytes),
+            Abl = CreateZeroFile(Path.Combine(root, "abl-b.bin"), ablLength),
             XblConfig = CreateZeroFile(Path.Combine(root, "xbl-b.bin"), ZeroFileBytes),
         };
     }

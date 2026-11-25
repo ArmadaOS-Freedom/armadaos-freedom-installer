@@ -174,7 +174,7 @@ public sealed partial class InternalInstallBackend
             string diagnostic = exception is ExecutionFailureException known
                 ? known.Message
                 : "The execution failed at stage " + run.Stage + " with "
-                    + exception.GetType().Name + ".";
+                    + exception.GetType().Name + ": " + exception.Message;
 
             return FinishResult(
                 run,

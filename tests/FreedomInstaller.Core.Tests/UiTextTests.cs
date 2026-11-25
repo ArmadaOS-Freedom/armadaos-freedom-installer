@@ -349,6 +349,7 @@ public sealed class UiTextTests
             "Dynamic.InternalInstall.Prepared.GblInstallMode",
             "Dynamic.InternalInstall.Execution.Stage.WritingGblRuntime",
             "Dynamic.InternalInstall.Execution.Stage.WritingAbl",
+            "Dynamic.InternalInstall.Execution.Stage.WritingGblAbl",
         };
 
         foreach (var key in keys)
@@ -360,6 +361,18 @@ public sealed class UiTextTests
             Assert.DoesNotContain("{", rendered, StringComparison.Ordinal);
             Assert.DoesNotContain("}", rendered, StringComparison.Ordinal);
         }
+
+        var replacementMode = text.Format(new UiMessage(
+            "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
+            "a, b",
+            "—"));
+        Assert.Contains("a, b", replacementMode, StringComparison.Ordinal);
+        Assert.Contains("088", replacementMode, StringComparison.Ordinal);
+        Assert.DoesNotContain("{0}", replacementMode, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Dynamic.InternalInstall.Prepared.GblAblReplacementInstallMode",
+            replacementMode,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

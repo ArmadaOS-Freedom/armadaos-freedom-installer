@@ -32,6 +32,7 @@ public partial class MainWindow
 
     private bool _diagnosticExporting;
     private bool _showingDiagnostics;
+    private bool _returnToSupportAfterDiagnostics;
     private string? _diagnosticDestinationPath;
     private IReadOnlyList<DiagnosticBootFile> _diagnosticBootSnapshot = Array.Empty<DiagnosticBootFile>();
     private bool _diagnosticAblAvailable;
@@ -120,6 +121,20 @@ public partial class MainWindow
     private void OnExportDiagnostics(object sender, RoutedEventArgs e)
     {
         if (_closed) return;
+
+        if (_showingDiagnostics)
+        {
+            if (_showingSupport)
+            {
+                _showingSupport = false;
+                ApplyFunctionView();
+            }
+            return;
+        }
+
+        _returnToSupportAfterDiagnostics = _showingSupport;
+        _showingSupport = false;
+
         ShowDiagnosticPage();
     }
 
@@ -144,6 +159,13 @@ public partial class MainWindow
             DiagnosticIncludeLargeBootBox.IsChecked = false;
             DiagnosticIncludeLargeBootBox.IsEnabled = _diagnosticBootAvailable;
             DiagnosticIncludeLargeBootBox.Visibility = _diagnosticBootAvailable ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (DiagnosticIncludeLastSerialBox is not null)
+        {
+            bool hasRecentTarget = !string.IsNullOrWhiteSpace(_diagnosticLastDeviceSerial);
+            DiagnosticIncludeLastSerialBox.IsChecked = false;
+            DiagnosticIncludeLastSerialBox.IsEnabled = hasRecentTarget;
+            DiagnosticIncludeLastSerialBox.Visibility = hasRecentTarget ? Visibility.Visible : Visibility.Collapsed;
         }
 
         bool anyAttachment = _diagnosticAblAvailable || _diagnosticBootAvailable;
@@ -185,6 +207,8 @@ public partial class MainWindow
     {
         if (_diagnosticExporting) return;
         _showingDiagnostics = false;
+        _showingSupport = _returnToSupportAfterDiagnostics;
+        _returnToSupportAfterDiagnostics = false;
         ApplyFunctionView();
     }
 
@@ -265,7 +289,9 @@ public partial class MainWindow
             AddRedaction(_internalInstallDeviceCheck?.Android?.SocSerial);
             AddRedaction(_internalInstallDeviceCheck?.Android?.Identity?.Serial);
 
-            // 用户在 UI 线程快照此字段，随后传入后台任务；用户明确要求的最近检查目标序列号。
+            // 用户在 UI 线程快照 opt-in 与最近检查目标序列号，随后传入后台任务。
+            bool includeLastCheckedDeviceSerial =
+                DiagnosticIncludeLastSerialBox?.IsChecked == true && !string.IsNullOrWhiteSpace(_diagnosticLastDeviceSerial);
             string? lastCheckedDeviceSerial = _diagnosticLastDeviceSerial;
 
             var summary = BuildDiagnosticSummary(includeAbl, includeLargeBoot);
@@ -306,6 +332,7 @@ public partial class MainWindow
                 {
                     HostEnvironment = hostEnvironment,
                     LastCheckedDeviceSerial = lastCheckedDeviceSerial,
+                    IncludeLastCheckedDeviceSerial = includeLastCheckedDeviceSerial,
                 };
             }).ConfigureAwait(true);
 

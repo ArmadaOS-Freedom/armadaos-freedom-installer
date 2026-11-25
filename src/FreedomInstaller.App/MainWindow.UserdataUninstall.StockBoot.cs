@@ -41,6 +41,7 @@ public partial class MainWindow
         _userdataUninstallUseBoardBackup = desired;
         InvalidateModernUserdataUninstallPreparation();
         ClearUserdataUninstallRecoverySource();
+        DropUserdataUninstallDerivedBackupParent();
         if (_internalInstallStep >= 3) _internalInstallStep = 2;
         RenderModernUserdataUninstallPages();
     }

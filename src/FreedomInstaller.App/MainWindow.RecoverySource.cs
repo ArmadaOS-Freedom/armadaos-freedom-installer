@@ -39,7 +39,19 @@ public partial class MainWindow
     {
         var parent = _internalInstallBackupParent;
         if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
-            parent = DefaultRecoveryOutputDirectory();
+        {
+            try
+            {
+                parent = DefaultRecoveryOutputDirectory();
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // 缓存目录不可写：在本流程的状态里报告失败，保留会话，不让异常逃出 async void 处理程序（同 Mac）。
+                SetInternalInstallCheckStatus(M("Dynamic.RecoverySource.Failed", error.Message));
+                AppendLocalizedLog(M("Dynamic.RecoverySource.Failed", error.Message));
+                return;
+            }
+        }
         if (string.IsNullOrWhiteSpace(parent)) return;
         ApplyInternalInstallBackupParent(parent);
         _internalInstallOperationActive = true;

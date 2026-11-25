@@ -441,6 +441,11 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
     /// replaces the <c>abl_a</c>/<c>abl_b</c> claims of the generated slot fixtures. It is measured like every
     /// other claim, so the device capture carries exactly those bytes; null keeps the existing defaults.
     /// </para>
+    /// <para>
+    /// <paramref name="usesArmadaBoot"/> selects the synthetic package's ARMADA boot shape.
+    /// <paramref name="configureReinstallOverlayAsync"/> can apply a durable test overlay after the initial
+    /// factory artifacts are written and before the recovery snapshot is captured.
+    /// </para>
     /// </summary>
     internal static async Task<DirectInstallReadyTestSession> CreateAsync(
         EdlToolchain toolchain,
@@ -463,7 +468,12 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
         string? mediaPath = null,
         bool bootOnlyInactiveB = false,
         bool keepInactiveRecovery = false,
-        bool useDirectAndroidDataErase = false)
+        bool useDirectAndroidDataErase = false,
+        IReadOnlyDictionary<string, VerifiedEdlFile>? sourceOverrides = null,
+        Action<IB001SyntheticDevice, string>? configureInitialDevice = null,
+        bool usesArmadaBoot = false,
+        Func<IB001SyntheticDevice, EdlRawBootTools, ICommandRunner, InternalBackupSet, EdlRawPackageContract, string, Task>? configureReinstallOverlayAsync = null,
+        int expectedNativeCalls = 6)
     {
         ArgumentNullException.ThrowIfNull(toolchain);
         ArgumentNullException.ThrowIfNull(rawShared);
@@ -515,6 +525,10 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 metadata.Remove("edlProfile");
                 var compatibility = metadata["bootCompatibility"]!.AsObject();
                 compatibility.Remove("firmwareVersions");
+                if (usesArmadaBoot)
+                {
+                    metadata["bootRecipe"]!["linuxBootSource"] = "armada-boot-v1";
+                }
 
                 // Only the G5 model declares its own package identity and compatibility pair; every other
                 // model keeps the snapshot's original metadata and default constraint groups byte for byte.
@@ -587,9 +601,10 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
 
             if (zeroSlot is not null)
             {
-                // The factory-uninitialized target is the existing all-zero fixture; the device still pads
-                // every one of its five claims to the real partition, so the backup captures padded zeros.
-                InactiveSlotBackupFixture inactiveTarget = InactiveSlotBackupFixture.Create(workspace);
+                // An empty ABL still occupies its original partition. The synthetic GPT derives
+                // the partition size from the claim, so keep the target's ABL length when zeroing it.
+                InactiveSlotBackupFixture inactiveTarget = InactiveSlotBackupFixture.Create(
+                    workspace, ablLength: sources["abl_" + zeroSlot].Length);
 
                 if (corruptZeroBoot)
                 {
@@ -628,6 +643,14 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 sources["abl_b"] = syntheticAbl;
             }
 
+            if (sourceOverrides is not null)
+            {
+                foreach (KeyValuePair<string, VerifiedEdlFile> pair in sourceOverrides)
+                {
+                    sources[pair.Key] = pair.Value;
+                }
+            }
+
             // The factual AVB origin handed to the device assembly and reported by the session: the local
             // fixture on the default route, the caller's real claims and root key on the GBL route.
             IReadOnlyDictionary<string, VerifiedEdlFile> originalAvbSources = gblSources is null
@@ -664,6 +687,7 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 originalAvbSources,
                 gblSources?.EfispSource,
                 gen5: IsG5Model(toolchain.Model));
+            configureInitialDevice?.Invoke(device, root);
 
             // The source five of each slot are not mutated by the copy/pad into the device's own child.
             foreach (VerifiedEdlFile claim in sources.Values)
@@ -805,6 +829,10 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
 
             EdlRawPackageContract contract =
                 PackageReader.ReadEdlRawContract(imported.PackageDirectory, toolchain.Model);
+            if (usesArmadaBoot)
+            {
+                Assert.True(contract.BootRecipe.UsesArmadaBoot);
+            }
 
             // Both optional Android FW/HWID constraint groups are omitted and read back as absent.
             Assert.Null(contract.EdlProfileId);
@@ -823,6 +851,11 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
                 {
                     device.AddWriteOverlay(
                         region.Lun, region.StartSector, region.SectorCount, region.FilePath);
+                }
+                if (configureReinstallOverlayAsync is not null)
+                {
+                    await configureReinstallOverlayAsync(
+                        device, tools!, router, factoryRecovery, contract, root);
                 }
                 backup = await InternalInstallBackup.CreatePreparationSnapshotAsync(
                     client, factoryRecovery, backupParent);
@@ -876,7 +909,7 @@ internal sealed class DirectInstallReadyTestSession : IDisposable
             }
 
             Assert.Equal(currentSlot, backend.Prepared.CurrentSlot);
-            Assert.Equal(6, oracle.Calls);
+            Assert.Equal(expectedNativeCalls, oracle.Calls);
 
             transferred = true;
             return new DirectInstallReadyTestSession(

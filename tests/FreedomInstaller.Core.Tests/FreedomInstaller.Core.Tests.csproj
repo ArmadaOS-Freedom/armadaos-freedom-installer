@@ -99,6 +99,23 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Support/diagnostics navigation is split across partial-class files. Embedding the exact
+         production sources lets SourceWiringTests read them without constructing WPF. -->
+    <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.Support.cs"
+                      LogicalName="FreedomInstaller.Tests.MainWindow.Support.cs"
+                      Link="MainWindow.Support.cs" />
+    <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.Diagnostics.cs"
+                      LogicalName="FreedomInstaller.Tests.MainWindow.Diagnostics.cs"
+                      Link="MainWindow.Diagnostics.cs" />
+    <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.Functions.cs"
+                      LogicalName="FreedomInstaller.Tests.MainWindow.Functions.cs"
+                      Link="MainWindow.Functions.cs" />
+    <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.xaml.cs"
+                      LogicalName="FreedomInstaller.Tests.MainWindow.xaml.cs"
+                      Link="MainWindow.xaml.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Embed the exact catalogs the App ships, under the same logical names, so the tests read
          the real strings instead of a copy that can drift. WithCulture="false" keeps the language
          suffix from turning any of these into a satellite assembly resource: the tests, like the
@@ -127,6 +144,8 @@
          because the SDK's default None glob already claims these files. -->
     <None Update="Fixtures\Import\**\*" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures\update-package-v1\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\vendor\qualcomm\g5\abl_gbl_capable.img"
+          Link="Fixtures\tb323fu-abl088.img" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
