@@ -1269,6 +1269,9 @@ public partial class MainWindow
                     });
                 SetText(InternalInstallCapacityStatusText, key);
                 AppendLog(key);
+                // Same technical-details line as the Windows window; the failure text above carries no detail.
+                AppendLog(M("Dynamic.InternalInstall.Prepared.TechnicalDetails", exception.ToString()));
+                QueuePreparationFailureLog(exception.ToString());
             }
         });
 
@@ -1978,5 +1981,104 @@ public partial class MainWindow
         _internalInstallClient = null;
         _internalInstallTools?.Dispose();
         _internalInstallTools = null;
+    }
+
+    /// <summary>
+    /// Keeps the full technical details of a failed preparation in ~/Library/Logs/FreedomInstaller, so they survive
+    /// the window being closed. Writing it is best effort.
+    /// </summary>
+    // Failure-log writes run off the UI thread, one after another; closing the window waits (bounded) for them.
+    private Task _preparationFailureLogWrites = Task.CompletedTask;
+    private bool _preparationFailureLogsFlushing;
+    // The write chain the last bounded wait covered: a close that leaves the window open (a declined prompt) and later
+    // writes queue a new chain, which gets its own wait; the chain already waited for is not waited for twice.
+    private Task? _preparationFailureLogsWaited;
+    // The deadline of the close request being served, passed to the helper's own Close(): a write chain queued during
+    // the wait shares the same ten seconds instead of starting a second wait. A later user close gets a fresh one.
+    private DateTime? _preparationFailureLogsCloseDeadline;
+
+    private void QueuePreparationFailureLog(string details)
+    {
+        _preparationFailureLogWrites = _preparationFailureLogWrites.ContinueWith(
+            _ => WritePreparationFailureLog(details),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Called by the window's closing handler: true when it cancelled this close to let a pending failure-log write
+    /// finish first (bounded, so a stalled volume never keeps the window open), after which it closes again.
+    /// </summary>
+    private async Task<bool> FlushPreparationFailureLogsBeforeCloseAsync(WindowClosingEventArgs e)
+    {
+        if (_preparationFailureLogsFlushing)
+        {
+            // A close while the bounded wait is running stays cancelled; the wait closes the window itself.
+            e.Cancel = true;
+            return true;
+        }
+
+        var pending = _preparationFailureLogWrites;
+        if (pending.IsCompleted || ReferenceEquals(pending, _preparationFailureLogsWaited))
+        {
+            return false;
+        }
+
+        var deadline = _preparationFailureLogsCloseDeadline ?? DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        var remaining = deadline - DateTime.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+        {
+            // This close request already used its ten seconds: go on to the remaining close checks.
+            _preparationFailureLogsWaited = pending;
+            return false;
+        }
+
+        e.Cancel = true;
+        _preparationFailureLogsFlushing = true;
+        try
+        {
+            await Task.WhenAny(pending, Task.Delay(remaining));
+        }
+        finally
+        {
+            _preparationFailureLogsFlushing = false;
+            _preparationFailureLogsWaited = pending;
+        }
+
+        // The re-entrant closing handler reads the deadline synchronously, before its first await.
+        _preparationFailureLogsCloseDeadline = deadline;
+        try
+        {
+            Close();
+        }
+        finally
+        {
+            _preparationFailureLogsCloseDeadline = null;
+        }
+
+        return true;
+    }
+
+    private static void WritePreparationFailureLog(string details)
+    {
+        try
+        {
+            string directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Logs", "FreedomInstaller");
+            Directory.CreateDirectory(directory);
+            // Timestamp for sorting plus a random suffix, created new: two failures in the same second never share
+            // (or overwrite) a file.
+            string path = Path.Combine(
+                directory,
+                "prepare-failure-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..8] + ".txt");
+            using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
+            using var writer = new StreamWriter(stream);
+            writer.Write(details);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Best effort inside a failure handler: no path, permission or format problem may escape to the UI.
+        }
     }
 }
