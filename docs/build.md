@@ -4,37 +4,45 @@
 
 ## 一次完整构建
 
-安装 Docker 并使用 Linux 容器。默认的完整单 EXE 构建直接使用本仓库已提交的源码，以及清单中固定的官方公开下载，不需要任何离线更新组件。在仓库根目录运行以下两条命令；Linux shell 和 Windows PowerShell 均可使用：
+安装 Docker 并使用 Linux 容器。完整单 EXE 构建使用本仓库已提交的源码、清单中固定的官方公开下载，并且必须同时提供一对离线更新资产。缺失任一资产时，`build_installer.py` 会在读取清单、下载、编译或发布之前以 exit 2 失败。在仓库根目录运行以下两条命令；Linux shell 和 Windows PowerShell 均可使用：
 
 ```sh
 docker build -f tools/installer-builder.Dockerfile -t armada-installer-builder tools
-docker run --rm -v "${PWD}:/src" -v "${PWD}/artifacts:/work" armada-installer-builder python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /work/publish
+docker run --rm -v "${PWD}:/src" -v "${PWD}/artifacts:/work" \
+  -v "${PWD}/offline:/offline" armada-installer-builder \
+  python3 -B maintenance/build_installer.py \
+  --work-dir /work/build --output-dir /work/publish \
+  --offline-bootstrap-script /offline/armada-offline-bootstrap \
+  --offline-updater-bundle /offline/armada-offline-updater.tar.gz
 ```
 
 产物为 `artifacts/publish/FreedomInstaller.App.exe`，Windows x64 自包含单 EXE。最终用户不需要另装 .NET SDK；Linux 系统镜像仍由系统仓库单独生成。
 
-新安装的系统镜像已经自带更新服务，安装器在未嵌入离线组件时直接连接该服务，因此默认构建不需要旧版离线引导文件。
+发布版必须嵌入离线更新服务：安装器通过这对资产在平板上部署更新服务并核对清单版本。`--prepare-only` 可以省略这对资产，但省略后得到的 props 不足以发布单 EXE，只能用于调试。未设置 `PublishSingleFile` 的开发或测试构建也可以省略这对资产，此时运行时直接连接系统已有的更新服务。
 
 首次构建需要联网下载官方组件和 NuGet 包。后续构建复用经过哈希校验的下载缓存，每次仍从源码编译修改版工具。构建镜像固定为 .NET SDK 10.0.402 / Ubuntu 24.04 AMD64，安装 CMake、Make、Python 和 MinGW POSIX 编译器。
 
 已有相同工具链的 Linux 环境也可运行：
 
 ```sh
-python3 -B maintenance/build_installer.py --work-dir /work/build --output-dir /work/publish
+python3 -B maintenance/build_installer.py \
+  --work-dir /work/build --output-dir /work/publish \
+  --offline-bootstrap-script /work/offline/armada-offline-bootstrap \
+  --offline-updater-bundle /work/offline/armada-offline-updater.tar.gz
 ```
 
 工作目录和输出目录应使用绝对路径。编译产物、缓存和日志不应提交到源码仓库。
 
-### 可选的旧版离线更新组件（高级）
+### 离线更新组件（单 EXE 发布的必需输入）
 
-默认完整构建不需要这一节的文件。只有在为尚未自带更新服务的旧系统准备安装器时，才需要额外提供两个本地文件；它们以固定资源名原样嵌入：
+单 EXE 发布必须提供以下两个本地文件；它们以固定资源名原样嵌入：
 
 - `armada-offline-bootstrap`：独立部署脚本，供安装器在平板上部署更新服务。
 - `armada-offline-updater.tar.gz`：压缩后的 ARM64 更新器包；运行时由嵌入字节计算其哈希。
 
-部署脚本取自系统仓库的 `system_files/usr/libexec/armada/armada-offline-bootstrap`；更新器包由同一版本系统仓库的 `build_files/build-offline-updater-bundle.py` 从完整 ARM64 系统镜像根目录生成。需要时把这两个文件复制进构建环境；默认构建不下载、不重新生成，也不要求先取得任何尚未发布的系统构建器。
+部署脚本取自系统仓库的 `system_files/usr/libexec/armada/armada-offline-bootstrap`；更新器包由同一版本系统仓库的 `build_files/build-offline-updater-bundle.py` 从完整 ARM64 系统镜像根目录生成。把这两个文件复制进构建环境；`build_installer.py` 不下载、不重新生成它们。
 
-两个参数必须成对给出：只给其中一个时，`build_installer.py` 会在读取清单、下载、编译或打包之前报错，MSBuild 发布目标也拒绝只设置一半的输入。两个都不提供时，单 EXE 照常生成，只是不嵌入这两个资源，安装器直接连接系统自带的更新服务。提供时仍执行全部既有校验：存在、可读、普通文件与 256 MiB（与 SSH 上传上限一致）压缩体积，以及更新包内 `manifest.json` 的身份、入口、必需能力、成员大小与 SHA-256；清单版本写入 props 与程序集元数据，安装器只按该版本核对安装回执与部署后探测结果，不按文件名猜测版本，也不在代码里写死版本号。
+两个参数必须同时提供：真实单 EXE 发布缺少其中任意一个都会在读取清单、下载、编译或打包之前立即报错；只给其中一个同样被拒绝。MSBuild 的 `PublishSingleFile` 闸门也分别以 `FRDM1027` / `FRDM1029` 拒绝完全缺失，并以 `FRDM1028` / `FRDM1030` 拒绝路径不存在。提供后仍执行全部既有校验：存在、可读、普通文件与 256 MiB（与 SSH 上传上限一致）压缩体积，以及更新包内 `manifest.json` 的身份、入口、必需能力、成员大小与 SHA-256；清单版本写入 props 与程序集元数据，安装器只按该版本核对安装回执与部署后探测结果，不按文件名猜测版本，也不在代码里写死版本号。
 
 ## macOS 版
 
@@ -52,7 +60,7 @@ python3 -B maintenance/build_installer_macos.py --work-dir "$PWD/artifacts/build
 2. 从固定官方地址下载平台工具、嵌入式 Python、LibUsbDotNet 官方包、libusb 许可原文和上游 GBL EFI，核对长度与 SHA-256。
 3. 编译 `tools/edl-ng` 与 `tools/boot-packers`，生成三个 Windows 工具。
 4. 从本次工具产物生成编译时固定哈希，分别制作四代、五代与 TB710FU 的 9008 工具包，并从仓库原始驱动文件制作驱动归档。
-5. 生成 MSBuild 输入配置，编译并打包单 EXE。
+5. 生成 MSBuild 输入配置（单 EXE 发布必须同时嵌入两个离线更新资产），编译并打包单 EXE。
 
 每次构建会生成 `build/build-record.json`，记录源码文件哈希、上游提交、本次工具哈希和产物路径。提供离线更新组件时，记录还会写入两个文件的绝对路径、字节数、SHA-256、来源（系统仓库的离线更新包构建脚本）以及清单版本（`offlineUpdaterVersion`）。程序使用编进程序集的本次哈希校验工具，运行时不接受外部配置覆盖。修改工具源码后重新完整构建即可，无需手工替换旧二进制的哈希常量。
 
@@ -84,7 +92,7 @@ python3 -B maintenance/build_installer_macos.py --work-dir "$PWD/artifacts/build
 python3 -B maintenance/build_installer.py --work-dir /work/build --prepare-only
 ```
 
-默认准备出的 props 只包含必需的工具、驱动和 GBL 输入，可直接用于默认单 EXE 发布。需要提供旧版离线更新组件时再追加这组高级参数：
+`--prepare-only` 允许省略离线更新资产；但生成的 props 不足以发布单个 EXE，只能用于检查中间产物。实际发布时再追加这组参数：
 
 ```sh
 python3 -B maintenance/build_installer.py --work-dir /work/build --prepare-only \
@@ -92,7 +100,7 @@ python3 -B maintenance/build_installer.py --work-dir /work/build --prepare-only 
   --offline-updater-bundle /work/offline/armada-offline-updater.tar.gz
 ```
 
-这一对必须同时给出；生成的 props 会带上它们的路径，后续 `dotnet publish` 按 props 嵌入。
+这一对必须同时给出；生成的 props 会带上它们的路径，后续 `dotnet publish` 按 props 嵌入。直接 `dotnet publish` 发布单 EXE 时同样要求两条属性存在，否则由 `FRDM1027` / `FRDM1029` / `FRDM1028` / `FRDM1030` 拒绝。
 
 随后可使用该次配置编译：
 
