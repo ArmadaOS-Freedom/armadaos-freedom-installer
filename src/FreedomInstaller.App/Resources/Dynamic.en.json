@@ -10,6 +10,7 @@
   "Dynamic.Diagnostics.DestinationPlaceholder": "No destination selected yet.",
   "Dynamic.Diagnostics.IncludeAbl": "Include ABL and vbmeta artifacts",
   "Dynamic.Diagnostics.IncludeLargeBoot": "Include larger boot artifacts",
+  "Dynamic.Diagnostics.IncludeLastSerial": "Include the last checked device serial number (only for sharing privately)",
   "Dynamic.Diagnostics.SaveTitle": "Save diagnostic bundle",
   "Dynamic.ErrorDetail.Unknown": "Unexpected error. Open the detailed log or export the diagnostic bundle for details.",
   "Dynamic.ErrorDetail.EdlTimeout": "No 9008 connection from the tablet was detected within {0} seconds. Check the USB cable and port.",

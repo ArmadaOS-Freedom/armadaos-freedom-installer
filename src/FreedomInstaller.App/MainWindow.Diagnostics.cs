@@ -145,6 +145,13 @@ public partial class MainWindow
             DiagnosticIncludeLargeBootBox.IsEnabled = _diagnosticBootAvailable;
             DiagnosticIncludeLargeBootBox.Visibility = _diagnosticBootAvailable ? Visibility.Visible : Visibility.Collapsed;
         }
+        if (DiagnosticIncludeLastSerialBox is not null)
+        {
+            bool hasRecentTarget = !string.IsNullOrWhiteSpace(_diagnosticLastDeviceSerial);
+            DiagnosticIncludeLastSerialBox.IsChecked = false;
+            DiagnosticIncludeLastSerialBox.IsEnabled = hasRecentTarget;
+            DiagnosticIncludeLastSerialBox.Visibility = hasRecentTarget ? Visibility.Visible : Visibility.Collapsed;
+        }
 
         bool anyAttachment = _diagnosticAblAvailable || _diagnosticBootAvailable;
         if (DiagnosticNoAttachmentsText is not null)
@@ -265,7 +272,9 @@ public partial class MainWindow
             AddRedaction(_internalInstallDeviceCheck?.Android?.SocSerial);
             AddRedaction(_internalInstallDeviceCheck?.Android?.Identity?.Serial);
 
-            // 用户在 UI 线程快照此字段，随后传入后台任务；用户明确要求的最近检查目标序列号。
+            // 用户在 UI 线程快照 opt-in 与最近检查目标序列号，随后传入后台任务。
+            bool includeLastCheckedDeviceSerial =
+                DiagnosticIncludeLastSerialBox?.IsChecked == true && !string.IsNullOrWhiteSpace(_diagnosticLastDeviceSerial);
             string? lastCheckedDeviceSerial = _diagnosticLastDeviceSerial;
 
             var summary = BuildDiagnosticSummary(includeAbl, includeLargeBoot);
@@ -306,6 +315,7 @@ public partial class MainWindow
                 {
                     HostEnvironment = hostEnvironment,
                     LastCheckedDeviceSerial = lastCheckedDeviceSerial,
+                    IncludeLastCheckedDeviceSerial = includeLastCheckedDeviceSerial,
                 };
             }).ConfigureAwait(true);
 

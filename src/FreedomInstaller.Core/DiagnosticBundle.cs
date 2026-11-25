@@ -37,12 +37,15 @@ public sealed record DiagnosticExportRequest(
     public IReadOnlyDictionary<string, string?>? HostEnvironment { get; init; }
 
     /// <summary>
-    /// Opt-in 由用户明确要求暴露的「最近一次检查的目标」ADB 序列号。仅在导出时写入
-    /// installer.log 与 summary.txt 的一行 <c>LastCheckedDeviceSerial=...</c>。必须通过
-    /// 本地 ADB 序列号格式校验；非法/多行/端点形式将被忽略。通用脱敏对其它位置仍生效，
-    /// 且本字段不加入 redactions 列表，因此此单一来源会原样出现。
+    /// 最近一次检查的目标 ADB 序列号。默认不暴露；仅当
+    /// <see cref="IncludeLastCheckedDeviceSerial"/> 为 true 且通过本地 ADB 序列号校验时，
+    /// 才在 installer.log 与 summary.txt 追加一行 <c>LastCheckedDeviceSerial=...</c>。
+    /// 该值在提供时会无条件加入脱敏集合，其它位置仍被清洗。
     /// </summary>
     public string? LastCheckedDeviceSerial { get; init; }
+
+    /// <summary>是否显式允许在 summary.txt 与 installer.log 记录最近检查目标序列号。默认 false。</summary>
+    public bool IncludeLastCheckedDeviceSerial { get; init; }
 }
 
 /// <summary>
@@ -100,13 +103,15 @@ public static class DiagnosticBundle
     }
 
     /// <summary>
-    /// 通用脱敏后，若用户明确提供了合法的最近检查目标序列号，则追加/前置一行
-    /// <c>LastCheckedDeviceSerial=...</c>。该值经过独立语法校验，不进入 redactions，
-    /// 每次文本条目最多出现一次。
+    /// 通用脱敏后，仅在显式 opt-in 且序列号合法时追加/前置一行
+    /// <c>LastCheckedDeviceSerial=...</c>。每次文本条目最多出现一次。
     /// </summary>
-    private static string AppendLastCheckedDeviceSerialIfRequested(string sanitizedText, string? serial)
+    private static string AppendLastCheckedDeviceSerialIfRequested(
+        string sanitizedText,
+        string? serial,
+        bool include)
     {
-        if (!IsPlausibleLocalAdbSerial(serial)) return sanitizedText;
+        if (!include || !IsPlausibleLocalAdbSerial(serial)) return sanitizedText;
         string row = "LastCheckedDeviceSerial=" + serial + "\n";
         return row + sanitizedText;
     }
@@ -169,6 +174,13 @@ public static class DiagnosticBundle
             throw new InvalidOperationException("Diagnostic export refused: destination is a symbolic link.");
 
         IReadOnlyList<string> redactions = request.Redactions ?? Array.Empty<string>();
+        string? lastCheckedDeviceSerial = request.LastCheckedDeviceSerial;
+        if (IsPlausibleLocalAdbSerial(lastCheckedDeviceSerial))
+        {
+            var withTarget = new List<string>(redactions);
+            withTarget.Add(lastCheckedDeviceSerial!);
+            redactions = withTarget;
+        }
         IReadOnlyList<DiagnosticBootFile> supplied = request.BootFiles ?? Array.Empty<DiagnosticBootFile>();
 
         // Fail closed: if ANY supplied source path (regardless of validity, role, or
@@ -193,7 +205,8 @@ public static class DiagnosticBundle
                     "summary.txt",
                     Utf8NoBom.GetBytes(AppendLastCheckedDeviceSerialIfRequested(
                         Sanitize(request.Summary ?? string.Empty, redactions),
-                        request.LastCheckedDeviceSerial)));
+                        lastCheckedDeviceSerial,
+                        request.IncludeLastCheckedDeviceSerial)));
 
                 token.ThrowIfCancellationRequested();
                 WriteEntry(
@@ -201,7 +214,8 @@ public static class DiagnosticBundle
                     "installer.log",
                     Utf8NoBom.GetBytes(AppendLastCheckedDeviceSerialIfRequested(
                         Sanitize(request.Log ?? string.Empty, redactions),
-                        request.LastCheckedDeviceSerial)));
+                        lastCheckedDeviceSerial,
+                        request.IncludeLastCheckedDeviceSerial)));
 
                 if (request.HostEnvironment is not null)
                 {

@@ -10,6 +10,7 @@
   "Dynamic.Diagnostics.DestinationPlaceholder": "尚未选择保存位置。",
   "Dynamic.Diagnostics.IncludeAbl": "附带 A/B 两槽 ABL 和 vbmeta",
   "Dynamic.Diagnostics.IncludeLargeBoot": "附带 Boot 大镜像",
+  "Dynamic.Diagnostics.IncludeLastSerial": "附带最近检查的设备序列号（仅用于私下分享）",
   "Dynamic.Diagnostics.SaveTitle": "保存诊断包",
   "Dynamic.ErrorDetail.Unknown": "发生未知错误。请查看详细日志或导出诊断包以了解详情。",
   "Dynamic.ErrorDetail.EdlTimeout": "在 {0} 秒内未检测到平板的 9008 连接。请检查 USB 数据线和接口。",
