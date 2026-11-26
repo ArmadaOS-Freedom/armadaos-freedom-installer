@@ -16,7 +16,9 @@ internal static class LinuxRuntimeContract
 
     private static readonly byte[] MirrorMarker = "ARMADA_LINUX_MIRROR_V1"u8.ToArray();
 
-    /// <summary>Only the new-system mirrored policy boards require the marker.</summary>
+    /// <summary>Only the new-system mirrored policy boards require the marker. TB710FU stays outside: it
+    /// updates only through the ARMADA_BOOT disk boot (<see cref="ArmadaBootModels"/>), and the disk boot
+    /// is not the raw mirrored dual-slot Boot this marker proves (Freedom MIRROR_POLICY_MODELS).</summary>
     internal static bool RequiresMirrorMarker(string? model) =>
         string.Equals(model, "TB322FC", StringComparison.Ordinal) ||
         string.Equals(model, "TB323FU", StringComparison.Ordinal);

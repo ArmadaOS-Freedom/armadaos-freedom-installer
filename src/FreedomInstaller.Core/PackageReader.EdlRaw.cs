@@ -928,7 +928,8 @@ public static partial class PackageReader
 
         // Wire-optional: bootRecipe.linuxBootSource
         // - absent => legacy embedded boot (UsesArmadaBoot = false), no hash/canonical change
-        // - present => must be JSON string, exactly "armada-boot-v1", and board must be TB322FC or TB323FU
+        // - present => must be JSON string, exactly "armada-boot-v1", and the board must have the ARMADA_BOOT
+        //   disk boot (TB322FC, TB323FU or TB710FU; ArmadaBootModels)
         var usesArmadaBoot = false;
         if (recipe.TryGetProperty("linuxBootSource", out var bootSource))
         {
@@ -945,11 +946,10 @@ public static partial class PackageReader
                     $"bootRecipe.linuxBootSource 只允许为 \"armada-boot-v1\"，实际为 {bootSourceValue}。");
             }
 
-            if (!string.Equals(deviceModel, "TB322FC", StringComparison.Ordinal)
-                && !string.Equals(deviceModel, "TB323FU", StringComparison.Ordinal))
+            if (!ArmadaBootModels.HasDiskBoot(deviceModel))
             {
                 throw new InvalidDataException(
-                    $"bootRecipe.linuxBootSource 仅允许用于 TB322FC 或 TB323FU，实际为 {deviceModel}。");
+                    $"bootRecipe.linuxBootSource 仅允许用于 TB322FC、TB323FU 或 TB710FU，实际为 {deviceModel}。");
             }
 
             if (!string.Equals(deployment.Kind, EdlRawDeploymentKindName, StringComparison.Ordinal))

@@ -18,11 +18,23 @@ public sealed partial class UpdatePackageDescriptor
         "TB710FU",
     };
 
+    // Models whose installed systems the offline upgrade can drive. It follows Freedom's capability table
+    // (system_files/usr/lib/armada/updates/models.py, OFFLINE_UPGRADE_MODELS). TB710FU joins it only on the
+    // ARMADA_BOOT disk boot: the transfer and both installer windows refuse a TB710FU that does not report
+    // bootSource=armada_boot (ArmadaBootModels.OfflineUpgradePathAllowed).
     private static readonly HashSet<string> OfflineUpgradeModelsSet = new(StringComparer.Ordinal)
     {
         "TB322FC",
         "TB323FU",
+        "TB710FU",
     };
+
+    /// <summary>
+    /// True when the exact canonical <paramref name="model"/> may take an offline upgrade at all. The boot path
+    /// the device reports is checked separately (<see cref="ArmadaBootModels.OfflineUpgradePathAllowed"/>).
+    /// </summary>
+    public static bool SupportsOfflineUpgrade(string? model) =>
+        model is not null && OfflineUpgradeModelsSet.Contains(model);
 
     private static readonly HashSet<string> OperationsSet = new(StringComparer.Ordinal)
     {
@@ -399,7 +411,7 @@ public sealed partial class UpdatePackageDescriptor
 
         foreach (JsonProperty property in element.EnumerateObject())
         {
-            if ((property.Name is not "TB322FC" and not "TB323FU") || !supportedModels.Contains(property.Name))
+            if (!ArmadaBootModels.HasDiskBoot(property.Name) || !supportedModels.Contains(property.Name))
             {
                 throw new InvalidDataException($"invalid boot capsule model {property.Name}");
             }

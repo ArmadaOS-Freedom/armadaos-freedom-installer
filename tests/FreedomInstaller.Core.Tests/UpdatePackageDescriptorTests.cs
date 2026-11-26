@@ -201,23 +201,51 @@ public sealed class UpdatePackageDescriptorTests
         json["recoveryManifests"] = new JsonObject();
         UpdatePackageDescriptor descriptor = Parse(json);
         descriptor.RequireOperation("TB323FU", "offline-upgrade", "1.2.3");
-        Assert.Throws<InvalidDataException>(() =>
-            descriptor.RequireOperation("TB710FU", "offline-upgrade", "1.2.3"));
+        descriptor.RequireOperation("TB710FU", "offline-upgrade", "1.2.3");
     }
 
     [Fact]
-    public void MixedDescriptor_InstallsEveryModelButOnlyY700Upgrades()
+    public void MixedDescriptor_InstallsAndUpgradesEveryModel()
     {
+        // TB710FU takes the offline upgrade only on the ARMADA_BOOT disk boot; the descriptor admits the model
+        // and the transfer checks the reported boot source (ArmadaBootModels.OfflineUpgradePathAllowed).
         JsonObject json = OfflineBase();
         json["operations"] = new JsonArray("install", "offline-upgrade");
         UpdatePackageDescriptor descriptor = Parse(json);
 
         foreach (string model in new[] { "TB322FC", "TB323FU", "TB710FU" })
+        {
             descriptor.RequireOperation(model, "install", "1.2.3");
-        foreach (string model in new[] { "TB322FC", "TB323FU" })
             descriptor.RequireOperation(model, "offline-upgrade", "1.2.3");
-        Assert.Throws<InvalidDataException>(() =>
-            descriptor.RequireOperation("TB710FU", "offline-upgrade", "1.2.3"));
+            Assert.True(UpdatePackageDescriptor.SupportsOfflineUpgrade(model));
+        }
+
+        Assert.False(UpdatePackageDescriptor.SupportsOfflineUpgrade("tb710fu"));
+        Assert.False(UpdatePackageDescriptor.SupportsOfflineUpgrade("TB999XX"));
+        Assert.False(UpdatePackageDescriptor.SupportsOfflineUpgrade(null));
+    }
+
+    [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    [InlineData("TB710FU")]
+    public void ArmadaBootCapsule_IsAcceptedForEveryDiskBootModel(string model)
+    {
+        JsonObject json = Base();
+        json["armadaBootCapsules"] = new JsonObject { [model] = Capsule() };
+        Parse(json);
+    }
+
+    [Fact]
+    public void ArmadaBootCapsule_IsRejectedForAModelOutsideTheDiskBootTableOrThePackage()
+    {
+        AssertInvalid(json => json["armadaBootCapsules"] = new JsonObject { ["TB999XX"] = Capsule() });
+        AssertInvalid(json => json["armadaBootCapsules"] = new JsonObject { ["tb710fu"] = Capsule() });
+        AssertInvalid(json =>
+        {
+            json["supportedModels"] = new JsonArray("TB322FC", "TB323FU");
+            json["armadaBootCapsules"] = new JsonObject { ["TB710FU"] = Capsule() };
+        });
     }
 
     [Fact]
@@ -362,6 +390,13 @@ public sealed class UpdatePackageDescriptorTests
         json["recoveryManifests"] = recovery;
         return json;
     }
+
+    private static JsonObject Capsule() => new()
+    {
+        ["board.dtb"] = Convert.ToBase64String(new byte[64]),
+        ["manifest.bin"] = Convert.ToBase64String(new byte[160]),
+        ["manifest.sig"] = Convert.ToBase64String(new byte[72]),
+    };
 
     private static JsonObject Archive(string name, long bytes) =>
         new() { ["fileName"] = name, ["bytes"] = bytes, ["sha256"] = H };

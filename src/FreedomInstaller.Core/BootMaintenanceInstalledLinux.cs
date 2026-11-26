@@ -413,12 +413,12 @@ internal static class BootMaintenanceInstalledLinux
     {
         Ext4Volume volume = Ext4Volume.Open(bootFilesystem, package.BootRecipe.BootUuid);
 
-        string boardRoot = package.DeviceModel switch
+        if (!ArmadaBootModels.HasDiskBoot(package.DeviceModel))
         {
-            "TB322FC" => "/armada/boot/TB322FC",
-            "TB323FU" => "/armada/boot/TB323FU",
-            _ => throw Mismatch("unsupported Armada board '" + package.DeviceModel + "'"),
-        };
+            throw Mismatch("unsupported Armada board '" + package.DeviceModel + "'");
+        }
+
+        string boardRoot = ArmadaBootModels.BootRoot(package.DeviceModel);
 
         (uint manifestIno, _) = volume.ResolvePath(
             boardRoot + "/manifest.bin", "the Armada manifest", ct);
@@ -453,7 +453,7 @@ internal static class BootMaintenanceInstalledLinux
             throw Mismatch("the Armada manifest version is not 1");
         }
 
-        if (board != (package.DeviceModel == "TB322FC" ? 1u : 2u))
+        if (board != ArmadaBootModels.BoardId(package.DeviceModel))
         {
             throw Mismatch("the Armada manifest board id does not match the package");
         }
