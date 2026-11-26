@@ -94,6 +94,30 @@ public sealed class DeviceModelRoutesTests
         Assert.True(DeviceModelRoutes.IsWriteRoutePending("TB710FU"));
     }
 
+    [Theory]
+    [InlineData("TB710FU")]
+    [InlineData("tb710fu")]
+    public void Tb710fu_boot_maintenance_has_its_own_gate_held_closed_until_device_acceptance(string model)
+    {
+        // The AOSP-preserving boot-only maintenance route is implemented, but it opens on its own predicate
+        // only after a device acceptance; uninstall and global restore stay behind the general write gate.
+        Assert.True(DeviceModelRoutes.IsMaintenanceRoutePending(model));
+        var failure = Assert.Throws<InvalidOperationException>(() => DeviceModelRoutes.RequireMaintenanceRoute(model));
+        Assert.True(DeviceModelRoutes.IsRouteRefusal(failure));
+        Assert.True(DeviceModelRoutes.IsWriteRoutePending(model));
+        Assert.False(DeviceModelRoutes.IsInstallRoutePending(model));
+    }
+
+    [Theory]
+    [InlineData("TB322FC")]
+    [InlineData("TB323FU")]
+    [InlineData(null)]
+    public void Boot_maintenance_gate_never_holds_back_any_other_value(string? model)
+    {
+        Assert.False(DeviceModelRoutes.IsMaintenanceRoutePending(model));
+        DeviceModelRoutes.RequireMaintenanceRoute(model);
+    }
+
     [Fact]
     public void Direct_install_profile_gate_still_passes_a_supported_g4_identity()
     {

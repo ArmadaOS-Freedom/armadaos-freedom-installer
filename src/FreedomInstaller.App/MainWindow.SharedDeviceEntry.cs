@@ -110,8 +110,9 @@ public partial class MainWindow
             _runner);
         var android = await maintenance.ReadAndroidAsync(identity, token);
 
-        // 只开放识别与只读检查的型号（TB710FU）：如实说明，不提交读取事实，后续维护 / 卸载入口保持关闭。
-        if (DeviceModelRoutes.IsWriteRoutePending(android.Identity?.Model))
+        // 当前模式写入路线未开放的型号（TB710FU 的卸载 / TF 卡安装）：如实说明，不提交读取事实，后续入口保持关闭。
+        // TB710FU 的引导维护路线已开放，按当前模式判断。
+        if (IsCurrentModeRoutePending(android.Identity?.Model))
         {
             SetInternalInstallCheckStatus(
                 M("Dynamic.Model.RoutePending", UiText.ModelName(android.Identity?.Model)));
