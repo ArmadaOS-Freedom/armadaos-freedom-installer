@@ -201,11 +201,12 @@ public sealed class UpdatePackageDescriptorTests
         json["recoveryManifests"] = new JsonObject();
         UpdatePackageDescriptor descriptor = Parse(json);
         descriptor.RequireOperation("TB323FU", "offline-upgrade", "1.2.3");
-        descriptor.RequireOperation("TB710FU", "offline-upgrade", "1.2.3");
+        Assert.Throws<InvalidDataException>(() =>
+            descriptor.RequireOperation("TB710FU", "offline-upgrade", "1.2.3"));
     }
 
     [Fact]
-    public void MixedDescriptor_InstallsAndUpgradesEveryModel()
+    public void MixedDescriptor_InstallsEveryModelButOnlyY700Upgrades()
     {
         JsonObject json = OfflineBase();
         json["operations"] = new JsonArray("install", "offline-upgrade");
@@ -213,20 +214,11 @@ public sealed class UpdatePackageDescriptorTests
 
         foreach (string model in new[] { "TB322FC", "TB323FU", "TB710FU" })
             descriptor.RequireOperation(model, "install", "1.2.3");
-        // TB710FU has the native dual-slot backend now, like the two Y700 generations.
-        foreach (string model in new[] { "TB322FC", "TB323FU", "TB710FU" })
+        foreach (string model in new[] { "TB322FC", "TB323FU" })
             descriptor.RequireOperation(model, "offline-upgrade", "1.2.3");
+        Assert.Throws<InvalidDataException>(() =>
+            descriptor.RequireOperation("TB710FU", "offline-upgrade", "1.2.3"));
     }
-
-    [Theory]
-    [InlineData("TB322FC", true)]
-    [InlineData("tb323fu", true)]
-    [InlineData("TB710FU", true)]
-    [InlineData("TB320FC", false)]
-    [InlineData("", false)]
-    [InlineData(null, false)]
-    public void SupportsOfflineUpgrade_IsTheSingleModelList(string? model, bool expected) =>
-        Assert.Equal(expected, UpdatePackageDescriptor.SupportsOfflineUpgrade(model));
 
     [Fact]
     public void OfflineUpgrade_WithSubsetRecoveryManifests_IsValid()

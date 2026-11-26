@@ -24,7 +24,7 @@ The app runs on **Windows x64** and **Apple silicon macOS**, with English and Si
 |---|---|---|
 | Lenovo Legion Y700 Gen 4 | TB322FC | Internal installation; maintenance, uninstall, backup and restore on Windows |
 | Lenovo Legion Y700 Gen 5 | TB323FU | Internal installation; maintenance, uninstall, backup and restore on Windows |
-| Lenovo Xiaoxin Pad Pro GT | TB710FU | Internal installation; offline upgrade; global backup and read-only checks on Windows |
+| Lenovo Xiaoxin Pad Pro GT | TB710FU | Internal installation; global backup and read-only checks on Windows |
 
 **Windows** offers the installation and maintenance features above. **macOS currently provides internal installation only.** TB710FU maintenance, uninstall, and global restore are not available. System installation to a TF / microSD card is not currently offered.
 

@@ -231,7 +231,8 @@ namespace FreedomInstaller.App
             try
             {
                 string model = GetJsonString(conn.DeviceInfo, "model") ?? string.Empty;
-                if (!UpdatePackageDescriptor.SupportsOfflineUpgrade(model))
+                if (!string.Equals(model, "TB322FC", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(model, "TB323FU", StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorUnsupportedModel", LocalizeModelName(model)));
                 }
