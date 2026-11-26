@@ -760,6 +760,27 @@ public sealed class OfflineUpdateTransfer
         return new SlotInfo(actual, inactive, selected, LegacyController: false);
     }
 
+    /// <summary>
+    /// True when <paramref name="info"/> reports a boot path and slot shape the transfer accepts for
+    /// <paramref name="model"/>: for an ARMADA_BOOT-only model (TB710FU) exactly bootSource=armada_boot with JSON
+    /// null actualSlot/inactiveSlot and no selectedSlot. The installer windows use it before adopting a connection,
+    /// with the same rule every info/status document is held to.
+    /// </summary>
+    public static bool AcceptsBootReport(JsonElement info, string model)
+    {
+        if (info.ValueKind != JsonValueKind.Object)
+            return false;
+        try
+        {
+            _ = ReadSlots(info, "info", model);
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
+
     private static string? OptionalString(JsonElement value, string name)
     {
         if (!value.TryGetProperty(name, out var property))
