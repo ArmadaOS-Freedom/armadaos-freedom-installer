@@ -200,6 +200,33 @@ public sealed partial class OfflineUpdatePackageTests
         Assert.Equal(0, server.ExecuteCalls);
     }
 
+    [Fact]
+    public async Task Tb710fuOnArmadaBoot_SavesAndReloadsItsRecoveryExport()
+    {
+        // TB710FU takes the offline upgrade only on ARMADA_BOOT; its recovery export must save and validate like
+        // the Y700 ones, or the upgrade would stop between prepare and execute.
+        const string model = "TB710FU";
+        var c = new Case(Path.Combine(root, "load-tb710fu"), deviceModel: model);
+        var work = Directory.CreateDirectory(Path.Combine(root, "load-work-tb710fu")).FullName;
+        var recWork = Directory.CreateDirectory(Path.Combine(root, "load-rec-tb710fu")).FullName;
+        using var imported = await Import(c.ArchivePath, model, "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer(model, c.DescriptorBytes,
+            c.Entries["images/linux-root.img.gz"], "tb710fu-boot-a"u8.ToArray(), "tb710fu-boot-b"u8.ToArray())
+        {
+            ArmadaBoot = true,
+        };
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+        var session = await transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask);
+        _ = await transfer.PrepareAsync(imported, session);
+        var saved = await transfer.SaveRecoveryAsync(imported, session, recWork);
+
+        var context = new OfflineUpdateRecoveryContext(
+            TransactionIdConst, model, server.PlanSha, server.ManifestSha);
+        var loaded = PackageImporter.LoadOfflineUpdateRecovery(saved.DirectoryPath, context, Hash(c.DescriptorBytes));
+        Assert.Equal(server.ExpectedAckBytes, loaded.Acknowledgement);
+    }
+
     [Theory]
     [InlineData("TB322FC")]
     [InlineData("TB323FU")]

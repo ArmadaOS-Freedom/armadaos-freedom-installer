@@ -241,9 +241,20 @@ public sealed class UpdatePackageDescriptorTests
     {
         AssertInvalid(json => json["armadaBootCapsules"] = new JsonObject { ["TB999XX"] = Capsule() });
         AssertInvalid(json => json["armadaBootCapsules"] = new JsonObject { ["tb710fu"] = Capsule() });
-        AssertInvalid(json =>
+        // The same package without TB710FU is valid until it carries a TB710FU capsule, so only the capsule
+        // membership check can reject it.
+        static void WithoutTb710fu(JsonObject json)
         {
             json["supportedModels"] = new JsonArray("TB322FC", "TB323FU");
+            json["modelManifests"]!.AsObject().Remove("TB710FU");
+        }
+
+        JsonObject control = Base();
+        WithoutTb710fu(control);
+        Parse(control);
+        AssertInvalid(json =>
+        {
+            WithoutTb710fu(json);
             json["armadaBootCapsules"] = new JsonObject { ["TB710FU"] = Capsule() };
         });
     }

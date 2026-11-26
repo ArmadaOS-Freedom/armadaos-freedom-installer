@@ -49,6 +49,7 @@ public sealed class OfflineUpdateRecoveryTests
     [Theory]
     [InlineData("TB322FC")]
     [InlineData("TB323FU")]
+    [InlineData("TB710FU")]
     public async Task SaveAsync_CopiesAndBindsBothModelsWithoutAutomaticCleanup(string model)
     {
         using var root = new TestRoot();

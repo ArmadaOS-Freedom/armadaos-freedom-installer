@@ -236,11 +236,11 @@ namespace FreedomInstaller.App
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorUnsupportedModel", LocalizeModelName(model)));
                 }
                 // An ARMADA_BOOT-only model (TB710FU) has no raw Android Boot update path: a device that does not
-                // report bootSource=armada_boot (an install from before the disk boot) is refused here, and the
-                // transfer refuses it again on every info/status document.
-                if (!ArmadaBootModels.OfflineUpgradePathAllowed(
-                        model.ToUpperInvariant(),
-                        string.Equals(GetJsonString(conn.DeviceInfo, "bootSource"), "armada_boot", StringComparison.Ordinal)))
+                // report the complete ARMADA_BOOT shape (bootSource=armada_boot, null slots, no selectedSlot; an
+                // install from before the disk boot) is refused here, with the rule the transfer applies again to
+                // every info/status document.
+                if (ArmadaBootModels.IsArmadaBootOnly(model.ToUpperInvariant())
+                    && !OfflineUpdateTransfer.AcceptsBootReport(conn.DeviceInfo, model.ToUpperInvariant()))
                 {
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorArmadaBootRequired", LocalizeModelName(model)));
                 }
