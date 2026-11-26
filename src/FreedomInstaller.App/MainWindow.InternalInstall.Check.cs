@@ -49,13 +49,15 @@ public partial class MainWindow
     /// </para>
     /// </summary>
     /// <summary>
-    /// 当前模式的写入路线是否尚未开放：内部安装只看安装路线；维护、卸载与 TF 卡安装共用同一检查与
-    /// 备份管线，但它们的写入路线另行开放，因此看 <see cref="DeviceModelRoutes.IsWriteRoutePending"/>。
+    /// 当前模式的写入路线是否尚未开放：内部安装只看安装路线，引导维护只看维护路线；卸载与 TF 卡安装
+    /// 与维护共用同一检查与备份管线，但写入路线另行开放，因此看 <see cref="DeviceModelRoutes.IsWriteRoutePending"/>。
     /// </summary>
     private bool IsCurrentModeRoutePending(string? model) =>
-        IsSharedNonInternalDeviceMode
-            ? DeviceModelRoutes.IsWriteRoutePending(model)
-            : DeviceModelRoutes.IsInstallRoutePending(model);
+        IsBootMaintenanceMode
+            ? DeviceModelRoutes.IsMaintenanceRoutePending(model)
+            : IsSharedNonInternalDeviceMode
+                ? DeviceModelRoutes.IsWriteRoutePending(model)
+                : DeviceModelRoutes.IsInstallRoutePending(model);
 
     private bool HasCheckedInternalInstallDevice
     {

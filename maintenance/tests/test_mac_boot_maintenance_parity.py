@@ -70,9 +70,11 @@ _WPF_ONLY_CALLS = {
     "InternalInstallBackup.CreatePreparationSnapshotAsync",
     "InternalInstallBackup.OpenExistingAsync",
     "InternalInstallBackup.OpenRecoveryAsync",
-    # The shared WPF check also serves the internal install, whose gate is the install route; the maintenance page
-    # only ever applies the write route (IsCurrentModeRoutePending in a shared mode).
+    # The shared WPF check also serves the internal install (install route) and the uninstall / TF card modes
+    # (write route); the maintenance page only ever applies the maintenance route (IsCurrentModeRoutePending in
+    # the boot maintenance mode).
     "DeviceModelRoutes.IsInstallRoutePending",
+    "DeviceModelRoutes.IsWriteRoutePending",
     # The shared WPF check also probes for an on-board backup after the Android return; only the internal
     # install's automatic backup reads that result, so the maintenance page has no use for the probe.
     "BoardRecoveryBackup.DetectAdbAsync",
@@ -215,11 +217,14 @@ class MacBootMaintenanceParityTests(unittest.TestCase):
             self.assertNotIn(call, _code(MAC_CODE))
 
     def test_write_route_gate_is_the_wpf_one(self):
-        # TB710FU stays held back by Core's write-route gate at the same entry points; no Mac-only gate.
+        # TB710FU boot maintenance is held by Core's maintenance-route gate at the same entry points the WPF
+        # shared check uses in the maintenance mode; no Mac-only gate.
         mac = _code(MAC_CODE)
-        self.assertGreaterEqual(mac.count("DeviceModelRoutes.IsWriteRoutePending("), 3)
+        self.assertGreaterEqual(mac.count("DeviceModelRoutes.IsMaintenanceRoutePending("), 3)
+        self.assertIn("DeviceModelRoutes.IsMaintenanceRoutePending(", _code(WPF_CODE))
         self.assertIn("DeviceModelRoutes.IsRouteRefusal(", mac)
         self.assertNotIn("IsInstallRoutePending", mac)
+        self.assertNotIn("IsWriteRoutePending", mac)
         self.assertNotIn('"TB710FU"', mac)
 
     def test_preparation_failure_codes_match(self):

@@ -344,7 +344,7 @@ public sealed partial class BootMaintenanceBackend : IDisposable
 
             // The freshly verified capture was just re-read from the device and hashed back to the
             // held copy. CurrentBootSlot verifies the misc control block and can resolve an all-zero
-            // control on a Qualcomm Y700 from the GPT slot flags.
+            // control on a Qualcomm model from the GPT slot flags.
             CurrentBootSlotFacts miscFacts = await CurrentBootSlot
                 .ReadAsync(ownedCurrent, cancellationToken)
                 .ConfigureAwait(false);
@@ -845,7 +845,7 @@ public sealed partial class BootMaintenanceBackend : IDisposable
         }
 
         // Boot maintenance writes boot partitions: a model whose maintenance route is not open stops here.
-        DeviceModelRoutes.RequireWriteRoute(profile.Model);
+        DeviceModelRoutes.RequireMaintenanceRoute(profile.Model);
 
         if (!ReferenceEquals(EdlDeviceProfiles.FindById(profile.ProfileId), profile))
         {
