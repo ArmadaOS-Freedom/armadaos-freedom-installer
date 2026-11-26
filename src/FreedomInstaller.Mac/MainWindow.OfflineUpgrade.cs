@@ -390,8 +390,10 @@ public partial class MainWindow
             if (!string.IsNullOrWhiteSpace(p.Phase) && !string.Equals(_offlineLastLoggedPhase, p.Phase, StringComparison.Ordinal))
             {
                 _offlineLastLoggedPhase = p.Phase;
-                AppendOfflineLog("Dynamic.OfflineUpdate.LogPhase", LocalizePhase(p.Phase));
-                SetText(OfflineStateText, "Dynamic.OfflineUpdate.StatePhase", LocalizePhase(p.Phase));
+                var phase = LocalizePhase(p.Phase);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogPhase",
+                    phase.Key == "Dynamic.Mac.OfflineUpdate.PhaseUnknown" ? p.Phase : phase);
+                SetText(OfflineStateText, "Dynamic.OfflineUpdate.StatePhase", phase);
             }
 
             if (p.TotalBytes.HasValue && p.TotalBytes.Value > 0 && p.BytesCompleted.HasValue)
@@ -424,7 +426,8 @@ public partial class MainWindow
         "executing" => M("Dynamic.OfflineUpdate.Phase.Executing"),
         "awaiting_reboot" => M("Dynamic.OfflineUpdate.Phase.AwaitingReboot"),
         "failed" => M("Dynamic.OfflineUpdate.Phase.Failed"),
-        _ => string.IsNullOrWhiteSpace(phase) ? M("Dynamic.OfflineUpdate.Phase.Working") : M("Dynamic.OfflineUpdate.Value", phase!)
+        null or "" => M("Dynamic.OfflineUpdate.Phase.Working"),
+        _ => M("Dynamic.Mac.OfflineUpdate.PhaseUnknown"),
     };
 
     private async Task<string?> PickOfflineFileAsync(IReadOnlyList<FilePickerFileType>? filters = null)
@@ -507,7 +510,7 @@ public partial class MainWindow
         }
         catch (IOException ex)
         {
-            throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorUsbConnection", ex.Message), ex.Message, ex);
+            throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorUsbConnection", ex), ex.Message, ex);
         }
     }
 
@@ -768,12 +771,12 @@ public partial class MainWindow
         _offlinePreflightError = null;
     }
 
-    private void MarkOfflinePreflightFailed(UiMessage reason)
+    private void MarkOfflinePreflightFailed(UiMessage reason, string? diagnostic = null)
     {
         _offlinePreflightPassed = false;
         _offlinePreflightError = reason;
         SetText(OfflineStateText, "Dynamic.OfflineUpdate.StatePreflightFailed", reason);
-        AppendOfflineLog("Dynamic.OfflineUpdate.LogPreflightFailed", reason);
+        AppendOfflineLog("Dynamic.OfflineUpdate.LogPreflightFailed", diagnostic is null ? reason : diagnostic);
     }
 
     private async void OnValidateOfflinePackageAsync(object? sender, RoutedEventArgs e)
@@ -781,12 +784,12 @@ public partial class MainWindow
         await RunOfflineUpgradeAsync(async (_, ct) =>
         {
             if (_offlineSsh == null || string.IsNullOrEmpty(_offlineConnectedModel) || string.IsNullOrEmpty(_offlineRecoveryPartUuid))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
 
             ClearOfflinePreflightState();
             string path = (OfflinePackagePathBox.Text ?? string.Empty).Trim();
             if (string.IsNullOrEmpty(path))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNoPackagePath"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNoPackagePath"));
 
             DisposeImportedPackageAndInvalidate();
             string installerVer = GetThreePartInstallerVersion();
@@ -931,9 +934,9 @@ public partial class MainWindow
             bool exportRecoveryOnly =
                 OfflineUpdateUiState.NeedsRecoveryExport(_offlineLastReceipt) && _offlineSavedRecovery == null;
             if (exportRecoveryOnly && _offlineSelectedSession == null)
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
             if (!exportRecoveryOnly && !_offlineBootPolicySupported)
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
             if (!_offlinePreflightPassed)
             {
                 var preflightError = _offlinePreflightError;
@@ -943,7 +946,7 @@ public partial class MainWindow
             }
             if (!exportRecoveryOnly &&
                 !OfflineUpdateUiState.CanPrepare(_offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorStateNotActionable", _l.Format(LocalizePhase(GetReceiptState(_offlineLastReceipt)))));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorStateNotActionable", LocalizePhase(GetReceiptState(_offlineLastReceipt))));
             ClearOfflineActionEligibility();
             string recordsRoot = GetPersistentRecordsRoot();
             var session = _offlineSelectedSession;
@@ -973,9 +976,8 @@ public partial class MainWindow
                 // The tablet already prepared this session; resume at the
                 // only remaining local step, the verified recovery bundle.
                 AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoveryExportResumed", session.SessionId);
-                JsonElement preparedReceipt = _offlineLastReceipt ?? throw new InvalidOperationException(
-                    T("Dynamic.OfflineUpdate.ErrorStateNotActionable",
-                        _l.Format(LocalizePhase(GetReceiptState(_offlineLastReceipt)))));
+                JsonElement preparedReceipt = _offlineLastReceipt ?? throw new LocalizedInvalidOperationException(
+                    M("Dynamic.OfflineUpdate.ErrorStateNotActionable", LocalizePhase(GetReceiptState(_offlineLastReceipt))));
                 await EnsureOfflineRecoveryAsync(session, preparedReceipt, sessionRoot, gen, ct);
             }
             else
@@ -1015,12 +1017,12 @@ public partial class MainWindow
             EnsureReadyForSessionWork(requireSelectedSession: true);
             EnsureOfflineCatalogAvailable();
             if (!_offlineBootPolicySupported)
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
             // Repeated here so the action rests on this exact live receipt,
             // this device and this package even if the panel changed while
             // the confirmation was open.
             if (!_offlineReceiptLive || !OfflineSelectionIsVerifiedFailedPrepare())
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
 
             var failed = _offlineSelectedSession!;
 
@@ -1045,7 +1047,7 @@ public partial class MainWindow
                 if (!freshPreflightPassed)
                     return;
 
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
             }
 
             ClearOfflineActionEligibility();
@@ -1169,9 +1171,9 @@ public partial class MainWindow
         long generation, CancellationToken ct)
     {
         if (_offlineSsh == null || _offlineTransfer == null || string.IsNullOrEmpty(_offlineConnectedModel))
-            throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
         if (_offlinePackage == null || string.IsNullOrEmpty(_offlineDescriptorSha256))
-            throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
 
         OfflineUpdateRecoveryContext? context = TryExtractRecoveryContext(receipt, _offlineConnectedModel!);
         SavedOfflineUpdateRecovery? existing = null;
@@ -1197,7 +1199,7 @@ public partial class MainWindow
         // Execution may only start with the validated acknowledgement that
         // belongs to this transaction; a bundle without it is not evidence.
         if (existing.Acknowledgement is not { Length: > 0 })
-            throw new InvalidDataException(T("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
 
         _offlineSavedRecovery = existing;
         SetText(OfflineRecoveryPathText, "Dynamic.OfflineUpdate.Value", existing.DirectoryPath);
@@ -1214,7 +1216,7 @@ public partial class MainWindow
         await RunOfflineUpgradeAsync(async (gen, ct) =>
         {
             if (_offlineSsh == null || _offlineTransfer == null || string.IsNullOrEmpty(_offlineConnectedModel))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
 
             // Refresh retries the local, read-only records scan first when
             // the location was unreadable.
@@ -1234,7 +1236,7 @@ public partial class MainWindow
                     if (catalogRecovered)
                         return;
 
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
                 }
 
                 // No session exists yet, so the only read-only work left is
@@ -1248,7 +1250,7 @@ public partial class MainWindow
                         return;
                     }
 
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
                 }
 
                 ClearOfflineActionEligibility();
@@ -1346,8 +1348,9 @@ public partial class MainWindow
             var preflight = await _offlineTransfer.PreflightAsync(_offlinePackage, session, ct);
             if (!OfflineUpdateUiState.PreflightPassed(preflight))
             {
+                var phase = OfflineUpdateUiState.PreflightPhase(preflight);
                 MarkOfflinePreflightFailed(M("Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse",
-                    OfflineUpdateUiState.PreflightPhase(preflight) ?? "?"));
+                    phase is null ? M("Dynamic.Mac.OfflineUpdate.PhaseUnknown") : LocalizePhase(phase)), phase ?? "?");
                 return false;
             }
 
@@ -1365,7 +1368,7 @@ public partial class MainWindow
             string detail = ex is OfflineUpdateRemoteException remote
                 ? $"{remote.Code}: {remote.Message}"
                 : ex.Message;
-            MarkOfflinePreflightFailed(M("Dynamic.OfflineUpdate.ErrorPreflightFailed", detail));
+            MarkOfflinePreflightFailed(M("Dynamic.OfflineUpdate.ErrorPreflightFailed", ex), detail);
             return false;
         }
     }
@@ -1386,7 +1389,7 @@ public partial class MainWindow
         {
             EnsureReadyForSessionWork(requireSelectedSession: true);
             if (!_offlineBootPolicySupported)
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
             if (!_offlinePreflightPassed)
             {
                 var preflightError = _offlinePreflightError;
@@ -1395,9 +1398,9 @@ public partial class MainWindow
                     : new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorPreflightRequired"));
             }
             if (!OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null, _offlinePreflightPassed))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
             if (_offlineSavedRecovery == null)
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
 
             var session = _offlineSelectedSession!;
             string recordsRoot = GetPersistentRecordsRoot();
@@ -1573,7 +1576,7 @@ public partial class MainWindow
             default:
                 ClearOfflineActionEligibility();
                 _offlineLastReceipt = null;
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorStateNotActionable", LocalizePhase(state)));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorStateNotActionable", LocalizePhase(state)));
         }
     }
 
@@ -1828,13 +1831,13 @@ public partial class MainWindow
             // re-uploads nor re-validates the package.
             if (_offlineSsh == null || _offlineTransfer == null ||
                 string.IsNullOrEmpty(_offlineConnectedModel))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
             if (_offlineSelectedSession == null)
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
             if (!_offlineBootPolicySupported)
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
             if (!_offlineReceiptLive || !OfflineUpdateUiState.CanRestartToVerify(_offlineLastReceipt))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorRestartNotEligible"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorRestartNotEligible"));
 
             var session = _offlineSelectedSession!;
             AppendOfflineLog("Dynamic.OfflineUpdate.LogRestartRequested", session.SessionId);
@@ -1853,8 +1856,7 @@ public partial class MainWindow
                 _offlineReceiptLive = false;
                 AppendOfflineLog("Dynamic.OfflineUpdate.LogRestartRejected", ex.Code, ex.Message);
                 await TryRefreshOfflineStatusAfterRestartRejectionAsync(session, ct);
-                SetText(OfflineStateText, "Dynamic.OfflineUpdate.StateRestartRejected",
-                    ex.Code, ex.Message);
+                SetText(OfflineStateText, "Dynamic.OfflineUpdate.StateRestartRejected");
                 return;
             }
             catch (Exception ex) when (ex is IOException or TimeoutException or ObjectDisposedException)
@@ -1986,11 +1988,11 @@ public partial class MainWindow
     private void EnsureReadyForSessionWork(bool requireSelectedSession)
     {
         if (_offlineSsh == null || _offlineTransfer == null || string.IsNullOrEmpty(_offlineConnectedModel))
-            throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
         if (_offlinePackage == null || string.IsNullOrEmpty(_offlineDescriptorSha256))
-            throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
         if (requireSelectedSession && _offlineSelectedSession == null)
-            throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
     }
 
     private void EnsureNoBlockingReceiptFlags(JsonElement receipt)

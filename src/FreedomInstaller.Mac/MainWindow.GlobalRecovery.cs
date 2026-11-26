@@ -1013,7 +1013,7 @@ public partial class MainWindow
             && message.EndsWith(linuxSuffix, StringComparison.Ordinal);
         return linuxPartitionName || linuxTypeGuid
             ? M("Dynamic.Global.Error.LinuxAlreadyInstalled")
-            : M("Dynamic.Global.Status.BackupFailed", exception.Message);
+            : M("Dynamic.Global.Status.BackupFailed", exception);
     }
 
     // ================================================================ read-only restore preparation
@@ -1275,7 +1275,7 @@ public partial class MainWindow
                 {
                     _globalResetUnknown = true;
                     AppendGlobalLog(M("Dynamic.Global.Log.ResetUnknown", exception.Message));
-                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ResetUnknown", exception.Message);
+                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ResetUnknown", exception);
                     return;
                 }
 

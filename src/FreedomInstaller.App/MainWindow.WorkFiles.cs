@@ -86,9 +86,9 @@ public partial class MainWindow
             SetText(EnvironmentWorkPathText, string.IsNullOrWhiteSpace(requestedRoot)
                 ? M("Dynamic.Environment.WorkUnselected")
                 : M("Dynamic.Environment.WorkPath", requestedRoot));
-            SetText(EnvironmentWorkStatusText, "Dynamic.Environment.WorkFailed", exception.Message);
+            SetText(EnvironmentWorkStatusText, "Dynamic.Environment.WorkFailed", exception);
             SetEnvironmentIndicator(EnvironmentWorkIndicator, false);
-            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Operation"), exception.Message);
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Operation"), exception);
         }
     }
 

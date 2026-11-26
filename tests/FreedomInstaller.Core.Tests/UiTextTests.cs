@@ -54,18 +54,16 @@ public sealed class UiTextTests
     }
 
     [Fact]
-    public void LinuxAlreadyInstalled_WarningText_IsExactInBothLanguages()
+    public void LinuxAlreadyInstalled_WarningExplainsWhyFactoryBackupIsUnavailable()
     {
         var chinese = new UiText(UiText.ChineseLanguage);
         var english = new UiText(UiText.EnglishLanguage);
         var message = new UiMessage("Dynamic.Global.Error.LinuxAlreadyInstalled");
 
-        Assert.Equal(
-            "此平板已经安装过Linux，无法进行安卓9008 备份。",
-            chinese.FormatForDisplay(message));
-        Assert.Equal(
-            "This tablet already has Linux installed, so Android 9008 backup cannot be performed.",
-            english.FormatForDisplay(message));
+        Assert.Contains("已有 Linux 分区", chinese.FormatForDisplay(message));
+        Assert.Contains("原厂安卓的 9008 全局备份", chinese.FormatForDisplay(message));
+        Assert.Contains("already has Linux installed", english.FormatForDisplay(message));
+        Assert.Contains("Android 9008 backup", english.FormatForDisplay(message));
     }
 
     [Fact]
@@ -118,7 +116,7 @@ public sealed class UiTextTests
 
         var text = new UiText(UiText.ChineseLanguage);
         var chinese = text.Format(message);
-        Assert.Contains("电脑上安装器工作目录所在磁盘空间不足", chinese);
+        Assert.Contains("电脑的临时文件盘空间不足", chinese);
         Assert.Contains("13.69 GiB", chinese);
         Assert.Contains("35.78 GiB", chinese);
         Assert.DoesNotContain("insufficient-direct-execution-space", chinese);
@@ -128,6 +126,53 @@ public sealed class UiTextTests
         Assert.Contains("Not enough free space", english);
         Assert.Contains("13.69 GiB", english);
         Assert.Contains("35.78 GiB", english);
+    }
+
+    [Fact]
+    public void WorkDiskSpaceFailure_InSharedStatusPreservesCapacityAndDiagnostic()
+    {
+        var exception = Assert.Throws<InternalInstallWorkDiskSpaceException>(
+            () => InternalInstallPreparationContext.RequireDirectExecutionSpaceAvailable(38408839168L, 14706802688L));
+        var message = new UiMessage("Dynamic.InternalInstall.Capacity.ImportFailed", exception);
+        var text = new UiText(UiText.ChineseLanguage);
+
+        Assert.Contains("13.69 GiB", text.FormatForDisplay(message));
+        Assert.Contains("35.78 GiB", text.FormatForDisplay(message));
+        Assert.DoesNotContain("insufficient-direct-execution-space", text.FormatForDisplay(message));
+        Assert.Contains(exception.Message, text.Format(message));
+
+        text.SetLanguage(UiText.EnglishLanguage);
+        Assert.Contains("13.69 GiB", text.FormatForDisplay(message));
+        Assert.Contains("35.78 GiB", text.FormatForDisplay(message));
+    }
+
+    [Theory]
+    [InlineData(UiText.ChineseLanguage, "B 槽", "启动镜像")]
+    [InlineData(UiText.EnglishLanguage, "slot B", "boot image")]
+    public void InternalInstallPreparationFailure_BootImageLimitShowsAffectedSlotAndSizes(
+        string language, string slot, string image)
+    {
+        const string detail = "packed raw image exceeds the slot loader budget (raw image actual bytes 67108864, MaxRawBytes limit 62914560, target slot 'b', source slot 'a')";
+        var failure = UiText.InternalInstallPreparationFailure(new System.IO.InvalidDataException(detail));
+        var message = new UiText(language).FormatForDisplay(failure);
+
+        Assert.Contains(slot, message);
+        Assert.Contains(image, message);
+        Assert.Contains("64", message);
+        Assert.Contains("60", message);
+        Assert.DoesNotContain("MaxRawBytes", message);
+    }
+
+    [Fact]
+    public void MaintenanceResourceFailure_UsesItsTypedCauseInChinese()
+    {
+        var exception = new MaintenanceException(MaintenanceErrorCode.AssetHashMismatch, "sha256 check failed for the reviewed asset");
+        var message = new UiMessage("Dynamic.ToolsStatus.PrepareFailed", exception);
+        var text = new UiText(UiText.ChineseLanguage);
+
+        Assert.Contains("校验", text.FormatForDisplay(message));
+        Assert.DoesNotContain("sha256 check failed", text.FormatForDisplay(message));
+        Assert.Contains(exception.Message, text.Format(message));
     }
 
     [Fact]
@@ -235,9 +280,9 @@ public sealed class UiTextTests
         var message = UiText.InternalInstallPreparationFailure(exception);
 
         var chinese = new UiText(UiText.ChineseLanguage).Format(message);
-        Assert.Contains("无法确定电脑上安装器工作目录所在磁盘的剩余空间", chinese);
+        Assert.Contains("无法读取电脑临时文件盘的剩余空间", chinese);
         Assert.Contains("35.78 GiB", chinese);
-        Assert.Contains("请确认该磁盘可访问", chinese);
+        Assert.Contains("请检查磁盘是否可用", chinese);
     }
 
     [Fact]
@@ -250,7 +295,7 @@ public sealed class UiTextTests
         Assert.Equal("Dynamic.InternalInstall.Prepared.NeedInputs", message.Key);
         Assert.Empty(message.Arguments);
         var chinese = new UiText(UiText.ChineseLanguage).Format(message);
-        Assert.Contains("容量、系统包或 9008 连接尚未就绪", chinese);
+        Assert.Contains("请确认已分配空间、校验系统包，并保持平板的 9008 连接", chinese);
     }
 
     [Fact]

@@ -73,7 +73,7 @@ public partial class MainWindow
     private bool _userdataUninstallOperationActive;
 
     /// <summary>最近一次真实准备失败的原始诊断；成功或作废时清空。</summary>
-    private string? _userdataUninstallError;
+    private Exception? _userdataUninstallError;
 
     /// <summary>卸载模式判断。</summary>
     private bool IsModernUserdataUninstallMode =>
@@ -274,7 +274,7 @@ public partial class MainWindow
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
                     // 缓存目录建不出来：按准备失败报告并留在来源页；保护状态与 9008 会话不变，异常不逃出 async void。
-                    _userdataUninstallError = exception.Message;
+                    _userdataUninstallError = exception;
                     RenderUserdataUninstallPreparationError();
                     AppendLocalizedLog(M(
                         "Dynamic.RawValue",
@@ -375,7 +375,7 @@ public partial class MainWindow
                     if (!fresh.Files.TryGetValue("misc", out var misc)
                         || misc is not EdlCapturedRegion miscRegion)
                     {
-                        throw new InvalidOperationException(T("Dynamic.UserdataUninstall.Status.PrepareFailed"));
+                        throw new LocalizedInvalidOperationException(M("Dynamic.UserdataUninstall.Status.SlotInfoMissing"));
                     }
 
                     facts = await CurrentBootSlot.ReadAsync(fresh, token);
@@ -468,13 +468,13 @@ public partial class MainWindow
                 }
                 catch (OperationCanceledException)
                 {
-                    SetText(BootMaintenancePrepareStatusText, M("Dynamic.UserdataUninstall.Status.PrepareFailed"));
+                    SetText(BootMaintenancePrepareStatusText, M("Dynamic.UserdataUninstall.Status.PrepareCancelled"));
                     AppendLocalizedLog(M("Dynamic.UserdataUninstall.Status.PrepareCancelled"));
                 }
                 catch (Exception exception)
                 {
                     acceptProgress = false;
-                    _userdataUninstallError = exception.Message;
+                    _userdataUninstallError = exception;
                     RenderUserdataUninstallPreparationError();
                     AppendLocalizedLog(M(
                         "Dynamic.RawValue",
@@ -511,10 +511,10 @@ public partial class MainWindow
     }
     private void RenderUserdataUninstallPreparationError()
     {
-        if (string.IsNullOrWhiteSpace(_userdataUninstallError)) return;
-        var message = _userdataUninstallError.StartsWith("requires-current-bootloader-state:", StringComparison.Ordinal)
+        if (_userdataUninstallError is not { } error) return;
+        var message = error.Message.StartsWith("requires-current-bootloader-state:", StringComparison.Ordinal)
             ? M("Dynamic.UserdataUninstall.Status.LockCheckRequired")
-            : M("Dynamic.UserdataUninstall.Status.PrepareFailureDetail", _userdataUninstallError);
+            : M("Dynamic.UserdataUninstall.Status.PrepareFailureDetail", UiText.DisplayError(error));
         SetText(BootMaintenancePrepareStatusText, message);
     }
 

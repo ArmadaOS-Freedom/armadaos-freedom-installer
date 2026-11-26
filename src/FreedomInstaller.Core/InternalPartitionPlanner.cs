@@ -1,5 +1,34 @@
 namespace FreedomInstaller.Core;
 
+/// <summary>Linux will not fit on the tablet after reserving the requested Android space and recovery tail.</summary>
+public sealed class InternalInstallLinuxSpaceException : ArgumentException
+{
+    public long AvailableLinuxBytes { get; }
+    public long RequiredLinuxBytes { get; }
+    public long AndroidGiB { get; }
+    public long MinimumAndroidGiB { get; }
+
+    internal InternalInstallLinuxSpaceException(
+        long availableLinuxBytes,
+        long requiredLinuxBytes,
+        long availableRootBytes,
+        long requiredRootBytes,
+        long androidGiB,
+        long minimumAndroidGiB,
+        string paramName)
+        : base(
+            $"The plan leaves {availableLinuxBytes} Linux bytes and {availableRootBytes} root bytes, "
+                + $"below the required {requiredLinuxBytes} and {requiredRootBytes} bytes "
+                + $"with {androidGiB} GiB reserved for Android (minimum {minimumAndroidGiB} GiB).",
+            paramName)
+    {
+        AvailableLinuxBytes = availableLinuxBytes;
+        RequiredLinuxBytes = requiredLinuxBytes;
+        AndroidGiB = androidGiB;
+        MinimumAndroidGiB = minimumAndroidGiB;
+    }
+}
+
 /// <summary>
 /// Plans the internal partition layout that follows a partition-table rewrite: the Android userdata window
 /// carved out of the original userdata partition, the Linux boot and root extents behind it and the reserved
@@ -186,11 +215,6 @@ public static class InternalPartitionPlanner
             throw new ArgumentException("The planned extents overflow the sector space.", nameof(androidGiB), ex);
         }
 
-        if (rootSectorCount <= 0)
-        {
-            throw new ArgumentException("The package leaves no room for the Linux root extent.", nameof(storage));
-        }
-
         long alignmentGapSectors = bootStartSector - androidEndSector;
         long tailSectors = availableEnd - backupEndSector;
         if (alignmentGapSectors < 0 || tailSectors < 0 || bootStartSector < originalStart || backupEndSector > availableEnd)
@@ -204,8 +228,8 @@ public static class InternalPartitionPlanner
         long alignmentLossBytes;
         try
         {
-            linuxRootBytes = checked(rootSectorCount * sectorSize);
-            linuxBytes = checked((backupStartSector - bootStartSector) * sectorSize);
+            linuxRootBytes = checked(Math.Max(0, rootSectorCount) * sectorSize);
+            linuxBytes = checked(Math.Max(0, backupStartSector - bootStartSector) * sectorSize);
             alignmentLossBytes = checked((alignmentGapSectors + tailSectors) * sectorSize);
         }
         catch (OverflowException ex)
@@ -225,9 +249,8 @@ public static class InternalPartitionPlanner
 
         if (linuxBytes < MinimumLinuxBytes || linuxBytes < requiredLinuxBytes || linuxRootBytes < requiredRootBytes)
         {
-            throw new ArgumentException(
-                $"The plan leaves {linuxBytes} Linux bytes and {linuxRootBytes} root bytes, "
-                + $"below the required {requiredLinuxBytes} and {requiredRootBytes} bytes.",
+            throw new InternalInstallLinuxSpaceException(
+                linuxBytes, requiredLinuxBytes, linuxRootBytes, requiredRootBytes, androidGiB, MinimumAndroidGiB,
                 nameof(storage));
         }
 

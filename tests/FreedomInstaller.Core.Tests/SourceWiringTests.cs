@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace FreedomInstaller.Core.Tests;
@@ -79,5 +80,39 @@ public sealed class SourceWiringTests
         Assert.Contains("if (_diagnosticExporting) return;", closeDiag, StringComparison.Ordinal);
         Assert.Contains("_showingDiagnostics = false;", closeDiag, StringComparison.Ordinal);
         Assert.Contains("_showingSupport = _returnToSupportAfterDiagnostics;", closeDiag, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InternalInstallPreparationFailure_PassesPageMessageToBannerAndKeepsDiagnosticDetail()
+    {
+        string capacity = ReadEmbedded("FreedomInstaller.Tests.MainWindow.InternalInstall.Capacity.cs");
+        string prepare = SliceMethod(capacity, "private async Task PrepareInternalInstallConfirmationAsync()", "private void RenderInternalInstallPreparedSummary(");
+
+        // WPF cannot be started by the cross-platform Core suite. Pin this call boundary so
+        // passing exception.Message back through the generic classifier cannot regress the banner.
+        Match report = Regex.Match(prepare,
+            @"SetInternalInstallConfirmStatus\((?<message>\w+)\);(?:(?!RecordDiagnosticFailure).)*RecordDiagnosticFailure\(\s*M\(""Dynamic\.Diagnostics\.Stage\.Prepare""\),\s*(?<detail>[^,;]+),\s*\k<message>\s*\);",
+            RegexOptions.Singleline | RegexOptions.CultureInvariant);
+
+        Assert.True(report.Success, "The preparation page and failure banner must use the same localized reason.");
+        Assert.Contains("DescribeFailure(exception)", report.Groups["detail"].Value, StringComparison.Ordinal);
+
+        string diagnostics = ReadEmbedded("FreedomInstaller.Tests.MainWindow.Diagnostics.cs");
+        Assert.Matches(
+            @"SetText\(DiagnosticFailureText,\s*""Dynamic\.Diagnostics\.Failure"",\s*stage,\s*displayDetail\);",
+            diagnostics);
+    }
+
+    [Fact]
+    public void MacInternalInstall_UsesSharedFailureReasonAndConfirmsTheActualErasePlan()
+    {
+        string install = ReadEmbedded("FreedomInstaller.Tests.Mac.MainWindow.Install.cs");
+        Assert.Matches(
+            @"var (?<reason>\w+) = UiText\.InternalInstallPreparationFailure\(exception, check\.FastbootLockState\);\s*SetText\(InternalInstallCapacityStatusText, \k<reason>\);",
+            install);
+        Assert.Contains("var preserveAndroid = prepared.AndroidDataErase == false;", install, StringComparison.Ordinal);
+        Assert.Matches(
+            @"T\(prepared\.AndroidDataErase == false\s*\? ""Dynamic\.InternalInstall\.Execution\.Dialog\.Body\.PreserveAndroid""\s*: ""Dynamic\.InternalInstall\.Execution\.Dialog\.Body""",
+            install);
     }
 }

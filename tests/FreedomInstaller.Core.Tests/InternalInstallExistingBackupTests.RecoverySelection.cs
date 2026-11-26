@@ -246,11 +246,11 @@ namespace FreedomInstaller.App
 
         private static string T(string key, params object[] args) => key;
 
-        private static string M(string key, params object[] args) => key;
+        private static UiMessage M(string key, params object?[] args) => new(key, args);
 
-        private void AppendLocalizedLog(string message) => _testLog.Add(message);
+        private void AppendLocalizedLog(UiMessage message) => _testLog.Add(message.Key);
 
-        private void SetInternalInstallCheckStatus(string message) => _testLog.Add(message);
+        private void SetInternalInstallCheckStatus(UiMessage message) => _testLog.Add(message.Key);
 
         private void RefreshInternalInstallActions() { }
 

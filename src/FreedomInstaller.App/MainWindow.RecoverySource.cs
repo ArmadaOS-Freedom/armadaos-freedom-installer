@@ -47,7 +47,7 @@ public partial class MainWindow
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
                 // 缓存目录不可写：在本流程的状态里报告失败，保留会话，不让异常逃出 async void 处理程序（同 Mac）。
-                SetInternalInstallCheckStatus(M("Dynamic.RecoverySource.Failed", error.Message));
+                SetInternalInstallCheckStatus(M("Dynamic.RecoverySource.Failed", error));
                 AppendLocalizedLog(M("Dynamic.RecoverySource.Failed", error.Message));
                 return;
             }
@@ -70,7 +70,7 @@ public partial class MainWindow
                         var hardware = await GlobalEdlDetection.DetectIdentityAsync(detector.ClientPath, _runner!, discovery, null, token);
                         var profile = hardware.Profile;
                         if (DeviceModelRoutes.IsWriteRoutePending(profile.Model))
-                            throw new InvalidOperationException(T("Dynamic.Model.RoutePendingInEdl", UiText.ModelName(profile.Model)));
+                            throw new LocalizedInvalidOperationException(M("Dynamic.Model.RoutePendingInEdl", UiText.ModelName(profile.Model)));
                         var tools = await LoadGlobalToolsAsync(profile, token);
                         try
                         {
@@ -91,7 +91,7 @@ public partial class MainWindow
                     {
                         var chosen = UninstallBackupDirectorySelection.Resolve(activeExplicitDirectory);
                         if (chosen.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || chosen.DirectoryPath is null)
-                            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+                            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedSpecificOriginal"));
                         await BindUninstallRecoveryIdentityAsync(client, chosen.DirectoryPath, token);
                         _bootMaintenanceOriginalDirectory = chosen.DirectoryPath;
                         AppendLocalizedLog(M("Dynamic.RecoverySource.PcReady", chosen.DirectoryPath));
@@ -167,15 +167,15 @@ public partial class MainWindow
                         // 不允许回退到 PC 备份或编造身份。
                         if (IsRepairInstallationMode)
                         {
-                            throw new InvalidOperationException(T("Dynamic.BootMaintenance.Repair.NeedAndroidIdentity"));
+                            throw new LocalizedInvalidOperationException(M("Dynamic.BootMaintenance.Repair.NeedAndroidIdentity"));
                         }
 
                         var selected = activeExplicitDirectory
                             ?? PickExistingDirectory(null, "Dynamic.RecoverySource.PickOriginal");
-                        if (selected is null) throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+                        if (selected is null) throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedOriginal"));
                         var selection = UninstallBackupDirectorySelection.Resolve(selected);
                         source = selection.Kind == UninstallBackupDirectorySelection.SelectionKind.Selected
-                            ? selection.DirectoryPath : throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+                            ? selection.DirectoryPath : throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedSpecificOriginal"));
                         await BindUninstallRecoveryIdentityAsync(client, source!, token);
                         _bootMaintenanceOriginalDirectory = source;
                         if (IsModernUserdataUninstallMode)
@@ -187,7 +187,7 @@ public partial class MainWindow
                 catch (OperationCanceledException) { throw; }
                 catch (Exception error)
                 {
-                    SetInternalInstallCheckStatus(M("Dynamic.RecoverySource.Failed", error.Message));
+                    SetInternalInstallCheckStatus(M("Dynamic.RecoverySource.Failed", error));
                     AppendLocalizedLog(M("Dynamic.RecoverySource.Failed", error.Message));
                 }
             });
@@ -204,7 +204,7 @@ public partial class MainWindow
     {
         var history = await BootMaintenanceBackend.ReadHistoricalIdentityAsync(source, token);
         if (history.Profile.ProfileId != client.Toolchain.ProfileId)
-            throw new InvalidDataException(T("Dynamic.RecoverySource.WrongDevice"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.WrongDevice"));
         var savedEntry = await new EdlEntry(_transport!.AdbPath, _runner!, new WindowsEdlEndpointDiscovery())
             .WaitForPresentAsync(history.Identity, history.Profile, token);
         var probeOutput = Path.Combine(TemporaryWorkRoot,
@@ -230,10 +230,10 @@ public partial class MainWindow
         {
             var selectedPc = SelectedUserdataUninstallPcBackup;
             if (string.IsNullOrWhiteSpace(selectedPc))
-                throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedOriginal"));
             var selection = UninstallBackupDirectorySelection.Resolve(selectedPc);
             if (selection.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || selection.DirectoryPath is null)
-                throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedSpecificOriginal"));
             if (_internalInstallRecoverySource is { } explicitCached
                 && string.Equals(explicitCached.DirectoryPath, selection.DirectoryPath, StringComparison.OrdinalIgnoreCase))
             {
@@ -322,10 +322,10 @@ public partial class MainWindow
             selected = PickExistingDirectory(null, "Dynamic.RecoverySource.PickOriginal");
         token.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(selected))
-            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedOriginal"));
         var resolved = UninstallBackupDirectorySelection.Resolve(selected);
         if (resolved.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || resolved.DirectoryPath is null)
-            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedSpecificOriginal"));
         var recovery = await InternalInstallBackup.OpenRecoveryAsync(client, resolved.DirectoryPath, token: token);
         try { BoardRecoveryBackup.ValidateSourceForReuse(current, recovery); }
         catch { recovery.Dispose(); throw; }

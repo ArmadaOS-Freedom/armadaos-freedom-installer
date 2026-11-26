@@ -96,7 +96,7 @@ namespace FreedomInstaller.App
                     identity.PublicKey.PublicKey != capturedIdentity.PublicKey.PublicKey)
                 {
                     ClearOfflinePairing();
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.PairingChanged"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.PairingChanged"));
                 }
                 ct.ThrowIfCancellationRequested();
                 var options = OfflineUpdateSshTrustStore.TrustUsbHost(candidate, identity, receipt);
@@ -117,7 +117,7 @@ namespace FreedomInstaller.App
             }
             catch (Exception ex)
             {
-                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex);
                 MessageBox.Show(this, T("Dynamic.OfflineUpdate.PairingCopyFailed", ex),
                     T("Static.OfflineUpdate.Title"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
@@ -233,7 +233,7 @@ namespace FreedomInstaller.App
                 string model = GetJsonString(conn.DeviceInfo, "model") ?? string.Empty;
                 if (!UpdatePackageDescriptor.SupportsOfflineUpgrade(model.ToUpperInvariant()))
                 {
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorUnsupportedModel", LocalizeModelName(model)));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorUnsupportedModel", LocalizeModelName(model)));
                 }
                 // An ARMADA_BOOT-only model (TB710FU) has no raw Android Boot update path: a device that does not
                 // report the complete ARMADA_BOOT shape (bootSource=armada_boot, null slots, no selectedSlot; an
@@ -242,7 +242,7 @@ namespace FreedomInstaller.App
                 if (ArmadaBootModels.IsArmadaBootOnly(model.ToUpperInvariant())
                     && !OfflineUpdateTransfer.AcceptsBootReport(conn.DeviceInfo, model.ToUpperInvariant()))
                 {
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorArmadaBootRequired", LocalizeModelName(model)));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorArmadaBootRequired", LocalizeModelName(model)));
                 }
                 _offlineSsh = conn;
                 _offlineTransfer = new OfflineUpdateTransfer(conn.Rpc);

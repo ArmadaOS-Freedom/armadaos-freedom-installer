@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using FreedomInstaller.App;
 using FreedomInstaller.Core;
 using Xunit;
 
@@ -308,6 +309,16 @@ public sealed class PackageImporterTests
 
         Assert.False(imported.Validation.IsValid);
         Assert.NotEmpty(imported.Validation.Reasons);
+        var message = new UiMessage("Dynamic.InternalInstall.Capacity.Invalid", imported.Validation);
+        var text = new UiText(UiText.ChineseLanguage);
+        var chinese = text.FormatForDisplay(message);
+        Assert.Contains("缺少文件", chinese);
+        Assert.Contains(PackageFixture.SystemFileName, chinese);
+
+        text.SetLanguage(UiText.EnglishLanguage);
+        var english = text.FormatForDisplay(message);
+        Assert.Contains("missing", english, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(PackageFixture.SystemFileName, english);
         AssertNoOutput(fixture);
     }
 

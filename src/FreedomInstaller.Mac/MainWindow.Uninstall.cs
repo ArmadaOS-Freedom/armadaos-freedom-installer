@@ -93,7 +93,7 @@ public partial class MainWindow
     private BootMaintenancePrepared? _uninstallStockPlan;
     private BootMaintenanceResult? _uninstallStockRestoreResult;
     private bool _uninstallOperationActive;
-    private string? _uninstallError;
+    private UiMessage? _uninstallError;
 
     // ---------- 执行 ----------
 
@@ -501,16 +501,18 @@ public partial class MainWindow
 
     private void RenderUninstallPreparationError()
     {
-        if (string.IsNullOrWhiteSpace(_uninstallError))
+        if (_uninstallError is not { } message)
         {
             return;
         }
 
-        var message = _uninstallError.StartsWith("requires-current-bootloader-state:", StringComparison.Ordinal)
-            ? M("Dynamic.UserdataUninstall.Status.LockCheckRequired")
-            : M("Dynamic.UserdataUninstall.Status.PrepareFailureDetail", _uninstallError);
         SetText(UninstallPrepareStatusText, message);
     }
+
+    private static UiMessage UninstallPreparationError(Exception error) =>
+        error.Message.StartsWith("requires-current-bootloader-state:", StringComparison.Ordinal)
+            ? M("Dynamic.UserdataUninstall.Status.LockCheckRequired")
+            : M("Dynamic.UserdataUninstall.Status.PrepareFailureDetail", UiText.DisplayError(error));
 
     private void AppendUninstallLog(UiMessage message)
     {
@@ -831,10 +833,9 @@ public partial class MainWindow
                     _uninstallDeviceCheck = null;
                     _uninstallPower = null;
                     RenderUninstallCheckPlaceholders();
-                    var diagnostic = string.IsNullOrWhiteSpace(exception.Message) ? UnknownValue : exception.Message;
-                    SetText(UninstallCheckProgressText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
-                    SetText(UninstallCheckStatusText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
-                    AppendUninstallLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
+                    SetText(UninstallCheckProgressText, "Dynamic.InternalInstall.Check.Failed", exception);
+                    SetText(UninstallCheckStatusText, "Dynamic.InternalInstall.Check.Failed", exception);
+                    AppendUninstallLog(M("Dynamic.RawValue", exception.ToString()));
                 }
             });
         }
@@ -968,7 +969,7 @@ public partial class MainWindow
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
                 // 缓存目录不可写：在本流程的状态里报告失败，保留会话，不让异常逃出 async void 处理程序。
-                SetText(UninstallCheckStatusText, M("Dynamic.RecoverySource.Failed", error.Message));
+                SetText(UninstallCheckStatusText, M("Dynamic.RecoverySource.Failed", error));
                 AppendUninstallLog(M("Dynamic.RecoverySource.Failed", error.Message));
                 return;
             }
@@ -1003,8 +1004,8 @@ public partial class MainWindow
                         var profile = hardware.Profile;
                         if (DeviceModelRoutes.IsWriteRoutePending(profile.Model))
                         {
-                            throw new InvalidOperationException(
-                                T("Dynamic.Model.RoutePendingInEdl", UiText.ModelName(profile.Model)));
+                            throw new LocalizedInvalidOperationException(
+                                M("Dynamic.Model.RoutePendingInEdl", UiText.ModelName(profile.Model)));
                         }
 
                         var tools = await LoadGlobalToolsAsync(profile, token);
@@ -1031,7 +1032,7 @@ public partial class MainWindow
                         var chosen = UninstallBackupDirectorySelection.Resolve(activeExplicitDirectory);
                         if (chosen.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || chosen.DirectoryPath is null)
                         {
-                            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+                            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedSpecificOriginal"));
                         }
 
                         await BindUninstallRecoveryIdentityAsync(client, chosen.DirectoryPath, token);
@@ -1102,13 +1103,13 @@ public partial class MainWindow
                             ?? await PickBootMaintenanceFolderAsync("Dynamic.RecoverySource.PickOriginal");
                         if (selected is null)
                         {
-                            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+                            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedOriginal"));
                         }
 
                         var selection = UninstallBackupDirectorySelection.Resolve(selected);
                         source = selection.Kind == UninstallBackupDirectorySelection.SelectionKind.Selected
                             ? selection.DirectoryPath
-                            : throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+                            : throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedSpecificOriginal"));
                         await BindUninstallRecoveryIdentityAsync(client, source!, token);
                         _uninstallOriginalDirectory = source;
                         _uninstallUseBoardBackup = false;
@@ -1116,7 +1117,7 @@ public partial class MainWindow
                 }
                 catch (Exception error) when (error is not OutOfMemoryException)
                 {
-                    SetText(UninstallCheckStatusText, M("Dynamic.RecoverySource.Failed", error.Message));
+                    SetText(UninstallCheckStatusText, M("Dynamic.RecoverySource.Failed", error));
                     AppendUninstallLog(M("Dynamic.RecoverySource.Failed", error.Message));
                 }
             });
@@ -1146,7 +1147,7 @@ public partial class MainWindow
         var history = await BootMaintenanceBackend.ReadHistoricalIdentityAsync(source, token);
         if (history.Profile.ProfileId != client.Toolchain.ProfileId)
         {
-            throw new InvalidDataException(T("Dynamic.RecoverySource.WrongDevice"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.WrongDevice"));
         }
 
         var transport = Transport;
@@ -1510,7 +1511,7 @@ public partial class MainWindow
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     _uninstallBackup = null;
-                    SetText(UninstallPrepareStatusText, M("Dynamic.BootMaintenance.Edl.ReadOnlyFailed"));
+                    SetText(UninstallPrepareStatusText, M("Dynamic.Mac.BootMaintenance.ReadOnlyFailureDetail", UiText.DisplayError(ex)));
                     AppendUninstallLog(M("Dynamic.RawValue", $"{ex.GetType().FullName}: {ex.Message}"));
                 }
                 finally
@@ -1869,7 +1870,7 @@ public partial class MainWindow
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException)
                 {
                     // 同上：按准备失败显示，既有准备与会话保持不变。
-                    _uninstallError = error.Message;
+                    _uninstallError = UninstallPreparationError(error);
                     RenderUninstallPreparationError();
                     AppendUninstallLog(M("Dynamic.RawValue", $"{error.GetType().FullName}: {error.Message}"));
                     return;
@@ -1974,7 +1975,7 @@ public partial class MainWindow
                     SetText(UninstallPrepareStatusText, M("Dynamic.UserdataUninstall.Status.ReadingSlot"));
                     if (!fresh.Files.TryGetValue("misc", out var misc) || misc is not EdlCapturedRegion)
                     {
-                        throw new InvalidOperationException(T("Dynamic.UserdataUninstall.Status.PrepareFailed"));
+                        throw new LocalizedInvalidOperationException(M("Dynamic.UserdataUninstall.Status.SlotInfoMissing"));
                     }
 
                     var facts = await Task.Run(() => CurrentBootSlot.ReadAsync(fresh, token), token);
@@ -2084,13 +2085,13 @@ public partial class MainWindow
                 }
                 catch (OperationCanceledException)
                 {
-                    SetText(UninstallPrepareStatusText, M("Dynamic.UserdataUninstall.Status.PrepareFailed"));
+                    SetText(UninstallPrepareStatusText, M("Dynamic.UserdataUninstall.Status.PrepareCancelled"));
                     AppendUninstallLog(M("Dynamic.UserdataUninstall.Status.PrepareCancelled"));
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
                     acceptProgress = false;
-                    _uninstallError = exception.Message;
+                    _uninstallError = UninstallPreparationError(exception);
                     RenderUninstallPreparationError();
                     AppendUninstallLog(M("Dynamic.RawValue", $"{exception.GetType().FullName}: {exception.Message}"));
                 }
@@ -2130,13 +2131,13 @@ public partial class MainWindow
             var selectedPc = SelectedUninstallPcBackup;
             if (string.IsNullOrWhiteSpace(selectedPc))
             {
-                throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedOriginal"));
             }
 
             var selection = UninstallBackupDirectorySelection.Resolve(selectedPc);
             if (selection.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || selection.DirectoryPath is null)
             {
-                throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedSpecificOriginal"));
             }
 
             if (_uninstallRecoverySource is { } explicitCached
@@ -2235,13 +2236,13 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(selected))
         {
-            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedOriginal"));
         }
 
         var resolved = UninstallBackupDirectorySelection.Resolve(selected);
         if (resolved.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || resolved.DirectoryPath is null)
         {
-            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedSpecificOriginal"));
         }
 
         var resolvedDirectory = resolved.DirectoryPath;

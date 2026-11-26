@@ -609,7 +609,7 @@ public partial class MainWindow
             return M("Dynamic.Global.Error.LinuxAlreadyInstalled");
         }
 
-        return M("Dynamic.Global.Status.BackupFailed", exception.Message);
+        return M("Dynamic.Global.Status.BackupFailed", exception);
     }
 
     // ---------- 只读准备 ----------
@@ -970,7 +970,7 @@ public partial class MainWindow
                 {
                     _globalResetUnknown = true;
                     AppendLocalizedLog(M("Dynamic.Global.Log.ResetUnknown", exception.Message));
-                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ResetUnknown", exception.Message);
+                    SetText(GlobalProgressStatusText, "Dynamic.Global.Status.ResetUnknown", exception);
                     return;
                 }
 

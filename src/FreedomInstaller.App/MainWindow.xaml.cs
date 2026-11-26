@@ -264,7 +264,7 @@ public partial class MainWindow : Window
             or UnauthorizedAccessException
             or InvalidDataException)
         {
-            SetText(ToolsStatusText, "Dynamic.ToolsStatus.PrepareFailed", exception.Message);
+            SetText(ToolsStatusText, "Dynamic.ToolsStatus.PrepareFailed", exception);
             AppendLocalizedLog(M("Dynamic.Log.BundledToolsFailed", exception.Message));
             return false;
         }
@@ -1057,7 +1057,7 @@ public partial class MainWindow : Window
 
             SetText(ConnectionStatusText, "Dynamic.DeviceStatus.IdentityUnconfirmed");
             SerialText.Text = device.Serial;
-            SetText(DeviceHintText, "Dynamic.DeviceHint.IdentityFailed", exception.Message);
+            SetText(DeviceHintText, "Dynamic.DeviceHint.IdentityFailed", exception);
             AppendLocalizedLog(M("Dynamic.Log.IdentityFailed", exception.Message));
 
             // 身份读取失败时没有固件可显示：路线必须退回「待读取设备」，
@@ -1668,7 +1668,7 @@ public partial class MainWindow : Window
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
             _restorePlan = null;
-            SetText(UninstallPlanStatusText, "Dynamic.Uninstall.StatusPlanFailed", exception.Message);
+            SetText(UninstallPlanStatusText, "Dynamic.Uninstall.StatusPlanFailed", exception);
         }
 
         UpdateSummary();
@@ -1727,7 +1727,7 @@ public partial class MainWindow : Window
             var record = JsonSerializer.Deserialize<LinuxInstallationLayout>(File.ReadAllText(path), InstallationRecordJson);
             if (record is null)
             {
-                throw new InvalidOperationException(T("Dynamic.Uninstall.RecordNotObject"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.Uninstall.RecordNotObject"));
             }
 
             if (string.IsNullOrWhiteSpace(record.DeviceId)
@@ -1736,7 +1736,7 @@ public partial class MainWindow : Window
                 || string.IsNullOrWhiteSpace(record.LinuxRootPartUuid)
                 || record.OriginalUserdataEndSector <= 0)
             {
-                throw new InvalidOperationException(T("Dynamic.Uninstall.RecordIncomplete"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.Uninstall.RecordIncomplete"));
             }
 
             _installationRecord = record;
@@ -1751,7 +1751,7 @@ public partial class MainWindow : Window
             or ArgumentException
             or InvalidOperationException)
         {
-            SetText(UninstallInputNoteText, "Dynamic.Uninstall.NoteRecordFailed", exception.Message);
+            SetText(UninstallInputNoteText, "Dynamic.Uninstall.NoteRecordFailed", exception);
             AppendLocalizedLog(M("Dynamic.Uninstall.NoteRecordFailed", exception.Message));
         }
 
@@ -2201,10 +2201,10 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            SetText(ProgressStatusText, "Dynamic.Progress.Failed", exception.Message);
+            SetText(ProgressStatusText, "Dynamic.Progress.Failed", exception);
             AppendLocalizedLog(M("Dynamic.Log.Failed", exception.Message));
             AppendWorkLogLine(InstallerLog.DescribeFailure(exception));
-            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Operation"), exception.Message);
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Operation"), exception);
         }
         finally
         {

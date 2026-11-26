@@ -288,8 +288,8 @@ class MacUninstallParityTests(unittest.TestCase):
         # negated and must throw before GlobalEdlBinding.Attach. (Which models are pending, TB710FU yes and
         # TB322FC / TB323FU no, is covered by Core's DeviceModelRoutesTests.)
         guard = re.search(
-            r"if \(DeviceModelRoutes\.IsWriteRoutePending\(profile\.Model\)\)\s*\{\s*throw new InvalidOperationException\(\s*"
-            r'T\("Dynamic\.Model\.RoutePendingInEdl"',
+            r"if \(DeviceModelRoutes\.IsWriteRoutePending\(profile\.Model\)\)\s*\{\s*throw new LocalizedInvalidOperationException\(\s*"
+            r'M\("Dynamic\.Model\.RoutePendingInEdl"',
             mac,
         )
         self.assertIsNotNone(guard)

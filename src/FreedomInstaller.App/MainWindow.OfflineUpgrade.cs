@@ -256,15 +256,17 @@ namespace FreedomInstaller.App
                 _offlineLogEntries.RemoveAt(0);
             _offlineLogEntries.Add(message);
             RerenderOfflineUpgradeLog();
-            AppendWorkLogLine($"{DateTime.Now:HH:mm:ss} {_uiText.Format(message)}");
+            var diagnostic = _uiText.Format(message);
+            AppendWorkLogLine($"{DateTime.Now:HH:mm:ss} {diagnostic}");
             if (key is "Dynamic.OfflineUpdate.LogError" or "Dynamic.OfflineUpdate.LogPreflightFailed")
-                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.OfflineUpgrade"), _uiText.Format(message));
+                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.OfflineUpgrade"), diagnostic,
+                    UiText.DisplayError(args.Length > 0 ? args[0] : null));
         }
 
         private string GetPersistentRecordsRoot()
         {
             if (!_workDirectoryReady || _workDirectory == null || string.IsNullOrWhiteSpace(_workDirectory.RootPath))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorWorkDirNotReady"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorWorkDirNotReady"));
             return OfflineUpdateRecordsDirectory.Resolve(BundledTools.GetCacheRoot(), _workDirectory.RootPath);
         }
 
@@ -368,7 +370,7 @@ namespace FreedomInstaller.App
                         SetText(OfflineUpgradePanel.DetailsText, "Dynamic.OfflineUpdate.Value", tex.Message);
                     }
                     SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateFailed", tex);
-                    AppendOfflineLog("Dynamic.OfflineUpdate.LogError", tex.Message);
+                    AppendOfflineLog("Dynamic.OfflineUpdate.LogError", tex);
                 }
                 catch (Exception ex)
                 {
@@ -377,7 +379,7 @@ namespace FreedomInstaller.App
                     _offlineReceiptLive = false;
                     SetText(OfflineUpgradePanel.DetailsText, "Dynamic.OfflineUpdate.Value", ex.Message);
                     SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateFailed", ex);
-                    AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
+                    AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex);
                 }
                 finally
                 {
@@ -445,7 +447,7 @@ namespace FreedomInstaller.App
             "executing" => M("Dynamic.OfflineUpdate.Phase.Executing"),
             "awaiting_reboot" => M("Dynamic.OfflineUpdate.Phase.AwaitingReboot"),
             "failed" => M("Dynamic.OfflineUpdate.Phase.Failed"),
-            _ => string.IsNullOrWhiteSpace(phase) ? M("Dynamic.OfflineUpdate.Phase.Working") : M("Dynamic.OfflineUpdate.Value", phase!)
+            _ => M("Dynamic.OfflineUpdate.Phase.Working")
         };
 
         private void OnBrowseOfflineKey(object? sender, RoutedEventArgs e)
@@ -792,12 +794,12 @@ namespace FreedomInstaller.App
             await RunOfflineUpgradeAsync(async (_, ct) =>
             {
                 if (_offlineSsh == null || string.IsNullOrEmpty(_offlineConnectedModel) || string.IsNullOrEmpty(_offlineRecoveryPartUuid))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
 
                 ClearOfflinePreflightState();
                 string path = OfflineUpgradePanel.PackagePathBox.Text.Trim();
                 if (string.IsNullOrEmpty(path))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNoPackagePath"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNoPackagePath"));
 
                 DisposeImportedPackageAndInvalidate();
                 string installerVer = GetThreePartInstallerVersion();
@@ -964,9 +966,9 @@ namespace FreedomInstaller.App
                 bool exportRecoveryOnly =
                     OfflineUpdateUiState.NeedsRecoveryExport(_offlineLastReceipt) && _offlineSavedRecovery == null;
                 if (exportRecoveryOnly && _offlineSelectedSession == null)
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
                 if (!exportRecoveryOnly && !_offlineBootPolicySupported)
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
                 if (!_offlinePreflightPassed)
                 {
                     var preflightError = _offlinePreflightError;
@@ -976,7 +978,7 @@ namespace FreedomInstaller.App
                 }
                 if (!exportRecoveryOnly &&
                     !OfflineUpdateUiState.CanPrepare(_offlineLastReceipt, _offlineSessions.Count > 0, _offlineSelectedSession != null))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorStateNotActionable", _uiText.Format(LocalizePhase(GetReceiptState(_offlineLastReceipt)))));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorStateNotActionable", LocalizePhase(GetReceiptState(_offlineLastReceipt))));
                 ClearOfflineActionEligibility();
                 string recordsRoot = GetPersistentRecordsRoot();
                 var session = _offlineSelectedSession;
@@ -1009,9 +1011,9 @@ namespace FreedomInstaller.App
                     // verified recovery bundle whose acknowledgement execution
                     // later hands back to the tablet.
                     AppendOfflineLog("Dynamic.OfflineUpdate.LogRecoveryExportResumed", session.SessionId);
-                    JsonElement preparedReceipt = _offlineLastReceipt ?? throw new InvalidOperationException(
-                        T("Dynamic.OfflineUpdate.ErrorStateNotActionable",
-                            _uiText.Format(LocalizePhase(GetReceiptState(_offlineLastReceipt)))));
+                    JsonElement preparedReceipt = _offlineLastReceipt ?? throw new LocalizedInvalidOperationException(
+                        M("Dynamic.OfflineUpdate.ErrorStateNotActionable",
+                            LocalizePhase(GetReceiptState(_offlineLastReceipt))));
                     await EnsureOfflineRecoveryAsync(session, preparedReceipt, sessionRoot, gen, ct);
                 }
                 else
@@ -1058,12 +1060,12 @@ namespace FreedomInstaller.App
                 EnsureReadyForSessionWork(requireSelectedSession: true);
                 EnsureOfflineCatalogAvailable();
                 if (!_offlineBootPolicySupported)
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
                 // Repeated here so the action rests on this exact live receipt,
                 // this device and this package even if the panel changed while
                 // the confirmation was open.
                 if (!_offlineReceiptLive || !OfflineSelectionIsVerifiedFailedPrepare())
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
 
                 var failed = _offlineSelectedSession!;
 
@@ -1093,7 +1095,7 @@ namespace FreedomInstaller.App
                     if (!freshPreflightPassed)
                         return;
 
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorReplacementNotEligible"));
                 }
 
                 ClearOfflineActionEligibility();
@@ -1230,9 +1232,9 @@ namespace FreedomInstaller.App
             long generation, CancellationToken ct)
         {
             if (_offlineSsh == null || _offlineTransfer == null || string.IsNullOrEmpty(_offlineConnectedModel))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
             if (_offlinePackage == null || string.IsNullOrEmpty(_offlineDescriptorSha256))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
 
             OfflineUpdateRecoveryContext? context = TryExtractRecoveryContext(receipt, _offlineConnectedModel!);
             SavedOfflineUpdateRecovery? existing = null;
@@ -1258,7 +1260,7 @@ namespace FreedomInstaller.App
             // Execution may only start with the validated acknowledgement that
             // belongs to this transaction; a bundle without it is not evidence.
             if (existing.Acknowledgement is not { Length: > 0 })
-                throw new InvalidDataException(T("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
 
             _offlineSavedRecovery = existing;
             SetText(OfflineUpgradePanel.RecoveryPathText, "Dynamic.OfflineUpdate.Value", existing.DirectoryPath);
@@ -1276,7 +1278,7 @@ namespace FreedomInstaller.App
             await RunOfflineUpgradeAsync(async (gen, ct) =>
             {
                 if (_offlineSsh == null || _offlineTransfer == null || string.IsNullOrEmpty(_offlineConnectedModel))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
 
                 // Connect and validation are the only other readers of the
                 // saved records, so a location that was unreadable then would
@@ -1308,7 +1310,7 @@ namespace FreedomInstaller.App
                         if (catalogRecovered)
                             return;
 
-                        throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                        throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
                     }
 
                     // No session exists yet, so the only read-only work left is
@@ -1331,7 +1333,7 @@ namespace FreedomInstaller.App
                             return;
                         }
 
-                        throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
+                        throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
                     }
 
                     ClearOfflineActionEligibility();
@@ -1455,8 +1457,9 @@ namespace FreedomInstaller.App
                 var preflight = await _offlineTransfer.PreflightAsync(_offlinePackage, session, ct);
                 if (!OfflineUpdateUiState.PreflightPassed(preflight))
                 {
-                    MarkOfflinePreflightFailed(M("Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse",
-                        OfflineUpdateUiState.PreflightPhase(preflight) ?? "?"));
+                    var phase = OfflineUpdateUiState.PreflightPhase(preflight);
+                    AppendWorkLogLine($"{DateTime.Now:HH:mm:ss} Unexpected offline preflight phase: {phase ?? "?"}");
+                    MarkOfflinePreflightFailed(M("Dynamic.OfflineUpdate.ErrorPreflightInvalidResponse"));
                     return false;
                 }
 
@@ -1471,10 +1474,9 @@ namespace FreedomInstaller.App
             {
                 // The device-side code (for example operation_failed) names the
                 // rejected check; keep it next to its cause.
-                string detail = ex is OfflineUpdateRemoteException remote
-                    ? $"{remote.Code}: {remote.Message}"
-                    : ex.Message;
-                MarkOfflinePreflightFailed(M("Dynamic.OfflineUpdate.ErrorPreflightFailed", detail));
+                if (ex is OfflineUpdateRemoteException remote)
+                    AppendWorkLogLine($"{DateTime.Now:HH:mm:ss} {remote.Code}: {remote.Message}");
+                MarkOfflinePreflightFailed(M("Dynamic.OfflineUpdate.ErrorPreflightFailed", ex));
                 return false;
             }
         }
@@ -1496,7 +1498,7 @@ namespace FreedomInstaller.App
             {
                 EnsureReadyForSessionWork(requireSelectedSession: true);
                 if (!_offlineBootPolicySupported)
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
                 if (!_offlinePreflightPassed)
                 {
                     var preflightError = _offlinePreflightError;
@@ -1505,9 +1507,9 @@ namespace FreedomInstaller.App
                         : new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorPreflightRequired"));
                 }
                 if (!OfflineUpdateUiState.CanExecute(_offlineLastReceipt, _offlineSavedRecovery != null, _offlinePreflightPassed))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
                 if (_offlineSavedRecovery == null)
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorRecoveryMissing"));
 
                 var session = _offlineSelectedSession!;
                 string recordsRoot = GetPersistentRecordsRoot();
@@ -1564,7 +1566,7 @@ namespace FreedomInstaller.App
             {
                 SetText(OfflineUpgradePanel.DetailsText, "Dynamic.OfflineUpdate.Value", ex.Message);
                 SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateFailed", ex);
-                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex);
                 return;
             }
             finally
@@ -1690,7 +1692,7 @@ namespace FreedomInstaller.App
                 default:
                     ClearOfflineActionEligibility();
                     _offlineLastReceipt = null;
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorStateNotActionable", LocalizePhase(state)));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorStateNotActionable", LocalizePhase(state)));
             }
         }
 
@@ -1961,13 +1963,13 @@ namespace FreedomInstaller.App
                 // re-uploads nor re-validates the package.
                 if (_offlineSsh == null || _offlineTransfer == null ||
                     string.IsNullOrEmpty(_offlineConnectedModel))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
                 if (_offlineSelectedSession == null)
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
                 if (!_offlineBootPolicySupported)
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorBootPolicyRequired"));
                 if (!_offlineReceiptLive || !OfflineUpdateUiState.CanRestartToVerify(_offlineLastReceipt))
-                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorRestartNotEligible"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorRestartNotEligible"));
 
                 var session = _offlineSelectedSession!;
                 AppendOfflineLog("Dynamic.OfflineUpdate.LogRestartRequested", session.SessionId);
@@ -1983,16 +1985,15 @@ namespace FreedomInstaller.App
                     // exchange completed and the transport stays healthy. The
                     // receipt that made the action eligible is dropped first:
                     // whatever happens below, no stale restart affordance is
-                    // left behind. The rejection is shown and logged with the
-                    // device's own code and message, and no restart is retried
+                    // left behind. The rejection is shown, the device's code and message
+                    // go into the log, and no restart is retried
                     // automatically: only a fresh read-only status can qualify
                     // one again.
                     _offlineLastReceipt = null;
                     _offlineReceiptLive = false;
                     AppendOfflineLog("Dynamic.OfflineUpdate.LogRestartRejected", ex.Code, ex.Message);
                     await TryRefreshOfflineStatusAfterRestartRejectionAsync(session, ct);
-                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateRestartRejected",
-                        ex.Code, ex.Message);
+                    SetText(OfflineUpgradePanel.StateText, "Dynamic.OfflineUpdate.StateRestartRejected");
                     return;
                 }
                 catch (Exception ex) when (ex is IOException or TimeoutException or ObjectDisposedException)
@@ -2087,7 +2088,7 @@ namespace FreedomInstaller.App
                 // cancel into a failed operation.
                 _offlineSsh = null;
                 _offlineTransfer = null;
-                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex);
             }
         }
 
@@ -2139,11 +2140,11 @@ namespace FreedomInstaller.App
         private void EnsureReadyForSessionWork(bool requireSelectedSession)
         {
             if (_offlineSsh == null || _offlineTransfer == null || string.IsNullOrEmpty(_offlineConnectedModel))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorNotConnected"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorNotConnected"));
             if (_offlinePackage == null || string.IsNullOrEmpty(_offlineDescriptorSha256))
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorPackageNotValidated"));
             if (requireSelectedSession && _offlineSelectedSession == null)
-                throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
+                throw new LocalizedInvalidOperationException(M("Dynamic.OfflineUpdate.ErrorSessionNotSelected"));
         }
 
         private void EnsureNoBlockingReceiptFlags(JsonElement receipt)
@@ -2218,7 +2219,7 @@ namespace FreedomInstaller.App
             }
             catch (Exception ex)
             {
-                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex);
             }
         }
 
@@ -2242,7 +2243,7 @@ namespace FreedomInstaller.App
             }
             catch (Exception ex)
             {
-                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex.Message);
+                AppendOfflineLog("Dynamic.OfflineUpdate.LogError", ex);
             }
         }
     }

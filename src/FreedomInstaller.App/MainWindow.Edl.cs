@@ -318,13 +318,13 @@ public partial class MainWindow
             }
             catch (Exception exception)
             {
-                var failed = M("Dynamic.UninstallFlow.Edl.Failed", exception.Message);
+                var failed = M("Dynamic.UninstallFlow.Edl.Failed", exception);
                 _uninstallEdlStatus = failed;
                 if (!_closed)
                 {
                     SetText(UninstallEdlStatusText, failed);
                     SetText(ConnectionStatusText, "Dynamic.UninstallFlow.Edl.Connection.Unknown");
-                    SetText(ProgressStatusText, "Dynamic.UninstallFlow.Edl.Failed", exception.Message);
+                    SetText(ProgressStatusText, failed);
                     AppendLocalizedLog(failed);
                 }
             }

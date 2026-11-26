@@ -1,4 +1,5 @@
 using System.Reflection;
+using FreedomInstaller.App;
 using Xunit;
 
 namespace FreedomInstaller.Core.Tests;
@@ -362,8 +363,20 @@ public sealed class InternalPartitionPlannerTests
     {
         GptTable table = Wide512(Part(2, "userdata", 2048, 171966464));
 
-        // Protects: one more GiB would leave 63 GiB of Linux.
-        Assert.ThrowsAny<ArgumentException>(() => { InternalPartitionPlanner.Plan(table, 17, DefaultStorage()); });
+        var failure = Assert.Throws<InternalInstallLinuxSpaceException>(
+            () => InternalPartitionPlanner.Plan(table, 17, DefaultStorage()));
+        Assert.Equal(63 * GiB, failure.AvailableLinuxBytes);
+        Assert.Equal(64 * GiB, failure.RequiredLinuxBytes);
+        Assert.Equal(17, failure.AndroidGiB);
+        Assert.Equal(16, failure.MinimumAndroidGiB);
+
+        var guidance = UiText.DisplayError(failure);
+        var chinese = new UiText("zh-CN").FormatForDisplay(guidance);
+        var english = new UiText("en").FormatForDisplay(guidance);
+        Assert.Contains("请拖动滑条", chinese);
+        Assert.Contains("Move the slider", english);
+        Assert.Contains("63.00 GiB", chinese);
+        Assert.Contains("64.00 GiB", chinese);
     }
 
     [Fact]
@@ -373,6 +386,36 @@ public sealed class InternalPartitionPlannerTests
 
         // Protects: the old 81 GiB window sized for the 1 GiB tail now leaves only 63 GiB of Linux.
         Assert.ThrowsAny<ArgumentException>(() => { InternalPartitionPlanner.Plan(table, 16, DefaultStorage()); });
+    }
+
+    [Fact]
+    public void GetAndroidRange_Aligned81GiBWindow_ReportsLinuxCapacityFailure()
+    {
+        GptTable table = Wide512(Part(2, "userdata", 2048, 169869312));
+
+        var failure = Assert.Throws<InternalInstallLinuxSpaceException>(() => Range(table));
+        Assert.Equal(63 * GiB, failure.AvailableLinuxBytes);
+        Assert.Equal(64 * GiB, failure.RequiredLinuxBytes);
+        Assert.Equal(16, failure.AndroidGiB);
+        Assert.Equal(16, failure.MinimumAndroidGiB);
+
+        var guidance = UiText.DisplayError(failure);
+        var chinese = new UiText("zh-CN").FormatForDisplay(guidance);
+        var english = new UiText("en").FormatForDisplay(guidance);
+        Assert.Contains("安卓保留最低的 16 GiB", chinese);
+        Assert.Contains("minimum of 16 GiB", english);
+        Assert.DoesNotContain("滑条", chinese);
+    }
+
+    [Fact]
+    public void Plan_NoRoomForLinuxBoot_ReportsZeroLinuxCapacity()
+    {
+        GptTable table = Wide512(Part(2, "userdata", 2048, 37748736));
+
+        var failure = Assert.Throws<InternalInstallLinuxSpaceException>(
+            () => InternalPartitionPlanner.Plan(table, 16, DefaultStorage()));
+        Assert.Equal(0, failure.AvailableLinuxBytes);
+        Assert.Equal(64 * GiB, failure.RequiredLinuxBytes);
     }
 
     [Fact]
