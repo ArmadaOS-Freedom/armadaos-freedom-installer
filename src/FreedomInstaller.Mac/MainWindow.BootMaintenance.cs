@@ -191,7 +191,7 @@ public partial class MainWindow
             }
 
             return !string.IsNullOrWhiteSpace(identity.Model)
-                && !DeviceModelRoutes.IsWriteRoutePending(identity.Model)
+                && !DeviceModelRoutes.IsMaintenanceRoutePending(identity.Model)
                 && !string.IsNullOrWhiteSpace(identity.Serial)
                 && !string.IsNullOrWhiteSpace(identity.Firmware?.DisplayId)
                 && !string.IsNullOrWhiteSpace(android.SocSerial);
@@ -910,8 +910,8 @@ public partial class MainWindow
         var android = await new MaintenanceEntry(transport.AdbPath, transport.FastbootPath, _runner)
             .ReadAndroidAsync(identity, token);
 
-        // 只开放识别与只读检查的型号（TB710FU）：如实说明，不提交读取事实，后续维护入口保持关闭。
-        if (DeviceModelRoutes.IsWriteRoutePending(android.Identity?.Model))
+        // 维护写入路线未开放的型号：如实说明，不提交读取事实，后续维护入口保持关闭。
+        if (DeviceModelRoutes.IsMaintenanceRoutePending(android.Identity?.Model))
         {
             SetText(BootMaintenanceCheckStatusText, M("Dynamic.Model.RoutePending", UiText.ModelName(android.Identity?.Model)));
             return;
@@ -988,7 +988,7 @@ public partial class MainWindow
         SetText(BootMaintenanceRouteText, "Dynamic.InternalInstall.Check.RouteUnavailable");
         SetText(
             BootMaintenanceCheckStatusText,
-            DeviceModelRoutes.IsWriteRoutePending(identity?.Model)
+            DeviceModelRoutes.IsMaintenanceRoutePending(identity?.Model)
                 ? M("Dynamic.Model.RoutePending", UiText.ModelName(identity?.Model))
                 : M("Dynamic.InternalInstall.Check.ProfileUnavailable"));
     }
@@ -1305,8 +1305,8 @@ public partial class MainWindow
 
         var selectedIdentity = storedAndroid.Identity;
 
-        // 维护写入路线尚未开放的型号（TB710FU）：在进入 9008 之前停下。
-        if (DeviceModelRoutes.IsWriteRoutePending(selectedIdentity.Model))
+        // 维护写入路线尚未开放的型号：在进入 9008 之前停下。
+        if (DeviceModelRoutes.IsMaintenanceRoutePending(selectedIdentity.Model))
         {
             SetText(BootMaintenanceBackupStatusText, M("Dynamic.Model.RoutePending", UiText.ModelName(selectedIdentity.Model)));
             return;

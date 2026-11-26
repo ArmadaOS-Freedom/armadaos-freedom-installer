@@ -530,13 +530,11 @@ public partial class MainWindow
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(result.Diagnostic))
+        if (result.WorkDiskSpaceFailure is not null
+            || !string.IsNullOrWhiteSpace(result.Diagnostic)
+            || !string.IsNullOrWhiteSpace(result.ErrorCode))
         {
-            _internalInstallExecutionError = UiText.DisplayError(result.Diagnostic);
-        }
-        else if (!string.IsNullOrWhiteSpace(result.ErrorCode))
-        {
-            _internalInstallExecutionError = UiText.DisplayError(result.ErrorCode);
+            _internalInstallExecutionError = UiText.InternalInstallExecutionFailure(result);
         }
     }
 
@@ -882,7 +880,7 @@ public partial class MainWindow
         object diagnostic;
         if (!string.IsNullOrWhiteSpace(result?.Diagnostic))
         {
-            diagnostic = result!.Diagnostic!;
+            diagnostic = UiText.InternalInstallExecutionFailure(result!);
         }
         else if (_internalInstallExecutionError is not null)
         {
@@ -1162,7 +1160,7 @@ public partial class MainWindow
             RecordDiagnosticFailure(
                 M("Dynamic.Diagnostics.Stage.Execute"),
                 result.Diagnostic ?? result.ErrorCode,
-                UiText.DisplayError(result.Diagnostic ?? result.ErrorCode));
+                UiText.InternalInstallExecutionFailure(result));
         }
     }
 

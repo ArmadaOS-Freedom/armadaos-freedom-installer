@@ -1108,6 +1108,7 @@ public partial class MainWindow : Window
         var identity = _identity;
         await RunBusyAsync(async token =>
         {
+            ClearDiagnosticFailure();
             // 重新查询之前先把已确认身份的引导状态降级为 Unknown，并立刻按同一套渲染逻辑刷新界面：
             // 下面这次查询如果超时、被取消或抛异常，界面就停在「未知」，
             // 绝不会继续显示上一轮读到的「已解锁」。

@@ -1394,7 +1394,9 @@ public partial class MainWindow
             UnknownValue));
         SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Prepared.StatusReady");
         SetText(InternalInstallConfirmStatusText, "Dynamic.InternalInstall.Prepared.StatusReady");
-        SetText(InternalInstallConfirmLeadText, "Dynamic.InternalInstall.Execution.Lead.Ready");
+        SetText(InternalInstallConfirmLeadText, preserveAndroid
+            ? "Dynamic.InternalInstall.Execution.Lead.Ready.PreserveAndroid"
+            : "Dynamic.InternalInstall.Execution.Lead.Ready");
         SetText(InternalInstallAcceptanceStatusText, "Dynamic.InternalInstall.Execution.Acceptance.NotStarted");
     }
 
@@ -1517,7 +1519,7 @@ public partial class MainWindow
                     if (backend.Snapshot.WriteState == InternalInstallWriteState.NoneIssued
                         && result.Outcome is InternalInstallOutcome.Failed or InternalInstallOutcome.Cancelled)
                     {
-                        _internalInstallExecutionError ??= UiText.DisplayError(result.Diagnostic ?? result.ErrorCode);
+                        _internalInstallExecutionError ??= UiText.InternalInstallExecutionFailure(result);
                     }
 
                     AppendLog(M(
@@ -1648,7 +1650,7 @@ public partial class MainWindow
 
     private UiMessage FailureDetails(InternalInstallSnapshot snapshot, InternalInstallResult? result)
     {
-        object diagnostic = !string.IsNullOrWhiteSpace(result?.Diagnostic) ? result!.Diagnostic!
+        object diagnostic = !string.IsNullOrWhiteSpace(result?.Diagnostic) ? UiText.InternalInstallExecutionFailure(result!)
             : _internalInstallExecutionError is not null ? _internalInstallExecutionError
             : M("Dynamic.InternalInstall.Execution.NoDiagnostic");
         return M(

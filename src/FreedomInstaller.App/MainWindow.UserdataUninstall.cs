@@ -73,7 +73,6 @@ public partial class MainWindow
     private bool _userdataUninstallOperationActive;
 
     /// <summary>最近一次真实准备失败的原始诊断；成功或作废时清空。</summary>
-    private Exception? _userdataUninstallError;
 
     /// <summary>卸载模式判断。</summary>
     private bool IsModernUserdataUninstallMode =>
@@ -165,7 +164,6 @@ public partial class MainWindow
             BootMaintenanceRiskCheck.IsChecked = false;
         }
 
-        _userdataUninstallError = null;
 
         // 未完成（受保护检查已证明无未解决现场）时：清掉真实执行标记，
         // 让真实预检失败可以返回、重新准备并执行一次新的真实后端；复位痕迹在仍有会话时保留。
@@ -274,11 +272,7 @@ public partial class MainWindow
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
                     // 缓存目录建不出来：按准备失败报告并留在来源页；保护状态与 9008 会话不变，异常不逃出 async void。
-                    _userdataUninstallError = exception;
-                    RenderUserdataUninstallPreparationError();
-                    AppendLocalizedLog(M(
-                        "Dynamic.RawValue",
-                        $"{exception.GetType().FullName}: {exception.Message}"));
+                    RecordUserdataUninstallPreparationError(exception);
                     return;
                 }
                 workParentFromSource = false;
@@ -344,6 +338,7 @@ public partial class MainWindow
         {
             await RunBusyAsync(async token =>
             {
+                ClearDiagnosticFailure();
                 UninstallOriginalGptBackup? original = null;
                 CurrentBootSlotFacts? facts = null;
                 EdlRawBootTools? actualTools = null;
@@ -458,7 +453,6 @@ public partial class MainWindow
                     _userdataUninstallOriginal = original;
                     _userdataUninstallStockPlan = capturedRestoreStock ? stockPrepared : null;
                     _userdataUninstallStockRestoreResult = null;
-                    _userdataUninstallError = null;
                     _internalInstallStep = 3;
                     committed = true;
 
@@ -474,11 +468,7 @@ public partial class MainWindow
                 catch (Exception exception)
                 {
                     acceptProgress = false;
-                    _userdataUninstallError = exception;
-                    RenderUserdataUninstallPreparationError();
-                    AppendLocalizedLog(M(
-                        "Dynamic.RawValue",
-                        $"{exception.GetType().FullName}: {exception.Message}"));
+                    RecordUserdataUninstallPreparationError(exception);
                 }
                 finally
                 {
@@ -509,13 +499,15 @@ public partial class MainWindow
             RefreshModernUserdataUninstallActions();
         }
     }
-    private void RenderUserdataUninstallPreparationError()
+    private void RecordUserdataUninstallPreparationError(Exception error)
     {
-        if (_userdataUninstallError is not { } error) return;
         var message = error.Message.StartsWith("requires-current-bootloader-state:", StringComparison.Ordinal)
             ? M("Dynamic.UserdataUninstall.Status.LockCheckRequired")
             : M("Dynamic.UserdataUninstall.Status.PrepareFailureDetail", UiText.DisplayError(error));
         SetText(BootMaintenancePrepareStatusText, message);
+        string fullDetail = InstallerLog.DescribeFailure(error);
+        AppendLocalizedLog(M("Dynamic.RawValue", fullDetail));
+        RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Operation"), fullDetail, message);
     }
 
 }

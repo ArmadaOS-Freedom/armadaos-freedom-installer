@@ -169,6 +169,9 @@ internal sealed class UiText
     internal string GetForDisplay(string key, params object?[] args) =>
         string.IsNullOrEmpty(key) ? string.Empty : FormatKey(key, args, 0, true);
 
+    internal static UiMessage InternalInstallExecutionFailure(InternalInstallResult result) =>
+        DisplayError((object?)result.WorkDiskSpaceFailure ?? result.Diagnostic ?? result.ErrorCode);
+
     /// <summary>
     /// Maps a raw or untyped value flowing to the visible surface onto a localized semantic message.
     /// Already-localized messages are passed through; null or blank values become a neutral fallback.
@@ -278,6 +281,7 @@ internal sealed class UiText
         (@"\A安装包的 deviceModel (\S+) 与期望型号 (\S+) 不一致，拒绝使用。\z", "WrongModel"),
         (@"\A合集不包含请求的 deviceModel (\S+)，不做缺省型号推断。\z", "MissingModel"),
         (@"\A安装包没有声明安装目标 (\S+)，拒绝安装到该目标。\z", "WrongTarget"),
+        (@"\Apackage\.json 没有声明 installTargets，旧版安装包只允许安装到设备内置存储。\z", "WrongTarget"),
         (@"\A(?:合集|升级包描述文件)版本 (\S+) 与(?:所选安装包|合集)版本 (\S+) 不一致，拒绝使用。\z", "VersionMismatch"),
         (@"\A(?:合集包含加密条目，当前不支持带密码的归档|升级包条目已加密|升级包内不允许存在加密项)：(.+)。\z", "EncryptedEntry"),
         (@"\A(?:合集包含重复条目（忽略大小写）|升级包包含重复的 ZIP 条目|升级包包含重复条目)：(.+)。\z", "DuplicateEntry"),

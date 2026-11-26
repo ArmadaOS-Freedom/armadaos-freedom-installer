@@ -255,6 +255,7 @@ namespace FreedomInstaller.App
 
         private async Task ImportModernTfInstallPackageAsync(CancellationToken token)
         {
+            _tfInstallError = null;
             if (!IsModernTfInstallMode || HasUnresolvedModernTfInstallState)
             {
                 return;
@@ -267,21 +268,21 @@ namespace FreedomInstaller.App
                 || string.IsNullOrWhiteSpace(parent)
                 || !Directory.Exists(parent))
             {
-                SetTfStatus(M("Dynamic.TfInstall.NeedInputs"));
+                SetTfStatus(_tfInstallError = M("Dynamic.TfInstall.NeedInputs"));
                 return;
             }
 
             string source = PackagePathBox.Text?.Trim() ?? string.Empty;
             if (source.Length == 0 || (!Directory.Exists(source) && !File.Exists(source)))
             {
-                SetTfStatus(M("Dynamic.TfInstall.NeedInputs"));
+                SetTfStatus(_tfInstallError = M("Dynamic.TfInstall.NeedInputs"));
                 return;
             }
 
             string model = fresh.Model;
             if (string.IsNullOrWhiteSpace(model))
             {
-                SetTfStatus(M("Dynamic.TfInstall.NeedInputs"));
+                SetTfStatus(_tfInstallError = M("Dynamic.TfInstall.NeedInputs"));
                 return;
             }
 
@@ -317,7 +318,6 @@ namespace FreedomInstaller.App
 
             SetTfStatus(M("Dynamic.TfInstall.PackageImporting"));
 
-            _tfInstallError = null;
             ImportedPackage? imported = null;
             try
             {
@@ -497,7 +497,8 @@ namespace FreedomInstaller.App
                         || !string.Equals(_tfInstallPackage.DeviceModel, fresh.Model, StringComparison.Ordinal)
                         || !string.Equals(_tfInstallPackageSource, PackagePathBox.Text?.Trim(), StringComparison.Ordinal))
                     {
-                        SetTfStatus(M("Dynamic.TfInstall.PackageRejected"));
+                        _tfInstallError ??= M("Dynamic.TfInstall.PackageRejected");
+                        SetTfStatus(_tfInstallError);
                         return;
                     }
 

@@ -184,7 +184,10 @@ public sealed partial class InternalInstallBackend
                 InternalInstallUserAction.None,
                 androidAcceptance: null,
                 errorCode: errorCode,
-                diagnostic: diagnostic);
+                diagnostic: diagnostic,
+                workDiskSpaceFailure: run.WriteState == InternalInstallWriteState.NoneIssued
+                    ? exception as InternalInstallWorkDiskSpaceException
+                    : null);
         }
         finally
         {
@@ -426,7 +429,8 @@ public sealed partial class InternalInstallBackend
         InternalInstallUserAction requiredUserAction,
         InternalAndroidAcceptanceResult? androidAcceptance,
         string? errorCode,
-        string? diagnostic)
+        string? diagnostic,
+        InternalInstallWorkDiskSpaceException? workDiskSpaceFailure = null)
     {
         ArgumentNullException.ThrowIfNull(run);
 
@@ -449,7 +453,8 @@ public sealed partial class InternalInstallBackend
                 requiredUserAction,
                 _context.EvidenceDirectory,
                 errorCode,
-                diagnostic);
+                diagnostic,
+                workDiskSpaceFailure);
 
             _lastResult = result;
             _snapshot = new InternalInstallSnapshot(
