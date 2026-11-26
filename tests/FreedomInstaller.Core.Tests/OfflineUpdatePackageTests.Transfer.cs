@@ -123,6 +123,51 @@ public sealed partial class OfflineUpdatePackageTests
     }
 
     [Fact]
+    public async Task Transfer_Tb710fuOnArmadaBootIsAccepted()
+    {
+        var c = new Case(Path.Combine(root, "tb710fu-disk"), deviceModel: "TB710FU");
+        var work = Directory.CreateDirectory(Path.Combine(root, "tb710fu-disk-work")).FullName;
+        using var imported = await Import(c.ArchivePath, "TB710FU", "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer("TB710FU", c.DescriptorBytes, c.Entries["images/linux-root.img.gz"], [1, 2], [3, 4])
+        {
+            ArmadaBoot = true,
+        };
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+
+        var session = await transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask);
+        var prepared = await transfer.PrepareAsync(imported, session);
+
+        Assert.Equal("prepared", prepared.GetProperty("state").GetString());
+        Assert.Equal("armada_boot", prepared.GetProperty("physical").GetProperty("bootSource").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Transfer_Tb710fuWithoutArmadaBootIsRefusedBeforeBegin(bool legacyController)
+    {
+        // TB710FU has no raw Android Boot update path: a raw A/B or legacy-controller report is refused on the
+        // first info document, before any begin/upload request is sent.
+        string name = legacyController ? "tb710fu-legacy" : "tb710fu-raw";
+        var c = new Case(Path.Combine(root, name), deviceModel: "TB710FU");
+        var work = Directory.CreateDirectory(Path.Combine(root, name + "-work")).FullName;
+        using var imported = await Import(c.ArchivePath, "TB710FU", "0.8.0", work, c.Verify);
+        var server = new FakeDeviceServer("TB710FU", c.DescriptorBytes, c.Entries["images/linux-root.img.gz"], [1, 2], [3, 4])
+        {
+            LegacyController = legacyController,
+        };
+        await using var client = server.CreateClient();
+        var transfer = new OfflineUpdateTransfer(client, TimeSpan.FromMilliseconds(1));
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(
+            () => transfer.CreateSessionAsync(imported, (_, _) => Task.CompletedTask));
+
+        Assert.Contains("ARMADA_BOOT", error.Message, StringComparison.Ordinal);
+        Assert.Equal(["info"], server.Methods);
+    }
+
+    [Fact]
     public async Task Transfer_Legacy07InfoAndReceipts_AreAcceptedForBothSlotFlow()
     {
         var c = new Case(Path.Combine(root, "legacy07"));

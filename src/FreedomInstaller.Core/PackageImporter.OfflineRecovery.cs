@@ -32,12 +32,6 @@ public static partial class PackageImporter
     private const string RecoveryManifestFileName = "recovery-manifest.json";
     private const string RecoveryAckFileName = "recovery-ack.json";
 
-    private static readonly HashSet<string> SupportedRecoveryModels = new(StringComparer.Ordinal)
-    {
-        "TB322FC",
-        "TB323FU"
-    };
-
     private static readonly HashSet<string> ReservedRecoveryNames = new(StringComparer.OrdinalIgnoreCase)
     {
         RecoveryPlanFileName,
@@ -613,7 +607,9 @@ public static partial class PackageImporter
         }
 
         var normalized = deviceModel.Trim();
-        if (!SupportedRecoveryModels.Contains(normalized))
+        // The recovery export follows the one offline-upgrade model list, so a model admitted to the
+        // upgrade (TB710FU on ARMADA_BOOT) can also save and validate its recovery export.
+        if (!UpdatePackageDescriptor.SupportsOfflineUpgrade(normalized))
         {
             throw new InvalidDataException($"不支持的离线恢复设备型号：{normalized}。");
         }

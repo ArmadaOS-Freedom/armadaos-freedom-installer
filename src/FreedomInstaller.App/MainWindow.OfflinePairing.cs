@@ -231,10 +231,18 @@ namespace FreedomInstaller.App
             try
             {
                 string model = GetJsonString(conn.DeviceInfo, "model") ?? string.Empty;
-                if (!string.Equals(model, "TB322FC", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(model, "TB323FU", StringComparison.OrdinalIgnoreCase))
+                if (!UpdatePackageDescriptor.SupportsOfflineUpgrade(model.ToUpperInvariant()))
                 {
                     throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorUnsupportedModel", LocalizeModelName(model)));
+                }
+                // An ARMADA_BOOT-only model (TB710FU) has no raw Android Boot update path: a device that does not
+                // report the complete ARMADA_BOOT shape (bootSource=armada_boot, null slots, no selectedSlot; an
+                // install from before the disk boot) is refused here, with the rule the transfer applies again to
+                // every info/status document.
+                if (ArmadaBootModels.IsArmadaBootOnly(model.ToUpperInvariant())
+                    && !OfflineUpdateTransfer.AcceptsBootReport(conn.DeviceInfo, model.ToUpperInvariant()))
+                {
+                    throw new InvalidOperationException(T("Dynamic.OfflineUpdate.ErrorArmadaBootRequired", LocalizeModelName(model)));
                 }
                 _offlineSsh = conn;
                 _offlineTransfer = new OfflineUpdateTransfer(conn.Rpc);

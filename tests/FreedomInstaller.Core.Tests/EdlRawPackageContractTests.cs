@@ -149,6 +149,51 @@ public sealed class EdlRawPackageContractTests
     }
 
     [Fact]
+    public void ReadEdlRawContract_AcceptsTheArmadaBootRecipeForTb710fu()
+    {
+        using var fixture = EdlRawFixture.Create();
+        var metadata = fixture.ReadMetadata();
+        metadata["deviceModel"] = "TB710FU";
+        var compatible = metadata["compatible"]!.AsObject();
+        compatible["soc"] = "SM8650";
+        compatible["device"] = "tb710fu";
+        Recipe(metadata)["linuxBootSource"] = "armada-boot-v1";
+        fixture.WriteMetadata(metadata);
+        fixture.ClearRuntimeMarker();
+
+        var contract = PackageReader.ReadEdlRawContract(fixture.Path, "TB710FU");
+
+        Assert.Equal("TB710FU", contract.DeviceModel);
+        Assert.True(contract.BootRecipe.UsesArmadaBoot);
+    }
+
+    [Fact]
+    public void ArmadaBootModels_FollowTheFreedomDiskBootTable()
+    {
+        Assert.Equal(1u, ArmadaBootModels.BoardId("TB322FC"));
+        Assert.Equal(2u, ArmadaBootModels.BoardId("TB323FU"));
+        Assert.Equal(3u, ArmadaBootModels.BoardId("TB710FU"));
+        Assert.Equal("/armada/boot/TB710FU", ArmadaBootModels.BootRoot("TB710FU"));
+        Assert.Throws<InvalidDataException>(() => ArmadaBootModels.BoardId("tb710fu"));
+        Assert.Throws<InvalidDataException>(() => ArmadaBootModels.BootRoot("TB999XX"));
+
+        // TB710FU has only the disk boot; the Y700 boards keep both paths.
+        Assert.True(ArmadaBootModels.IsArmadaBootOnly("TB710FU"));
+        Assert.False(ArmadaBootModels.IsArmadaBootOnly("TB322FC"));
+        Assert.False(ArmadaBootModels.IsArmadaBootOnly("TB323FU"));
+        Assert.True(ArmadaBootModels.OfflineUpgradePathAllowed("TB710FU", armadaBootSource: true));
+        Assert.False(ArmadaBootModels.OfflineUpgradePathAllowed("TB710FU", armadaBootSource: false));
+        Assert.True(ArmadaBootModels.OfflineUpgradePathAllowed("TB323FU", armadaBootSource: false));
+        Assert.True(ArmadaBootModels.OfflineUpgradePathAllowed("TB323FU", armadaBootSource: true));
+        Assert.False(ArmadaBootModels.OfflineUpgradePathAllowed("TB999XX", armadaBootSource: true));
+
+        // The disk boot is not the raw mirrored Boot: TB710FU never needs the mirror marker.
+        Assert.False(LinuxRuntimeContract.RequiresMirrorMarker("TB710FU"));
+        Assert.True(LinuxRuntimeContract.RequiresMirrorMarker("TB322FC"));
+        Assert.True(LinuxRuntimeContract.RequiresMirrorMarker("TB323FU"));
+    }
+
+    [Fact]
     public void ReadEdlRawContract_DescribesBootAndRootImagesFromTheirDeclarations()
     {
         using var fixture = EdlRawFixture.Create();

@@ -412,8 +412,10 @@ public sealed class OfflineUpdateTransfer
         if (!root.TryGetProperty("supportedModels", out var models) || models.ValueKind != JsonValueKind.Array ||
             !models.EnumerateArray().Any(x => x.ValueKind == JsonValueKind.String && x.GetString() == package.DeviceModel))
             throw new InvalidDataException("描述文件不支持目标设备型号。");
-        if (package.DeviceModel is not ("TB322FC" or "TB323FU"))
-            throw new InvalidDataException("当前原生适配器仅支持 TB322FC/TB323FU 设备。");
+        // The one offline-upgrade model list; an ARMADA_BOOT-only model (TB710FU) is further held to the
+        // disk boot source on every info/status document (ReadSlots).
+        if (!UpdatePackageDescriptor.SupportsOfflineUpgrade(package.DeviceModel))
+            throw new InvalidDataException("当前原生适配器仅支持 TB322FC/TB323FU/TB710FU 设备。");
         var minimum = ParseVersion(RequiredString(root, "minimumUpdaterVersion", "descriptor"));
         if (!root.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array)
             throw new InvalidDataException("描述文件仅支持 files 数组。");
@@ -467,7 +469,7 @@ public sealed class OfflineUpdateTransfer
         Require(info, "model", model);
         if (ParseVersion(RequiredString(info, "updaterVersion", "info")) < minimum)
             throw new InvalidDataException("设备 updater 版本低于描述文件最低要求。");
-        _ = ReadSlots(info, "info");
+        _ = ReadSlots(info, "info", model);
         _ = RequiredString(info, "deployment", "info");
         var uuid = GuidD(RequiredString(info, "recoveryPartUuid", "info"));
         if (expectedUuid is not null && uuid != expectedUuid) throw new InvalidDataException("恢复分区 UUID 已变化。");
@@ -499,7 +501,7 @@ public sealed class OfflineUpdateTransfer
         Schema(info);
         Require(info, "model", session.DeviceModel);
         _ = RequiredString(info, "updaterVersion", "info");
-        _ = ReadSlots(info, "info");
+        _ = ReadSlots(info, "info", session.DeviceModel);
         _ = RequiredString(info, "deployment", "info");
         // The saved session is only reusable on the same physical device.
         Require(info, "recoveryPartUuid", session.RecoveryPartUuid);
@@ -519,7 +521,7 @@ public sealed class OfflineUpdateTransfer
             throw new InvalidDataException("receipt 缺少 physical。");
         Require(physical, "model", session.DeviceModel);
         Require(physical, "recoveryPartUuid", session.RecoveryPartUuid);
-        _ = ReadSlots(physical, "status");
+        _ = ReadSlots(physical, "status", session.DeviceModel);
         _ = RequiredString(physical, "deployment", "status");
         if (!receipt.TryGetProperty("payload", out var body) || body.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("receipt 缺少 payload。");
@@ -542,7 +544,7 @@ public sealed class OfflineUpdateTransfer
             throw new InvalidDataException("receipt 缺少 physical。");
         Require(physical, "model", model);
         Require(physical, "recoveryPartUuid", uuid);
-        _ = ReadSlots(physical, label);
+        _ = ReadSlots(physical, label, model);
         _ = RequiredString(physical, "deployment", label);
         if (!receipt.TryGetProperty("payload", out var body) || body.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("receipt 缺少 payload。");
@@ -711,9 +713,11 @@ public sealed class OfflineUpdateTransfer
     /// a half-populated pair is still rejected. On the native armada_boot path,
     /// actualSlot/inactiveSlot must be explicit JSON null and selectedSlot must
     /// be absent (any present-typed value, including null or non-string, is
-    /// rejected).
+    /// rejected). An ARMADA_BOOT-only model (TB710FU) is accepted only on that
+    /// native armada_boot path: its raw A/B or legacy-controller report is
+    /// refused, because it has no raw Android Boot update path.
     /// </summary>
-    private static SlotInfo ReadSlots(JsonElement value, string label)
+    private static SlotInfo ReadSlots(JsonElement value, string label, string model)
     {
         var bootContext = OptionalString(value, "bootContext");
         var actual = OptionalString(value, "actualSlot");
@@ -722,9 +726,13 @@ public sealed class OfflineUpdateTransfer
 
         // Disk-native system: exact bootSource="armada_boot" with explicit JSON
         // null actualSlot/inactiveSlot and selectedSlot omitted.
-        if (value.TryGetProperty("bootSource", out var bootSourceProp)
+        bool armadaBoot = value.TryGetProperty("bootSource", out var bootSourceProp)
             && bootSourceProp.ValueKind == JsonValueKind.String
-            && string.Equals(bootSourceProp.GetString(), "armada_boot", StringComparison.Ordinal))
+            && string.Equals(bootSourceProp.GetString(), "armada_boot", StringComparison.Ordinal);
+        if (!ArmadaBootModels.OfflineUpgradePathAllowed(model, armadaBoot))
+            throw new InvalidDataException(
+                $"{label} 启动方式与机型不符：{model} 只能在 ARMADA_BOOT 启动（bootSource=armada_boot）的系统上离线升级。");
+        if (armadaBoot)
         {
             if (string.Equals(bootContext, "legacy-controller", StringComparison.Ordinal))
                 throw new InvalidDataException($"{label} 磁盘设备字段非法。");
@@ -750,6 +758,27 @@ public sealed class OfflineUpdateTransfer
         if (!((actual == "a" && inactive == "b") || (actual == "b" && inactive == "a")))
             throw new InvalidDataException($"{label} 槽位信息非法。");
         return new SlotInfo(actual, inactive, selected, LegacyController: false);
+    }
+
+    /// <summary>
+    /// True when <paramref name="info"/> reports a boot path and slot shape the transfer accepts for
+    /// <paramref name="model"/>: for an ARMADA_BOOT-only model (TB710FU) exactly bootSource=armada_boot with JSON
+    /// null actualSlot/inactiveSlot and no selectedSlot. The installer windows use it before adopting a connection,
+    /// with the same rule every info/status document is held to.
+    /// </summary>
+    public static bool AcceptsBootReport(JsonElement info, string model)
+    {
+        if (info.ValueKind != JsonValueKind.Object)
+            return false;
+        try
+        {
+            _ = ReadSlots(info, "info", model);
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
     }
 
     private static string? OptionalString(JsonElement value, string name)

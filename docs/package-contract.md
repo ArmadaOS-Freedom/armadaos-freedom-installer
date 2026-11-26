@@ -51,3 +51,18 @@ TB322FC/TB323FU 的新系统双槽策略要求目标运行时二进制保留精�
 
 该检查只证明运行时来自带标记的构建，不构成签名、设备或启动授权。TB710FU
 和 TF 卡包不在该策略范围内，旧部署的只读信息查询也不受影响。
+
+## ARMADA_BOOT 磁盘启动机型
+
+`bootRecipe.linuxBootSource = "armada-boot-v1"` 只允许用于 TB322FC、TB323FU 和 TB710FU（`ArmadaBootModels`，
+与 Freedom 能力表的 `disk_boot` 一致）。启动器从 `ARMADA_BOOT` 的 `/armada/boot/<型号>/` 读取签名清单、签名和机型 DTB，
+清单板号依次为 1、2、3；安装时校验 `ARMADA_BOOT` 镜像中的清单板号与安装包型号一致。统一包的 `armadaBootCapsules`
+同样只接受这三个型号，且型号必须在 `supportedModels` 内。
+
+TB710FU 只有 `ARMADA_BOOT` 这一条更新路径，没有旧的 raw-Boot 双槽更新：
+
+- 离线升级要求设备报告 `bootSource=armada_boot`，`actualSlot`、`inactiveSlot` 为 JSON null 且没有 `selectedSlot`。
+  报告实际槽对或 `bootContext=legacy-controller` 的 TB710FU（磁盘启动之前的旧安装）在连接时、以及每一份
+  `info`／状态回执的校验中被拒绝，任何写入请求都不会发出；这类设备需先用安装器重新安装。
+- TB710FU 不要求 `ARMADA_LINUX_MIRROR_V1` 标记（`LinuxRuntimeContract.RequiresMirrorMarker("TB710FU")` 为 false）。
+- TB710FU 的引导维护、卸载和全局恢复写入路线不因此开放。
