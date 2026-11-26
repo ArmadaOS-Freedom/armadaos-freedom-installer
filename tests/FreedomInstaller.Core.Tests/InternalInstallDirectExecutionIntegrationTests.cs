@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FreedomInstaller.Core;
@@ -580,6 +581,8 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
 
         AssertDirectProgress(progress.Records, gptRegions, board, contract, bootB, bootA, miscWrite, metadataRegions);
         AssertExecutionEvidenceTransfers(prepared.EvidenceDirectory, runner.Writes.Count);
+        AssertStreamedReadback(prepared.EvidenceDirectory, "WritingLinuxBoot", "linux_boot", contract.BootImage.ExpandedSha256);
+        AssertStreamedReadback(prepared.EvidenceDirectory, "WritingLinuxRoot", "linux_root", contract.RootImage.ExpandedSha256);
 
         // There is no acceptance handoff on this route: a terminal run refuses the read-only check, the
         // snapshot/result stay the terminal facts and no EDL, write, reset, native or adb work is replayed.
@@ -611,6 +614,39 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
         Assert.Equal(6, session.NativeCommandCount);
         Assert.Equal(adbAfterExecute, android.CommandCount);
         Assert.Equal(0, android.CommandCount);
+    }
+
+    [Fact]
+    public async Task Linux_root_readback_digest_mismatch_stops_before_writing_either_boot_slot_or_resetting()
+    {
+        var android = new ReadOnlyAndroidResponder();
+        using DirectInstallReadyTestSession session = await DirectInstallReadyTestSession.CreateAsync(
+            _toolchain.Toolchain, _rawShared, "a", android, reinstallAndroidGiB: 16);
+        InternalInstallPrepared prepared = session.Backend.Prepared;
+        android.ConfigureFacts(prepared, session.Artifacts, session.Package.DeviceModel);
+
+        var contract = PackageReader.ReadEdlRawContract(session.Package.PackageDirectory, session.Package.DeviceModel);
+        var root = session.Artifacts.LinuxRoot;
+        long sectors = contract.RootImage.ExpandedBytes / contract.RootImage.SectorSize;
+        var bootA = session.Backup.Files["boot_a"];
+        var bootB = session.Backup.Files["boot_b"];
+        IB001FakeEdlRunner runner = session.EdlRunner;
+        byte[] corruptReadback = (byte[])_rawShared.RootImage.Clone();
+        corruptReadback[^1] ^= 1;
+        runner.PayloadOverride = read => read.Lun == 0 && read.StartSector == root.StartSector
+            && read.SectorCount == sectors ? corruptReadback : null;
+
+        InternalInstallResult result = await session.Backend.ExecuteAsync(
+            prepared.ConfirmationId, userdataEraseConfirmed: true, progress: null);
+
+        Assert.Equal(InternalInstallOutcome.UnknownWriteOutcome, result.Outcome);
+        Assert.Equal(InternalInstallStage.WritingLinuxBoot, result.LastVerifiedStage);
+        Assert.Contains(runner.Writes, write => write.Lun == 0 && write.StartSector == root.StartSector);
+        Assert.DoesNotContain(runner.Writes, write =>
+            (write.Lun == bootA.Lun && write.StartSector == bootA.StartSector)
+            || (write.Lun == bootB.Lun && write.StartSector == bootB.StartSector));
+        Assert.Equal(0, runner.ResetCount);
+        Assert.False(File.Exists(Path.Combine(prepared.EvidenceDirectory, "execution-WritingLinuxRoot-linux_root.verified.json")));
     }
 
     // ------------------------------------------------------------------ case 2: boot B readback fault
@@ -1017,6 +1053,15 @@ public sealed class InternalInstallDirectExecutionIntegrationTests
                 "Final ACK received for Read operation.",
                 File.ReadAllText(file));
         }
+    }
+
+    private static void AssertStreamedReadback(string evidenceDirectory, string stage, string role, string expectedSha256)
+    {
+        string prefix = $"execution-{stage}-{role}";
+        using var receipt = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(evidenceDirectory, prefix + ".verified.json")));
+        Assert.Equal(JsonValueKind.Null, receipt.RootElement.GetProperty("readbackPath").ValueKind);
+        AssertShaEqual(expectedSha256, receipt.RootElement.GetProperty("observedSha256").GetString()!);
+        Assert.Empty(Directory.EnumerateFiles(evidenceDirectory, prefix + "*.bin"));
     }
 
     private static void AssertSingleResetAndNativeCount(

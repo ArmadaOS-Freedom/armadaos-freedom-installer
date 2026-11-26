@@ -35,10 +35,9 @@ namespace FreedomInstaller.Core;
 /// The legacy <see cref="CaptureAsync"/> route never creates, moves or deletes a file, never re-runs the
 /// importer, never queries a device and never decides readiness: the caller owns the
 /// <see cref="ImportedPackage"/> and its disposal, this type only owns the read leases it opened itself.
-/// The schema-2 <see cref="CaptureEdlRawAsync"/> route additionally expands the two bounded gzip images,
-/// exactly once each, into one unique child directory it created itself below the caller's explicit
-/// expansion parent. That child and the expanded read leases are this instance's own derived state; the
-/// caller's parent directory, the imported package and every other caller file stay untouched.
+/// The schema-2 <see cref="CaptureEdlRawAsync"/> route also validates both bounded gzip images. Only the
+/// boot image is staged in a unique child of the caller's expansion parent, for random-access inspection.
+/// The verified root image retains its compressed source and expanded facts without staging the raw bytes.
 /// </para>
 /// </summary>
 internal sealed class InternalInstallPackageSnapshot : IDisposable
@@ -93,7 +92,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
 
     private readonly IReadOnlyList<PayloadLease> _leases;
 
-    /// <summary>Expanded raw images this instance created itself; empty on the legacy route.</summary>
+    /// <summary>Staged boot image this instance created itself; empty on the legacy route.</summary>
     private readonly IReadOnlyList<DerivedLease> _derivedLeases;
 
     /// <summary>The caller's explicit expansion parent, kept only to bound this instance's own child.</summary>
@@ -106,7 +105,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
 
     private readonly VerifiedEdlFile? _linuxBootRaw;
 
-    private readonly VerifiedEdlFile? _linuxRootRaw;
+    private readonly VerifiedGzipEdlImage? _linuxRootImage;
 
     /// <summary>Legacy seed fact; null on the direct route, which never fabricates a seed or RAM receipt.</summary>
     private readonly RamInstallSeed? _seed;
@@ -133,7 +132,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         _expansionChild = null;
         _edlRawContract = null;
         _linuxBootRaw = null;
-        _linuxRootRaw = null;
+        _linuxRootImage = null;
         _seed = seed;
 
         ManifestFingerprint = manifestFingerprint;
@@ -151,9 +150,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
     }
 
     /// <summary>
-    /// Private constructor of a direct EDL raw snapshot: it exists only after both expanded raw images were
-    /// written, re-hashed from their own held leases and bound to the validated contract, so the instance
-    /// owns the manifest, the seven source leases, the two derived leases and its unique expansion child.
+    /// A direct snapshot exists only after validating both expanded images and the staged boot lease.
     /// </summary>
     private InternalInstallPackageSnapshot(
         FileStream manifestStream,
@@ -163,7 +160,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         string expansionChild,
         EdlRawPackageContract contract,
         VerifiedEdlFile linuxBootRaw,
-        VerifiedEdlFile linuxRootRaw,
+        VerifiedGzipEdlImage linuxRootImage,
         string manifestFingerprint,
         string bindingSha256,
         FirmwareSnapshot firmware)
@@ -175,7 +172,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         _expansionChild = expansionChild;
         _edlRawContract = contract;
         _linuxBootRaw = linuxBootRaw;
-        _linuxRootRaw = linuxRootRaw;
+        _linuxRootImage = linuxRootImage;
         _seed = null;
 
         ManifestFingerprint = manifestFingerprint;
@@ -221,8 +218,8 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
     /// <summary>
     /// Captures the schema-2 direct EDL raw package <paramref name="package"/> against
     /// <paramref name="identity"/>. The direct route opens the manifest plus all seven regular read-only
-    /// leases, verifies the compressed package files, expands the bounded gzip images under the explicit
-    /// <paramref name="expansionParent"/> and keeps the resulting leases for execution and revalidation.
+    /// leases, checks the complete expanded gzip contents, and stages only the boot image under
+    /// <paramref name="expansionParent"/> for random-access verification.
     /// A schema-1 package is refused here; it only ever goes through <see cref="CaptureAsync"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">The direct package, its raw facts or the observed
@@ -247,7 +244,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         var validation = RequireDirectImportedPackage(package, identity.Model);
 
         // The cheap claim and identity guards stay on the caller's thread; every file lease, the real
-        // contract read, the two bounded expansions and their digests run on the thread pool so a UI caller
+        // contract read, the two bounded decompression passes and their digests run on the thread pool so a UI caller
         // is never blocked.
         return Task.Run(
             () => CaptureDirect(
@@ -302,15 +299,15 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         ?? throw new InvalidOperationException("A legacy seed snapshot carries no expanded boot raw image.");
 
     /// <summary>
-    /// Actual expanded Btrfs root image of this direct capture. A legacy seed snapshot never produces one.
+    /// Compressed source and verified expanded Btrfs facts of this direct capture.
     /// </summary>
-    internal VerifiedEdlFile LinuxRootRaw =>
-        _linuxRootRaw
-        ?? throw new InvalidOperationException("A legacy seed snapshot carries no expanded root raw image.");
+    internal VerifiedGzipEdlImage LinuxRootImage =>
+        _linuxRootImage
+        ?? throw new InvalidOperationException("A legacy seed snapshot carries no verified root image.");
 
     /// <summary>
     /// Rechecks the stored manifest fingerprint, every payload hash and every full length from the held
-    /// streams, and for a direct capture the two expanded raw images as well. A changed file is detected
+    /// streams, and for a direct capture the staged boot image as well. A changed file is detected
     /// here; the stored verdict is never returned unverified.
     /// </summary>
     /// <exception cref="ObjectDisposedException">The snapshot has already been disposed.</exception>
@@ -1110,9 +1107,8 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
     /// <summary>
     /// The direct capture body. It opens and keeps the manifest plus all seven source files, re-verifies
     /// their held length and SHA-256, asks the real reader for the typed contract under those held leases,
-    /// validates the two prebuilt device trees, then expands the smaller gzip image first into one unique
-    /// child directory of the caller's explicit parent. Any refusal releases every lease it opened and
-    /// removes only that own child again.
+    /// validates the two prebuilt device trees, then validates both expanded gzip streams. Only boot is
+    /// staged for random access. Any refusal releases the leases and removes the owned expansion child.
     /// </summary>
     private static InternalInstallPackageSnapshot CaptureDirect(
         ImportedPackage package,
@@ -1237,39 +1233,24 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
                 observedModel,
                 cancellationToken);
 
-            EnsureExpansionSpace(parent, contract.BootImage.ExpandedBytes, contract.RootImage.ExpandedBytes);
+            EnsureExpansionSpace(parent, contract.BootImage.ExpandedBytes);
 
             cancellationToken.ThrowIfCancellationRequested();
             var childPath = CreateExpansionChild(parent);
             child = childPath;
 
-            // Expanding the shorter declaration first lets a cheap mismatch refuse before the large image is
-            // ever inflated, and each image is still expanded exactly once.
-            var targets = new[]
-                {
-                    new ExpandedTarget(RequireRole(byRole, contract.RootImage.Artifact.Role), contract.RootImage),
-                    new ExpandedTarget(RequireRole(byRole, contract.BootImage.Artifact.Role), contract.BootImage),
-                }
-                .OrderBy(target => target.Image.ExpandedBytes)
-                .ToArray();
-
-            var expandedByRole = new Dictionary<string, DerivedLease>(StringComparer.Ordinal);
-            foreach (var target in targets)
+            var bootSource = RequireRole(byRole, contract.BootImage.Artifact.Role);
+            var bootPath = Path.Combine(childPath, bootSource.Role + ".img");
+            var bootImage = StageBootImage(bootSource, contract.BootImage, bootPath, cancellationToken);
+            expanded.Add(bootImage);
+            VerifyExt4Superblock(bootImage, contract.BootImage, contract.BootRecipe.BootUuid, cancellationToken);
+            if (contract.BootRecipe.UsesArmadaBoot)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var outputPath = Path.Combine(childPath, target.Image.Artifact.Role + ".img");
-                var lease = ExpandGzipImage(target.Source, target.Image, outputPath, cancellationToken);
-                expanded.Add(lease);
-                expandedByRole.Add(target.Image.Artifact.Role, lease);
-
-                VerifyExpandedFilesystem(lease, target.Image, contract, cancellationToken);
+                BootMaintenanceInstalledLinux.VerifyArmadaBootImage(bootImage.Stream, contract, cancellationToken);
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var bootImage = expandedByRole[contract.BootImage.Artifact.Role];
-            var rootImage = expandedByRole[contract.RootImage.Artifact.Role];
+            var rootSource = RequireRole(byRole, contract.RootImage.Artifact.Role);
+            var rootImage = VerifyRootImage(rootSource, contract.RootImage, contract.BootRecipe.RootUuid, cancellationToken);
 
             var binding = BuildDirectBinding(
                 manifestFingerprint,
@@ -1292,7 +1273,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
                 childPath,
                 contract,
                 new VerifiedEdlFile(bootImage.Path, bootImage.Length, bootImage.Sha256),
-                new VerifiedEdlFile(rootImage.Path, rootImage.Length, rootImage.Sha256),
+                rootImage,
                 manifestFingerprint,
                 binding,
                 firmware);
@@ -1376,38 +1357,26 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
     }
 
     /// <summary>
-    /// Refuses before any expansion when the explicit parent cannot be shown to hold enough room for the sum
-    /// of the two actual expanded images. The check uses the volume the parent actually lives on (the Win32
-    /// free-space API for the explicit path, including UNC, and the mounted volume on Unix).
+    /// Refuses before staging when the explicit parent cannot be shown to hold the expanded boot image.
     /// </summary>
-    private static void EnsureExpansionSpace(string parent, long bootBytes, long rootBytes)
+    private static void EnsureExpansionSpace(string parent, long bootBytes)
     {
-        long required;
-        try
-        {
-            required = checked(bootBytes + rootBytes);
-        }
-        catch (OverflowException)
-        {
-            throw new IOException("The declared expanded image sizes overflow the free-space arithmetic.");
-        }
-
         var available = TryGetAvailableFreeBytes(parent);
         if (available is null)
         {
             throw new InternalInstallWorkDiskSpaceException(
-                required,
+                bootBytes,
                 null,
                 $"The free space of the expansion parent could not be determined: {parent}.");
         }
 
-        if (required > available.Value)
+        if (bootBytes > available.Value)
         {
             throw new InternalInstallWorkDiskSpaceException(
-                required,
+                bootBytes,
                 available.Value,
-                $"The expansion parent holds {available.Value} free bytes, but the expanded images need "
-                + $"{required} bytes: {parent}.");
+                $"The expansion parent holds {available.Value} free bytes, but the expanded boot image needs "
+                + $"{bootBytes} bytes: {parent}.");
         }
     }
 
@@ -1510,11 +1479,91 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
             || (!Path.IsPathRooted(relative) && !StartsWithParentSegment(relative));
     }
 
-    /// <summary>Expands one gzip image exactly once with a bounded 1 MiB buffer and no whole-image array.</summary>
-    private static DerivedLease ExpandGzipImage(
+    private static DerivedLease StageBootImage(
         PayloadLease source,
         EdlRawImage image,
         string outputPath,
+        CancellationToken cancellationToken)
+    {
+        string expandedSha;
+        using (var output = new FileStream(
+                   outputPath,
+                   FileMode.CreateNew,
+                   FileAccess.Write,
+                   FileShare.None,
+                   ExpansionBufferBytes,
+                   FileOptions.SequentialScan))
+        {
+            expandedSha = VerifyGzipImage(source, image, output, Span<byte>.Empty, cancellationToken);
+            output.Flush(flushToDisk: true);
+        }
+
+        // Bind the actual staged file, not just the buffer that was written to it.
+        var held = new FileStream(
+            outputPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            HashStreamBufferBytes,
+            FileOptions.SequentialScan);
+
+        var handedOver = false;
+        try
+        {
+            var length = held.Length;
+            if (length != image.ExpandedBytes)
+            {
+                throw new InvalidDataException(
+                    $"The expanded image '{source.Role}' is {length} bytes on disk, but {image.ExpandedBytes} were expected.");
+            }
+
+            var heldSha = HashStream(held, cancellationToken);
+            if (!string.Equals(heldSha, expandedSha, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"The expanded image '{source.Role}' changed after it was written.");
+            }
+
+            var lease = new DerivedLease(outputPath, length, heldSha, held);
+            handedOver = true;
+            return lease;
+        }
+        finally
+        {
+            if (!handedOver)
+            {
+                held.Dispose();
+            }
+        }
+    }
+
+    private static VerifiedGzipEdlImage VerifyRootImage(
+        PayloadLease source,
+        EdlRawImage image,
+        Guid rootUuid,
+        CancellationToken cancellationToken)
+    {
+        if (image.ExpandedBytes < BtrfsSuperblockOffset + BtrfsSuperblockBytes)
+        {
+            throw new InvalidDataException(
+                $"The expanded image '{image.Artifact.Role}' is too short to carry a Btrfs superblock.");
+        }
+
+        Span<byte> superblock = stackalloc byte[BtrfsSuperblockBytes];
+        string expandedSha = VerifyGzipImage(source, image, null, superblock, cancellationToken);
+        EdlRawFilesystemValidator.ValidateBtrfs(superblock, image.ExpandedBytes, image, rootUuid);
+        return new VerifiedGzipEdlImage(
+            new VerifiedEdlFile(source.FullPath, source.Length, source.Sha256),
+            image.ExpandedBytes,
+            expandedSha);
+    }
+
+    /// <summary>Checks the whole decompression stream without retaining it unless an output is supplied.</summary>
+    private static string VerifyGzipImage(
+        PayloadLease source,
+        EdlRawImage image,
+        Stream? output,
+        Span<byte> btrfsSuperblock,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -1556,14 +1605,6 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         long total = 0;
         string writtenSha;
 
-        var output = new FileStream(
-            outputPath,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.None,
-            ExpansionBufferBytes,
-            FileOptions.SequentialScan);
-
         using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
         {
             try
@@ -1588,18 +1629,26 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
                                 $"The expanded image '{source.Role}' exceeds its declared {declared} bytes.");
                         }
 
+                        if (!btrfsSuperblock.IsEmpty)
+                        {
+                            long start = Math.Max(total, BtrfsSuperblockOffset);
+                            long end = Math.Min(total + read, BtrfsSuperblockOffset + btrfsSuperblock.Length);
+                            if (start < end)
+                            {
+                                buffer.AsSpan((int)(start - total), (int)(end - start))
+                                    .CopyTo(btrfsSuperblock[(int)(start - BtrfsSuperblockOffset)..]);
+                            }
+                        }
+
                         total += read;
                         hash.AppendData(buffer, 0, read);
                         crc = AppendCrc32(crc, buffer.AsSpan(0, read));
-                        output.Write(buffer, 0, read);
+                        output?.Write(buffer, 0, read);
                     }
                 }
-
-                output.Flush(flushToDisk: true);
             }
             finally
             {
-                output.Dispose();
                 input.Position = 0;
             }
 
@@ -1652,72 +1701,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // The published output is re-read from a fresh Read/ShareRead lease: the digest that is exposed is
-        // the digest of the bytes the final held handle sees, not of a buffer that was written earlier.
-        var held = new FileStream(
-            outputPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            HashStreamBufferBytes,
-            FileOptions.SequentialScan);
-
-        var handedOver = false;
-        try
-        {
-            var length = held.Length;
-            if (length != declared)
-            {
-                throw new InvalidDataException(
-                    $"The expanded image '{source.Role}' is {length} bytes on disk, but {declared} were expected.");
-            }
-
-            var heldSha = HashStream(held, cancellationToken);
-            if (!string.Equals(heldSha, writtenSha, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(heldSha, image.ExpandedSha256, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException(
-                    $"The expanded image '{source.Role}' changed after it was written.");
-            }
-
-            var lease = new DerivedLease(outputPath, length, heldSha, held);
-            handedOver = true;
-            return lease;
-        }
-        finally
-        {
-            if (!handedOver)
-            {
-                held.Dispose();
-            }
-        }
-    }
-
-    private static void VerifyExpandedFilesystem(
-        DerivedLease lease,
-        EdlRawImage image,
-        EdlRawPackageContract contract,
-        CancellationToken cancellationToken)
-    {
-        EdlRawBootRecipe recipe = contract.BootRecipe;
-        if (string.Equals(image.FsType, "ext4", StringComparison.Ordinal))
-        {
-            VerifyExt4Superblock(lease, image, recipe.BootUuid, cancellationToken);
-            if (recipe.UsesArmadaBoot)
-            {
-                BootMaintenanceInstalledLinux.VerifyArmadaBootImage(lease.Stream, contract, cancellationToken);
-            }
-            return;
-        }
-
-        if (string.Equals(image.FsType, "btrfs", StringComparison.Ordinal))
-        {
-            VerifyBtrfsSuperblock(lease, image, recipe.RootUuid, cancellationToken);
-            return;
-        }
-
-        throw new InvalidDataException(
-            $"The expanded image '{image.Artifact.Role}' declares an unsupported fsType '{image.FsType}'.");
+        return writtenSha;
     }
 
     /// <summary>
@@ -1743,32 +1727,6 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
             cancellationToken);
 
         EdlRawFilesystemValidator.ValidateExt4(superblock, lease.Length, image, bootUuid);
-    }
-
-    /// <summary>
-    /// Reads the actual Btrfs primary superblock at 65536 from the held expanded lease and
-    /// delegates the magic, FSID, bytenr, total bytes, device count and sector size checks to
-    /// the shared validator.
-    /// </summary>
-    private static void VerifyBtrfsSuperblock(
-        DerivedLease lease,
-        EdlRawImage image,
-        Guid rootUuid,
-        CancellationToken cancellationToken)
-    {
-        if (lease.Length < BtrfsSuperblockOffset + BtrfsSuperblockBytes)
-        {
-            throw new InvalidDataException(
-                $"The expanded image '{image.Artifact.Role}' is too short to carry a Btrfs superblock.");
-        }
-
-        var superblock = ReadAt(
-            lease.Stream,
-            BtrfsSuperblockOffset,
-            BtrfsSuperblockBytes,
-            cancellationToken);
-
-        EdlRawFilesystemValidator.ValidateBtrfs(superblock, lease.Length, image, rootUuid);
     }
 
     /// <summary>Bounded read of a small structural header from an already held lease.</summary>
@@ -2152,7 +2110,7 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         EdlRawPackageContract contract,
         IReadOnlyList<PayloadLease> leases,
         DerivedLease bootImage,
-        DerivedLease rootImage,
+        VerifiedGzipEdlImage rootImage,
         EdlRawDtbEvidence normalDtb,
         EdlRawDtbEvidence diagnosticDtb)
     {
@@ -2183,8 +2141,8 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
             ",",
             new[]
             {
-                ExpandedBinding(contract.BootImage, bootImage),
-                ExpandedBinding(contract.RootImage, rootImage),
+                ExpandedBinding(contract.BootImage, bootImage.Length, bootImage.Sha256),
+                ExpandedBinding(contract.RootImage, rootImage.Length, rootImage.Sha256),
             });
 
         var dtbFields = string.Join(",", new[] { DtbBinding(normalDtb), DtbBinding(diagnosticDtb) });
@@ -2242,13 +2200,13 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
                 "\"minimumLinuxDataBytes\":" + storage.MinimumLinuxDataBytes.ToString(CultureInfo.InvariantCulture),
             });
 
-    private static string ExpandedBinding(EdlRawImage image, DerivedLease lease) =>
+    private static string ExpandedBinding(EdlRawImage image, long length, string sha256) =>
         "{"
         + "\"role\":" + Quote(image.Artifact.Role) + ","
         + "\"fsType\":" + Quote(image.FsType) + ","
         + "\"fsUuid\":" + Quote(image.FsUuid.ToString("D")) + ","
-        + "\"length\":" + lease.Length.ToString(CultureInfo.InvariantCulture) + ","
-        + "\"sha256\":" + Quote(lease.Sha256.ToLowerInvariant())
+        + "\"length\":" + length.ToString(CultureInfo.InvariantCulture) + ","
+        + "\"sha256\":" + Quote(sha256.ToLowerInvariant())
         + "}";
 
     private static string DtbBinding(EdlRawDtbEvidence evidence) =>
@@ -2262,8 +2220,6 @@ internal sealed class InternalInstallPackageSnapshot : IDisposable
         + "\"initrdEntryIndex\":" + evidence.InitrdEntryIndex.ToString(CultureInfo.InvariantCulture) + ","
         + "\"compatible\":[" + string.Join(",", evidence.Compatible.Select(Quote)) + "]"
         + "}";
-
-    private readonly record struct ExpandedTarget(PayloadLease Source, EdlRawImage Image);
 
     private sealed record DeclaredArtifact(string Role, string RelativePath, long Bytes, string Sha256);
 

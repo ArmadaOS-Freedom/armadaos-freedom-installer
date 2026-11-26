@@ -136,30 +136,27 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
             Assert.Equal(ManifestDigest, held.Deployment.ManifestDigest);
             Assert.Equal(RawFacts.Origin, held.Deployment.Origin);
 
-            // The exposed raw facts are the ACTUAL expanded images, under the explicit expansion parent,
-            // with the complete expanded length and an independently computed digest.
+            // The only staged image is the boot filesystem, with complete expanded length and digest.
             var boot = Get<VerifiedEdlFile>(snapshot, "LinuxBootRaw");
             Assert.Equal(BootExpandedBytes, boot.Length);
             Assert.Equal(_fixture.BootExpandedSha256, boot.Sha256, ignoreCase: true);
             AssertUnder(expansion.Path, boot.Path);
             AssertActualExt4(boot.Path, BootUuid);
 
-            var root = Get<VerifiedEdlFile>(snapshot, "LinuxRootRaw");
+            Assert.Equal(boot.Path, Assert.Single(Directory.EnumerateFiles(
+                expansion.Path, "*", SearchOption.AllDirectories)));
+
+            var root = Get<VerifiedGzipEdlImage>(snapshot, "LinuxRootImage");
             Assert.Equal((long)RootImageBytes, root.Length);
             Assert.Equal(_fixture.RootExpandedSha256, root.Sha256, ignoreCase: true);
-            AssertUnder(expansion.Path, root.Path);
-            AssertActualBtrfs(root.Path, RootUuid);
+            Assert.Equal(package.ArtifactPath("linux-root-raw"), root.Compressed.Path);
+            Assert.Equal(package.Artifact("linux-root-raw").Length, root.Compressed.Length);
+            Assert.Equal(package.Artifact("linux-root-raw").Sha256, root.Compressed.Sha256, ignoreCase: true);
 
-            // The exposed digests must belong to the bytes actually written, so each returned path is hashed
-            // again in one streamed pass — the 1 GiB boot image is never materialised as an array — and both
-            // the expected full-image digest and the returned VerifiedEdlFile digest must agree with it.
+            // Independently hash the exact file used for random access, without loading it into memory.
             var bootActual = await Sha256OfFileAsync(boot.Path);
             Assert.Equal(_fixture.BootExpandedSha256, bootActual, ignoreCase: true);
             Assert.Equal(boot.Sha256, bootActual, ignoreCase: true);
-
-            var rootActual = await Sha256OfFileAsync(root.Path);
-            Assert.Equal(_fixture.RootExpandedSha256, rootActual, ignoreCase: true);
-            Assert.Equal(root.Sha256, rootActual, ignoreCase: true);
 
             // Payloads keeps describing the held package files, which stay COMPRESSED for both raw roles.
             var payloads = Get<IReadOnlyDictionary<string, VerifiedEdlFile>>(snapshot, "Payloads");
@@ -238,15 +235,13 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
             Assert.Equal(_fixture.BootExpandedSha256, boot.Sha256, ignoreCase: true);
             AssertUnder(expansion.Path, boot.Path);
 
-            var root = Get<VerifiedEdlFile>(snapshot, "LinuxRootRaw");
+            var root = Get<VerifiedGzipEdlImage>(snapshot, "LinuxRootImage");
             Assert.Equal((long)RootImageBytes, root.Length);
             Assert.Equal(_fixture.RootExpandedSha256, root.Sha256, ignoreCase: true);
-            AssertUnder(expansion.Path, root.Path);
+            Assert.Equal(package.ArtifactPath("linux-root-raw"), root.Compressed.Path);
 
             var bootActual = await Sha256OfFileAsync(boot.Path);
             Assert.Equal(boot.Sha256, bootActual, ignoreCase: true);
-            var rootActual = await Sha256OfFileAsync(root.Path);
-            Assert.Equal(root.Sha256, rootActual, ignoreCase: true);
 
             // A package without the optional group never manufactures a seed, RAM receipt or profile claim.
             AssertNotProvided(snapshot, "Seed");
@@ -280,7 +275,7 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
             Assert.NotNull(Get<RamInstallSeed>(legacy, "Seed"));
             AssertNotProvided(legacy, "EdlRawContract");
             AssertNotProvided(legacy, "LinuxBootRaw");
-            AssertNotProvided(legacy, "LinuxRootRaw");
+            AssertNotProvided(legacy, "LinuxRootImage");
 
             await RevalidateAsync(legacy);
         }
@@ -500,15 +495,15 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
         File.WriteAllBytes(sentinel, sentinelBytes);
 
         var snapshot = await CaptureRawAsync(imported, Identity(), expansion.Path);
-        var bootPayload = package.ArtifactPath("linux-boot-raw");
+        var rootPayload = package.ArtifactPath("linux-root-raw");
 
         // The expanded raw output this route produced, not just the compressed package input.
-        var rootRaw = Get<VerifiedEdlFile>(snapshot, "LinuxRootRaw");
-        Assert.True(File.Exists(rootRaw.Path));
+        var bootRaw = Get<VerifiedEdlFile>(snapshot, "LinuxBootRaw");
+        Assert.True(File.Exists(bootRaw.Path));
 
         // The derived work lives in one unique child the snapshot created underneath the caller's parent,
         // never directly in the parent itself: that exact child is the full disposal scope.
-        var ownedChild = Path.GetDirectoryName(Path.GetFullPath(rootRaw.Path))!;
+        var ownedChild = Path.GetDirectoryName(Path.GetFullPath(bootRaw.Path))!;
         Assert.True(Directory.Exists(ownedChild));
         AssertUnder(expansion.Path, ownedChild);
         Assert.NotEqual(
@@ -532,9 +527,9 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
                     () =>
                     {
                         using var writer = new FileStream(
-                            bootPayload, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                            rootPayload, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
                     });
-                AssertBlocked(() => File.Delete(bootPayload));
+                AssertBlocked(() => File.Delete(rootPayload));
 
                 // The expanded raw output is a fact this snapshot owns too, so it must stay unmutatable and
                 // undeletable for as long as the snapshot lives.
@@ -542,15 +537,15 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
                     () =>
                     {
                         using var writer = new FileStream(
-                            rootRaw.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                            bootRaw.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
                     });
-                AssertBlocked(() => File.Delete(rootRaw.Path));
+                AssertBlocked(() => File.Delete(bootRaw.Path));
             }
             else
             {
                 // POSIX has no sharing denial, so the claim is that revalidation re-reads the held bytes
-                // instead of trusting the capture-time verdict. The expanded raw output is one of those bytes.
-                FlipOneByte(rootRaw.Path);
+                // instead of trusting the capture-time verdict, including the compressed root input.
+                FlipOneByte(rootPayload);
                 var tampered = await Record.ExceptionAsync(() => RevalidateAsync(snapshot));
                 Assert.NotNull(tampered);
                 Assert.IsNotType<ObjectDisposedException>(tampered);
@@ -564,11 +559,11 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
 
             Assert.True(Directory.Exists(imported.PackageDirectory));
             Assert.True(File.Exists(package.ManifestPath));
-            Assert.True(File.Exists(bootPayload));
+            Assert.True(File.Exists(rootPayload));
 
             // Disposal removes exactly the derived work it created: the actual raw output and the unique
             // child holding it are gone, because no consumer needs them once the snapshot is disposed.
-            Assert.False(File.Exists(rootRaw.Path));
+            Assert.False(File.Exists(bootRaw.Path));
             Assert.False(Directory.Exists(ownedChild));
 
             // The caller's expansion parent and the file the caller put there are untouched.
@@ -577,7 +572,7 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
 
             if (OperatingSystem.IsWindows())
             {
-                AssertCanWrite(bootPayload);
+                AssertCanWrite(rootPayload);
             }
         }
         finally
@@ -767,25 +762,6 @@ public sealed class InternalInstallEdlRawSnapshotTests : IClassFixture<EdlRawSha
         Assert.Equal(0xEF53, (int)BinaryPrimitives.ReadUInt16LittleEndian(superblock.AsSpan(0x38)));
         Assert.Equal(expectedUuid, new Guid(superblock.AsSpan(0x68, 16), bigEndian: true));
         Assert.Equal(stream.Length, (long)blocks * (1024L << (int)logBlockSize));
-    }
-
-    /// <summary>Reads the actual expanded Btrfs primary superblock: fsid, bytenr, magic, length, geometry.</summary>
-    private static void AssertActualBtrfs(string path, Guid expectedFsid)
-    {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        Assert.Equal((long)RootImageBytes, stream.Length);
-
-        var superblock = new byte[148];
-        stream.Position = SyntheticRawImages.BtrfsSuperblockOffset;
-        stream.ReadExactly(superblock);
-
-        Assert.Equal(expectedFsid, new Guid(superblock.AsSpan(32, 16), bigEndian: true));
-        Assert.Equal((long)SyntheticRawImages.BtrfsSuperblockOffset,
-            BinaryPrimitives.ReadInt64LittleEndian(superblock.AsSpan(48)));
-        Assert.Equal(SyntheticRawImages.BtrfsMagic, Encoding.ASCII.GetString(superblock.AsSpan(64, 8)));
-        Assert.Equal(stream.Length, BinaryPrimitives.ReadInt64LittleEndian(superblock.AsSpan(112)));
-        Assert.Equal(1L, BinaryPrimitives.ReadInt64LittleEndian(superblock.AsSpan(136)));
-        Assert.Equal(4096, BinaryPrimitives.ReadInt32LittleEndian(superblock.AsSpan(144)));
     }
 
     private static void WriteFile(string root, string relativePath, byte[] bytes)

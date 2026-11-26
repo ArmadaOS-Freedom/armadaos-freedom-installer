@@ -41,8 +41,8 @@ public sealed record EdlProbeEvidence(
 
 /// <summary>
 /// Evidence of one completed sector read. <see cref="Length"/> and <see cref="Sha256"/> are computed from the
-/// file the client actually wrote and length-checked against <c>SectorCount * SectorSize</c>; the rounded size
-/// printed in the tool log is not trusted. <see cref="FilePath"/> is the caller-supplied new path.
+/// read data and length-checked against <c>SectorCount * SectorSize</c>; the rounded size printed in the tool
+/// log is not trusted. <see cref="FilePath"/> is empty for a streamed SHA-256 read.
 /// </summary>
 public sealed record EdlReadEvidence(
     EdlGeometry Geometry,
@@ -58,6 +58,9 @@ public sealed record EdlReadEvidence(
 /// SHA-256 immediately before running the command, so this record is a claim to verify, not authority.
 /// </summary>
 public sealed record VerifiedEdlFile(string Path, long Length, string Sha256);
+
+/// <summary>A gzip file prevalidated against the signed expanded image length and digest.</summary>
+internal sealed record VerifiedGzipEdlImage(VerifiedEdlFile Compressed, long Length, string Sha256);
 
 /// <summary>
 /// Evidence of one acknowledged sector write. <see cref="Length"/> and <see cref="Sha256"/> describe the
@@ -152,6 +155,10 @@ public sealed class EdlClient
 
     private static readonly Regex ReadSuccessBytesRegex =
         new(@"Successfully read and wrote (?<bytes>\d+) bytes in", RegexOptions.CultureInvariant);
+
+    private static readonly Regex SectorReadSha256Regex = new(
+        @"^(?:\d{2}:\d{2}:\d{2}\.\d{3} )?\[INFO\]\s+Sector read SHA-256: (?<bytes>[0-9]+) bytes, (?<sha256>[A-Fa-f0-9]{64})$",
+        RegexOptions.CultureInvariant);
 
     private static readonly Regex WritingRegex =
         new(
@@ -574,14 +581,34 @@ public sealed class EdlClient
     /// observer and optional prefixed raw logs. A progress report never replaces the read ACK, the readback
     /// length or the SHA-256.
     /// </summary>
-    public async Task<EdlReadEvidence> ReadAsync(
+    public Task<EdlReadEvidence> ReadAsync(
         int lun,
         long startSector,
         long sectorCount,
         string newOutputPath,
         IProgress<EdlTransferProgress>? progress,
         string? logPrefix,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ReadCoreAsync(lun, startSector, sectorCount, newOutputPath, false, progress, logPrefix, cancellationToken);
+
+    internal Task<EdlReadEvidence> ReadSha256Async(
+        int lun,
+        long startSector,
+        long sectorCount,
+        IProgress<EdlTransferProgress>? progress,
+        string? logPrefix,
+        CancellationToken cancellationToken = default) =>
+        ReadCoreAsync(lun, startSector, sectorCount, string.Empty, true, progress, logPrefix, cancellationToken);
+
+    private async Task<EdlReadEvidence> ReadCoreAsync(
+        int lun,
+        long startSector,
+        long sectorCount,
+        string newOutputPath,
+        bool hashOnly,
+        IProgress<EdlTransferProgress>? progress,
+        string? logPrefix,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -612,22 +639,25 @@ public sealed class EdlClient
             throw new InvalidOperationException("The read byte count must be positive.");
         }
 
-        if (string.IsNullOrWhiteSpace(newOutputPath))
+        if (!hashOnly)
         {
-            throw new ArgumentException("A non-blank new output path is required.", nameof(newOutputPath));
-        }
+            if (string.IsNullOrWhiteSpace(newOutputPath))
+            {
+                throw new ArgumentException("A non-blank new output path is required.", nameof(newOutputPath));
+            }
 
-        if (File.Exists(newOutputPath) || Directory.Exists(newOutputPath))
-        {
-            throw new IOException(
-                $"The read output path '{newOutputPath}' already exists; an overwrite is not allowed.");
-        }
+            if (File.Exists(newOutputPath) || Directory.Exists(newOutputPath))
+            {
+                throw new IOException(
+                    $"The read output path '{newOutputPath}' already exists; an overwrite is not allowed.");
+            }
 
-        string? parent = Path.GetDirectoryName(newOutputPath);
-        if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
-        {
-            throw new IOException(
-                $"The read output path '{newOutputPath}' requires an existing explicit parent directory.");
+            string? parent = Path.GetDirectoryName(newOutputPath);
+            if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+            {
+                throw new IOException(
+                    $"The read output path '{newOutputPath}' requires an existing explicit parent directory.");
+            }
         }
 
         string expectedSerial = EnsureCurrentEndpointIdentity();
@@ -642,15 +672,12 @@ public sealed class EdlClient
         Action<ProcessOutputLine>? observer =
             observation is null ? (Action<ProcessOutputLine>?)null : observation.Observe;
 
+        string[] arguments = hashOnly
+            ? BuildArguments("read-sector", Invariant(startSector), Invariant(sectorCount), "-", "--lun", Invariant(lun), "--sha256-only")
+            : BuildArguments("read-sector", Invariant(startSector), Invariant(sectorCount), newOutputPath, "--lun", Invariant(lun));
         ProcessCommand command = new(
             Toolchain.ClientPath,
-            BuildArguments(
-                "read-sector",
-                Invariant(startSector),
-                Invariant(sectorCount),
-                newOutputPath,
-                "--lun",
-                Invariant(lun)),
+            arguments,
             ByteDependentTimeout(byteCount, ReadTimeout))
         {
             OutputReceived = observer,
@@ -671,6 +698,15 @@ public sealed class EdlClient
         ThrowIfHardError(lines);
         ReadSelectedBusSerial(lines, expectedSerial);
 
+        if (hashOnly)
+        {
+            lines = lines.Where(line => !line.Contains("DEVPRG LOG", StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (lines.Count(line => PreparingReadRegex.IsMatch(line)) != 1)
+            {
+                throw new InvalidOperationException("The SHA-256 read did not report exactly one sector range.");
+            }
+        }
+
         if (!Contains(lines, "Read command ACKed, raw mode enabled."))
         {
             throw new InvalidOperationException("The read did not report the initial read acknowledgement.");
@@ -686,18 +722,25 @@ public sealed class EdlClient
 
         observation?.ReportPhase(EdlTransferPhase.CheckingOutput, 0);
 
-        EdlReadEvidence evidence = VerifyReadFile(
-            geometry,
-            startSector,
-            sectorCount,
-            byteCount,
-            newOutputPath,
-            result);
+        EdlReadEvidence evidence = hashOnly
+            ? new(geometry, startSector, sectorCount, string.Empty, byteCount, ReadSectorSha256(lines, byteCount), result)
+            : VerifyReadFile(geometry, startSector, sectorCount, byteCount, newOutputPath, result);
 
-        // The end of the output phase is only reported once the real file length and SHA-256 exist.
+        // The end of the output phase is only reported once the readback length and SHA-256 exist.
         observation?.ReportPhase(EdlTransferPhase.CheckingOutput, byteCount);
 
         return evidence;
+    }
+
+    private static string ReadSectorSha256(string[] lines, long expectedBytes)
+    {
+        Match[] matches = lines.Select(line => SectorReadSha256Regex.Match(line)).Where(match => match.Success).ToArray();
+        if (matches.Length != 1 || !MatchNumber(matches[0], "bytes", expectedBytes))
+        {
+            throw new InvalidOperationException("The SHA-256 read did not report one digest for the requested byte count.");
+        }
+
+        return matches[0].Groups["sha256"].Value.ToUpperInvariant();
     }
 
     /// <summary>
@@ -726,13 +769,35 @@ public sealed class EdlClient
     /// the same argv, timeout, acknowledged program operation and held source handle, plus an optional live
     /// observer and optional prefixed raw logs. A progress report never becomes write success.
     /// </summary>
-    public async Task<EdlWriteEvidence> WriteAsync(
+    public Task<EdlWriteEvidence> WriteAsync(
         int lun,
         long startSector,
         VerifiedEdlFile file,
         IProgress<EdlTransferProgress>? progress,
         string? logPrefix,
+        CancellationToken cancellationToken = default) =>
+        WriteCoreAsync(lun, startSector, file, null, progress, logPrefix, cancellationToken);
+
+    internal Task<EdlWriteEvidence> WriteGzipAsync(
+        int lun,
+        long startSector,
+        VerifiedGzipEdlImage image,
+        IProgress<EdlTransferProgress>? progress,
+        string? logPrefix,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        return WriteCoreAsync(lun, startSector, image.Compressed, image, progress, logPrefix, cancellationToken);
+    }
+
+    private async Task<EdlWriteEvidence> WriteCoreAsync(
+        int lun,
+        long startSector,
+        VerifiedEdlFile file,
+        VerifiedGzipEdlImage? gzip,
+        IProgress<EdlTransferProgress>? progress,
+        string? logPrefix,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -747,12 +812,14 @@ public sealed class EdlClient
             throw new ArgumentException("A non-blank verified file path is required.", nameof(file));
         }
 
-        if (file.Length <= 0)
+        long byteCount = gzip?.Length ?? file.Length;
+        string sha256 = gzip?.Sha256 ?? file.Sha256;
+        if (file.Length <= 0 || byteCount <= 0)
         {
             throw new InvalidOperationException("The verified file length must be positive.");
         }
 
-        if (!IsSha256Hex(file.Sha256))
+        if (!IsSha256Hex(file.Sha256) || !IsSha256Hex(sha256))
         {
             throw new InvalidOperationException("The verified file SHA-256 must be 64 hexadecimal characters.");
         }
@@ -762,14 +829,14 @@ public sealed class EdlClient
             throw new InvalidOperationException("The write start sector must not be negative.");
         }
 
-        if (file.Length % geometry.SectorSize != 0)
+        if (byteCount % geometry.SectorSize != 0)
         {
             throw new InvalidOperationException(
-                $"The verified file length {file.Length} is not a multiple of LUN {lun}'s sector size " +
+                $"The verified file length {byteCount} is not a multiple of LUN {lun}'s sector size " +
                 $"{geometry.SectorSize}.");
         }
 
-        long sectorCount = file.Length / geometry.SectorSize;
+        long sectorCount = byteCount / geometry.SectorSize;
         long endSector = CheckedAdd(startSector, sectorCount, "The write sector range overflows.");
         if (endSector > geometry.TotalSectors)
         {
@@ -783,7 +850,7 @@ public sealed class EdlClient
         // as an ordinary pre-invocation failure that never clears the session proof.
         using EdlOperationObservation? observation = EdlOperationObservation.Start(
             EdlTransferDirection.Write,
-            file.Length,
+            byteCount,
             progress,
             logPrefix);
 
@@ -792,21 +859,20 @@ public sealed class EdlClient
         using FileStream source = new(file.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
 
         observation?.ReportPhase(EdlTransferPhase.CheckingInput, 0);
-        VerifySourceLengthAndHash(source, file);
-        observation?.ReportPhase(EdlTransferPhase.CheckingInput, file.Length);
+        VerifySourceLengthAndHash(source, file, cancellationToken);
+        observation?.ReportPhase(EdlTransferPhase.CheckingInput, byteCount);
 
         Action<ProcessOutputLine>? observer =
             observation is null ? (Action<ProcessOutputLine>?)null : observation.Observe;
 
+        string[] arguments = gzip is null
+            ? BuildArguments("write-sector", Invariant(startSector), file.Path, "--lun", Invariant(lun))
+            : BuildArguments("write-sector", Invariant(startSector), file.Path, "--lun", Invariant(lun),
+                "--gzip-expanded-bytes", Invariant(byteCount), "--gzip-compressed-sha256", file.Sha256);
         ProcessCommand command = new(
             Toolchain.ClientPath,
-            BuildArguments(
-                "write-sector",
-                Invariant(startSector),
-                file.Path,
-                "--lun",
-                Invariant(lun)),
-            ByteDependentTimeout(file.Length, WriteTimeout))
+            arguments,
+            ByteDependentTimeout(byteCount, WriteTimeout))
         {
             OutputReceived = observer,
         };
@@ -823,7 +889,7 @@ public sealed class EdlClient
             // Inside the same guard as the invocation: a log failure after the command started is still an
             // unknown outcome and still clears the session proof.
             observation?.Complete(result);
-            ValidateWriteResult(result, lun, startSector, sectorCount, file.Length, expectedSerial);
+            ValidateWriteResult(result, lun, startSector, sectorCount, byteCount, expectedSerial);
         }
         catch (Exception exception)
         {
@@ -838,8 +904,8 @@ public sealed class EdlClient
             geometry,
             startSector,
             sectorCount,
-            file.Length,
-            file.Sha256.ToUpperInvariant(),
+            byteCount,
+            sha256.ToUpperInvariant(),
             result);
     }
 
@@ -1953,7 +2019,7 @@ public sealed class EdlClient
 
     // ------------------------------------------------------------------ write/reset helpers
 
-    private static void VerifySourceLengthAndHash(FileStream source, VerifiedEdlFile file)
+    private static void VerifySourceLengthAndHash(FileStream source, VerifiedEdlFile file, CancellationToken cancellationToken)
     {
         if (source.Length != file.Length)
         {
@@ -1961,7 +2027,7 @@ public sealed class EdlClient
                 $"The verified file '{file.Path}' is {source.Length} bytes, but the claim says {file.Length}.");
         }
 
-        string actual = Sha256Text.HexOfStream(source).ToUpperInvariant();
+        string actual = Sha256Text.HexOfStream(source, cancellationToken).ToUpperInvariant();
         if (!string.Equals(actual, file.Sha256, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(

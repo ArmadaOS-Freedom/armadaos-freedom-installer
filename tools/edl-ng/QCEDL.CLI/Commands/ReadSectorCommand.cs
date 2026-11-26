@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using QCEDL.CLI.Core;
 using QCEDL.CLI.Helpers;
 
@@ -10,6 +11,14 @@ internal sealed class ReadSectorCommand
     private static readonly Argument<ulong> StartSectorArgument = new("start_sector", "The starting sector LBA to read from.");
     private static readonly Argument<ulong> SectorsArgument = new("sectors", "The number of sectors to read.");
     private static readonly Argument<FileInfo> FilenameArgument = new("filename", "The file to save the read data to.") { Arity = ArgumentArity.ExactlyOne };
+
+    private static readonly Argument<string> ReadSectorDestinationArgument = new("filename", "The output filename, or '-' with --sha256-only.")
+    {
+        Arity = ArgumentArity.ExactlyOne
+    };
+
+    private static readonly Option<bool> Sha256OnlyOption = new(
+        "--sha256-only", "Compute SHA-256 from the readback without creating an output file.");
 
     private static readonly Option<uint> LunOption = new(
         aliases: ["--lun", "-u"],
@@ -22,16 +31,22 @@ internal sealed class ReadSectorCommand
         {
             StartSectorArgument,
             SectorsArgument,
-            FilenameArgument,
-            LunOption // Command-specific LUN
+            ReadSectorDestinationArgument,
+            LunOption,
+            Sha256OnlyOption
         };
 
-        command.SetHandler(ExecuteAsync,
-            globalOptionsBinder,
-            StartSectorArgument,
-            SectorsArgument,
-            FilenameArgument,
-            LunOption);
+        command.SetHandler(async context =>
+        {
+            var parsed = context.ParseResult;
+            context.ExitCode = await ExecuteAsync(
+                globalOptionsBinder.Bind(context.BindingContext),
+                parsed.GetValueForArgument(StartSectorArgument),
+                parsed.GetValueForArgument(SectorsArgument),
+                parsed.GetValueForArgument(ReadSectorDestinationArgument),
+                parsed.GetValueForOption(LunOption),
+                parsed.GetValueForOption(Sha256OnlyOption));
+        });
 
         return command;
     }
@@ -56,10 +71,18 @@ internal sealed class ReadSectorCommand
         GlobalOptionsBinder globalOptions,
         ulong startSector,
         ulong sectorsToRead,
-        FileInfo outputFile,
-        uint lun)
+        string destination,
+        uint lun,
+        bool sha256Only)
     {
-        Logging.Log($"Executing 'read-sector' command: LUN {lun}, Start LBA {startSector}, Sectors {sectorsToRead}, File '{outputFile.FullName}'...", LogLevel.Trace);
+        if (sha256Only && destination != "-")
+        {
+            Logging.Log("Error: --sha256-only requires '-' as the output filename.", LogLevel.Error);
+            return 1;
+        }
+
+        var outputFile = sha256Only ? null : new FileInfo(destination);
+        Logging.Log($"Executing 'read-sector' command: LUN {lun}, Start LBA {startSector}, Sectors {sectorsToRead}, Destination '{outputFile?.FullName ?? "SHA-256"}'...", LogLevel.Trace);
 
         return await ExecuteReadSectorsAsync(globalOptions, startSector, sectorsToRead, outputFile, lun, "read-sector");
     }
@@ -79,7 +102,7 @@ internal sealed class ReadSectorCommand
         GlobalOptionsBinder globalOptions,
         ulong startSector,
         ulong sectorsToRead,
-        FileInfo outputFile,
+        FileInfo? outputFile,
         uint lun,
         string commandName,
         bool readEntireLun = false)
@@ -106,6 +129,11 @@ internal sealed class ReadSectorCommand
             var effectiveLun = lun;
             if (manager.IsDirectMode && lun != 0)
             {
+                if (outputFile is null)
+                {
+                    throw new InvalidOperationException("SHA-256 readback only supports LUN 0 in direct mode.");
+                }
+
                 Logging.Log("Warning: LUN parameter is ignored in direct mode.", LogLevel.Warning);
                 effectiveLun = 0;
             }
@@ -165,15 +193,38 @@ internal sealed class ReadSectorCommand
             if (totalBytesDecimal <= 0)
             {
                 Logging.Log($"Warning: Calculated total bytes to read is {totalBytesDecimal}. Nothing to read.", LogLevel.Warning);
-                await File.WriteAllBytesAsync(outputFile.FullName, []);
+                if (outputFile is not null)
+                {
+                    await File.WriteAllBytesAsync(outputFile.FullName, []);
+                }
+
                 return 0;
             }
 
             var totalBytesToRead = totalBytesDecimal > long.MaxValue ? long.MaxValue : (long)totalBytesDecimal;
-            Logging.Log($"Preparing to read {sectorsToRead} sectors (LBA {startSector} to {endSector}, {totalBytesDecimal} bytes) from {targetDescription} into '{outputFile.FullName}'...");
+            Logging.Log($"Preparing to read {sectorsToRead} sectors (LBA {startSector} to {endSector}, {totalBytesDecimal} bytes) from {targetDescription} into '{outputFile?.FullName ?? "SHA-256"}'...");
 
             var readStopwatch = new Stopwatch();
             var progress = new ProgressReporter(readStopwatch, "Reading");
+
+            if (outputFile is null)
+            {
+                if (totalBytesDecimal > long.MaxValue)
+                {
+                    throw new InvalidOperationException("The readback byte count exceeds supported bounds.");
+                }
+
+                using var hashStream = new ReadbackHashStream(totalBytesToRead);
+
+                readStopwatch.Start();
+                await manager.ReadSectorsToStreamAsync(
+                    effectiveLun, startSector, sectorsToRead, hashStream, progress.Report);
+                readStopwatch.Stop();
+                Console.WriteLine();
+
+                Logging.Log($"Sector read SHA-256: {hashStream.Length} bytes, {hashStream.Finish()}");
+                return 0;
+            }
 
             try
             {
@@ -209,5 +260,73 @@ internal sealed class ReadSectorCommand
 
             return 0;
         });
+    }
+
+    private sealed class ReadbackHashStream(long expectedBytes) : Stream
+    {
+        private readonly IncrementalHash _sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        private long _length;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _length;
+        public override long Position
+        {
+            get => _length;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            Write(buffer.AsSpan(offset, count));
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.Length > expectedBytes - _length)
+            {
+                throw new InvalidDataException("The streamed readback exceeded the requested byte count.");
+            }
+
+            _sha256.AppendData(buffer);
+            _length += buffer.Length;
+        }
+
+        internal string Finish()
+        {
+            return _length == expectedBytes
+                ? Convert.ToHexString(_sha256.GetHashAndReset())
+                : throw new InvalidDataException($"The streamed readback contained {_length} bytes, expected {expectedBytes}.");
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override void SetLength(long value)
+        {
+            throw new NotSupportedException();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _sha256.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
     }
 }

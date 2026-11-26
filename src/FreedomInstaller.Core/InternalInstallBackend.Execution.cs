@@ -1049,8 +1049,8 @@ public sealed partial class InternalInstallBackend
 
     /// <summary>
     /// The one raw-write path of the initial EDL phase: validate the fixed region, persist the intent, mark the
-    /// run Unknown, write exactly once, keep the acknowledged write pending, read the same range into a new
-    /// evidence file, prove that file's own length and whole-stream SHA-256, and only then verify the readback.
+    /// run Unknown, write exactly once and verify the complete physical readback. The Linux image readbacks
+    /// are hashed as they arrive; the other regions still preserve their recovery evidence files.
     /// Any failure after the intent poisons the run through <see cref="ExecutionRun.Interrupt"/> and is
     /// re-thrown; no retry, reset or replay exists here.
     /// </summary>
@@ -1062,14 +1062,24 @@ public sealed partial class InternalInstallBackend
         InternalArtifactRegion region,
         bool mayEraseAndroid,
         IProgress<InternalInstallProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        VerifiedGzipEdlImage? gzipImage = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(region);
 
         RequireRegionAgainstGeometry(region);
+        if (gzipImage is not null
+            && (stage != InternalInstallStage.WritingLinuxRoot
+                || gzipImage.Length != region.Length
+                || !SameSha256(gzipImage.Sha256, region.Sha256)
+                || !SameEvidencePath(gzipImage.Compressed.Path, region.FilePath)))
+        {
+            throw new InvalidOperationException("The verified gzip image does not match the planned Linux root region.");
+        }
 
+        bool hashOnlyReadback = stage is InternalInstallStage.WritingLinuxBoot or InternalInstallStage.WritingLinuxRoot;
         string token = ReceiptToken(stage, slot, region.Role);
 
         WriteExecutionReceipt(
@@ -1081,8 +1091,6 @@ public sealed partial class InternalInstallBackend
             acceptedAck: false,
             readbackPath: null,
             observedSha256: null);
-
-        var payload = new VerifiedEdlFile(region.FilePath, region.Length, region.Sha256);
 
         ExecutionEdlProgress? transferProgress = progress is null
             ? null
@@ -1136,15 +1144,14 @@ public sealed partial class InternalInstallBackend
                 completedBytes: 0,
                 totalBytes: region.Length);
 
-            EdlWriteEvidence acknowledgement = await client
-                .WriteAsync(
-                    region.Lun,
-                    region.StartSector,
-                    payload,
-                    transferProgress,
-                    writeLogPrefix,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            EdlWriteEvidence acknowledgement = gzipImage is null
+                ? await client.WriteAsync(
+                    region.Lun, region.StartSector,
+                    new VerifiedEdlFile(region.FilePath, region.Length, region.Sha256),
+                    transferProgress, writeLogPrefix, cancellationToken).ConfigureAwait(false)
+                : await client.WriteGzipAsync(
+                    region.Lun, region.StartSector, gzipImage,
+                    transferProgress, writeLogPrefix, cancellationToken).ConfigureAwait(false);
 
             RequireWriteAcknowledgement(acknowledgement, region);
 
@@ -1158,22 +1165,30 @@ public sealed partial class InternalInstallBackend
                 readbackPath: null,
                 observedSha256: null);
 
-            string readbackPath = NewExecutionEvidencePath(token + ".readback", ".bin");
+            string? readbackPath = null;
+            string observedSha256;
+            if (hashOnlyReadback)
+            {
+                var readback = await client.ReadSha256Async(
+                    region.Lun, region.StartSector, region.SectorCount,
+                    transferProgress, readbackLogPrefix, cancellationToken).ConfigureAwait(false);
+                if (!ReadbackMatchesRegion(readback, region))
+                {
+                    throw new InvalidOperationException(
+                        "The streamed readback does not match the requested region's geometry, range, length or SHA-256.");
+                }
 
-            EdlReadEvidence readback = await client
-                .ReadAsync(
-                    region.Lun,
-                    region.StartSector,
-                    region.SectorCount,
-                    readbackPath,
-                    transferProgress,
-                    readbackLogPrefix,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            string observedSha256 = await RequireReadbackAsync(
-                    readback, region, readbackPath, cancellationToken)
-                .ConfigureAwait(false);
+                observedSha256 = readback.Sha256;
+            }
+            else
+            {
+                readbackPath = NewExecutionEvidencePath(token + ".readback", ".bin");
+                var readback = await client.ReadAsync(
+                    region.Lun, region.StartSector, region.SectorCount, readbackPath,
+                    transferProgress, readbackLogPrefix, cancellationToken).ConfigureAwait(false);
+                observedSha256 = await RequireReadbackAsync(
+                    readback, region, readbackPath, cancellationToken).ConfigureAwait(false);
+            }
 
             // The physical readback is already proven at this point; record it before the receipt file, so a
             // receipt-only failure cannot falsely report the write outcome as Unknown.
@@ -1566,21 +1581,23 @@ public sealed partial class InternalInstallBackend
         }
     }
 
+    private static bool ReadbackMatchesRegion(EdlReadEvidence evidence, InternalArtifactRegion region) =>
+        evidence is not null
+        && evidence.Geometry is not null
+        && evidence.Geometry.Lun == region.Lun
+        && evidence.Geometry.SectorSize == region.SectorSize
+        && evidence.StartSector == region.StartSector
+        && evidence.SectorCount == region.SectorCount
+        && evidence.Length == region.Length
+        && SameSha256(evidence.Sha256, region.Sha256);
+
     private static async Task<string> RequireReadbackAsync(
         EdlReadEvidence evidence,
         InternalArtifactRegion region,
         string readbackPath,
         CancellationToken cancellationToken)
     {
-        if (evidence is null
-            || evidence.Geometry is null
-            || evidence.Geometry.Lun != region.Lun
-            || evidence.Geometry.SectorSize != region.SectorSize
-            || evidence.StartSector != region.StartSector
-            || evidence.SectorCount != region.SectorCount
-            || evidence.Length != region.Length
-            || !SameSha256(evidence.Sha256, region.Sha256)
-            || !SameEvidencePath(evidence.FilePath, readbackPath))
+        if (!ReadbackMatchesRegion(evidence, region) || !SameEvidencePath(evidence.FilePath, readbackPath))
         {
             throw new InvalidOperationException(
                 "The readback does not match the requested region's geometry, range, length, file or SHA-256.");
@@ -1727,8 +1744,10 @@ public sealed partial class InternalInstallBackend
                 length = region.Length,
                 sha256 = region.Sha256,
                 path = region.FilePath,
+                sourceCompression = stage == InternalInstallStage.WritingLinuxRoot ? "gzip" : null,
                 acceptedAck,
                 readbackPath,
+                readbackMode = phase != "verified" ? null : (readbackPath is null ? "sha256-stream" : "file"),
                 observedSha256,
             });
     }

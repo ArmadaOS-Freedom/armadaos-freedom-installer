@@ -94,8 +94,9 @@ public sealed partial class InternalInstallBackend
         InternalArtifactRegion linuxBoot = CreateDirectRawWriteRegion(
             _context.LinuxBoot, lun0, _context.Package.LinuxBootRaw, "linux_boot");
 
-        InternalArtifactRegion linuxRoot = CreateDirectRawWriteRegion(
-            _context.LinuxRoot, lun0, _context.Package.LinuxRootRaw, "linux_root");
+        VerifiedGzipEdlImage rootImage = _context.Package.LinuxRootImage;
+        InternalArtifactRegion linuxRoot = CreateDirectWriteRegion(
+            _context.LinuxRoot, lun0, rootImage.Compressed.Path, rootImage.Length, rootImage.Sha256, "linux_root");
 
         // The route splits on the prepared trust mode, never on caller input: only a GBL-preserving preparation
         // writes the efisp runtime region and no AVB metadata, and only an AOSP-resigned preparation writes AVB
@@ -321,7 +322,8 @@ public sealed partial class InternalInstallBackend
                 linuxRoot,
                 true,
                 progress,
-                ct)
+                ct,
+                rootImage)
             .ConfigureAwait(false);
 
         // On the GBL-preserving route the efisp runtime region is the eighth device write: after the four GPT
@@ -533,9 +535,20 @@ public sealed partial class InternalInstallBackend
         VerifiedEdlFile raw,
         string role)
     {
+        ArgumentNullException.ThrowIfNull(raw);
+        return CreateDirectWriteRegion(target, geometry, raw.Path, raw.Length, raw.Sha256, role);
+    }
+
+    private static InternalArtifactRegion CreateDirectWriteRegion(
+        GptPartition target,
+        EdlGeometry geometry,
+        string sourcePath,
+        long length,
+        string sha256,
+        string role)
+    {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(geometry);
-        ArgumentNullException.ThrowIfNull(raw);
 
         if (string.IsNullOrWhiteSpace(role))
         {
@@ -565,42 +578,42 @@ public sealed partial class InternalInstallBackend
             throw new ArgumentException("The target partition has no usable sector range.", nameof(target));
         }
 
-        if (string.IsNullOrWhiteSpace(raw.Path))
+        if (string.IsNullOrWhiteSpace(sourcePath))
         {
-            throw new ArgumentException("The expanded raw image must have a non-blank path.", nameof(raw));
+            throw new ArgumentException("The expanded raw image must have a non-blank path.", nameof(sourcePath));
         }
 
-        if (raw.Length <= 0)
+        if (length <= 0)
         {
-            throw new ArgumentException("The expanded raw image must not be empty.", nameof(raw));
+            throw new ArgumentException("The expanded raw image must not be empty.", nameof(sourcePath));
         }
 
-        if (!IsSha256Text(raw.Sha256))
+        if (!IsSha256Text(sha256))
         {
             throw new ArgumentException(
-                "The expanded raw image SHA-256 must be 64 hexadecimal characters.", nameof(raw));
+                "The expanded raw image SHA-256 must be 64 hexadecimal characters.", nameof(sourcePath));
         }
 
-        if (raw.Length % sectorSize != 0)
+        if (length % sectorSize != 0)
         {
             throw new ArgumentException(
                 "The expanded raw image length is not a whole number of " + sectorSize + " byte sectors.",
-                nameof(raw));
+                nameof(sourcePath));
         }
 
-        long rawSectors = raw.Length / sectorSize;
+        long rawSectors = length / sectorSize;
 
         if (rawSectors > target.SectorCount)
         {
             throw new ArgumentException(
                 "The expanded raw image spans " + rawSectors + " sectors, more than the target's "
-                + target.SectorCount + ".", nameof(raw));
+                + target.SectorCount + ".", nameof(sourcePath));
         }
 
         long targetEnd = RequireSectorEnd(
             target.StartSector, target.SectorCount, nameof(target), "The target partition");
         long rawEnd = RequireSectorEnd(
-            target.StartSector, rawSectors, nameof(raw), "The expanded raw image");
+            target.StartSector, rawSectors, nameof(sourcePath), "The expanded raw image");
 
         if (targetEnd > geometry.TotalSectors)
         {
@@ -613,7 +626,7 @@ public sealed partial class InternalInstallBackend
         {
             throw new ArgumentException(
                 "The expanded raw image ends at sector " + rawEnd + ", beyond LUN 0's "
-                + geometry.TotalSectors + " sectors.", nameof(raw));
+                + geometry.TotalSectors + " sectors.", nameof(sourcePath));
         }
 
         return new InternalArtifactRegion(
@@ -622,9 +635,9 @@ public sealed partial class InternalInstallBackend
             target.StartSector,
             rawSectors,
             sectorSize,
-            raw.Path,
-            raw.Length,
-            raw.Sha256);
+            sourcePath,
+            length,
+            sha256);
     }
 
     /// <summary>
