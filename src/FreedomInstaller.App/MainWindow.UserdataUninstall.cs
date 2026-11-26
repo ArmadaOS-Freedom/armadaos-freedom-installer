@@ -72,8 +72,6 @@ public partial class MainWindow
     /// <summary>本次卸载准备操作是否进行中；与维护同名字段同构，只参与保护判定。</summary>
     private bool _userdataUninstallOperationActive;
 
-    /// <summary>最近一次真实准备失败的原始诊断；成功或作废时清空。</summary>
-
     /// <summary>卸载模式判断。</summary>
     private bool IsModernUserdataUninstallMode =>
         string.Equals(CurrentModeTag(), "uninstall", StringComparison.Ordinal);
@@ -163,7 +161,6 @@ public partial class MainWindow
         {
             BootMaintenanceRiskCheck.IsChecked = false;
         }
-
 
         // 未完成（受保护检查已证明无未解决现场）时：清掉真实执行标记，
         // 让真实预检失败可以返回、重新准备并执行一次新的真实后端；复位痕迹在仍有会话时保留。
@@ -279,6 +276,7 @@ public partial class MainWindow
             }
             if (string.IsNullOrWhiteSpace(workParent)) return;
         }
+        ClearDiagnosticFailure();
         // 先作废上一次未写入的只读准备；再写入推导出的真实工作父目录（路径不同才写）。
         InvalidateModernUserdataUninstallPreparation();
         if (!string.Equals(_internalInstallBackupParent, workParent, StringComparison.Ordinal))
@@ -338,7 +336,6 @@ public partial class MainWindow
         {
             await RunBusyAsync(async token =>
             {
-                ClearDiagnosticFailure();
                 UninstallOriginalGptBackup? original = null;
                 CurrentBootSlotFacts? facts = null;
                 EdlRawBootTools? actualTools = null;
