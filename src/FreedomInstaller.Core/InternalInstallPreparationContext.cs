@@ -1027,6 +1027,52 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 ? new[] { "a", "b" }
                 : SlotOrder;
 
+            // The ABL that will actually load a slot's boot: a GBL replacement, the pinned AOSP-capable loader a
+            // direct proof writes over a slot whose live ABL is not AOSP-keyed (TB710FU 279), or the live one. The
+            // loader budget and the built-source check both follow it.
+            VerifiedEdlFile EffectiveSourceAbl(string source) =>
+                gblInputs?.Sources.TryGetValue(source, out var gblSource) == true && gblSource.Replaced
+                    ? gblSource.EffectiveAbl
+                    : directAblProof?.Replacements.TryGetValue("abl_" + source, out VerifiedEdlFile? directAbl) == true
+                        ? directAbl!
+                        : Claim(backupFacts.Files, "abl_" + source);
+
+            // Lenovo OTAs often update one slot only. When both targets are built from their own slots, each
+            // slot's loaders are measured first, so a slot whose ABL/xbl_config no list knows can take the
+            // identified loader budget of the other slot (see InternalSlotMaterialReader).
+            Dictionary<string, InternalSlotLoaderBudget> identifiedSlotBudgets = new(StringComparer.Ordinal);
+            if (string.Equals(sourceSlots["a"], "a", StringComparison.Ordinal)
+                && string.Equals(sourceSlots["b"], "b", StringComparison.Ordinal))
+            {
+                foreach (string slot in SlotOrder)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    InternalSlotMaterial measured;
+                    try
+                    {
+                        measured = await InternalSlotMaterialReader.AnalyzeAsync(
+                            slot,
+                            Claim(backupFacts.Files, "boot_" + slot),
+                            Claim(backupFacts.Files, "vendor_boot_" + slot),
+                            Claim(backupFacts.Files, "init_boot_" + slot),
+                            EffectiveSourceAbl(slot),
+                            Claim(backupFacts.Files, "xbl_config_" + slot),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (InvalidDataException)
+                    {
+                        // Not a measurable slot on its own (the build decides it with its own inputs); it simply
+                        // lends nothing.
+                        continue;
+                    }
+
+                    if (measured.LoaderBudget.KnownLoaderMatch)
+                    {
+                        identifiedSlotBudgets[slot] = measured.LoaderBudget;
+                    }
+                }
+            }
+
             foreach (string slot in buildSlotOrder)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1054,16 +1100,9 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
                 try
                 {
-                    // The ABL that will actually load this slot's boot: a GBL replacement, the pinned AOSP-capable
-                    // loader a direct proof writes over a slot whose live ABL is not AOSP-keyed (TB710FU 279), or the
-                    // live one. The loader budget and the built-source check both follow it, so a pre-OTA ABL left
-                    // on the other slot no longer decides the window of a loader that is about to be replaced.
-                    VerifiedEdlFile effectiveSourceAbl = gblInputs?.Sources.TryGetValue(sourceSlot, out var gblSource) == true
-                        && gblSource.Replaced
-                        ? gblSource.EffectiveAbl
-                        : directAblProof?.Replacements.TryGetValue("abl_" + sourceSlot, out VerifiedEdlFile? directAbl) == true
-                            ? directAbl!
-                            : Claim(backupFacts.Files, "abl_" + sourceSlot);
+                    VerifiedEdlFile effectiveSourceAbl = EffectiveSourceAbl(sourceSlot);
+                    string peerSlot = slot == "a" ? "b" : "a";
+                    identifiedSlotBudgets.TryGetValue(peerSlot, out InternalSlotLoaderBudget? peerBudget);
 
                     EdlRawBuiltBoot built = await EdlRawBootBuilder
                         .BuildAsync(
@@ -1080,6 +1119,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                                 inactiveTarget)
                             {
                                 ReinstallRecoveryBoot = recoveryBoot,
+                                PeerSlotLoaderBudget = sourceSlot == slot ? peerBudget : null,
+                                PeerSlot = sourceSlot == slot && peerBudget is not null ? peerSlot : null,
                             },
                             services.CommandRunner,
                             cancellationToken)

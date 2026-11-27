@@ -1518,266 +1518,97 @@ public sealed class InternalSlotMaterialReaderTests
         Assert.False(InvokeBudget(ablSha, 1048576, KnownXblSha, 245760, 4096, 0, 10633132, 0, 3).KnownLoaderMatch);
     }
 
-    // ------------------------------------------- TB710FU: budget from the pinned 279 ABL
+    // ------------------------------------------- a slot an OTA left behind borrows the other slot
 
-    // The pinned CN 279 loader (PinnedAospAbl.Tb710fu) and the whole abl_b partition of an OTA-updated stock 495
-    // tablet: its pre-OTA Lenovo-keyed loader, which a locked install replaces with the 279 one.
-    private const string Tb710fu279AblSha =
-        "6cfa16e65c2dadd0fc557dd356e6c383c693b4c3b7f0a651d92bb9f6e38b74a8";
+    // The whole abl_b partition of an OTA-updated stock TB710FU ZUXOS 1.5.04.495 tablet (pre-OTA loader).
     private const string Tb710fuPreOtaAblSha =
         "dcb879bbfde77519b131b87ab5d09c903a0d785cff70127d792244aa88b35ccb";
-    private const string Tb710fuPinnedAblProfile = "tb710fu-abl279-xbl-config-kernel-region-derived";
+    private const string PeerSlotProfile = "peer-slot-loader-derived";
 
-    [Fact]
-    public void Tb710fu_pinned_279_abl_gets_the_window_budget_from_any_xbl_config_with_the_kernel_region()
+    private static InternalSlotLoaderBudget IdentifiedTb710fuSlotA() => InvokeBudget(
+        "1cdc214a8f5cbd24878ccba205cf71c61be998696181d0933e3500113f326d72", 1048576,
+        "ee165befc3fcac316f9c2ea0cd609207774ae5351af554a8706da29a7c90c0a4", 245760,
+        4096, 0, 10633132, 0, 3);
+
+    private static Task<InternalSlotMaterial> ResolveWithPeerAsync(
+        WorkDir work,
+        byte[] kernel,
+        string slot,
+        InternalSlotLoaderBudget? peerBudget,
+        string? peerSlot,
+        byte[]? vendor = null)
     {
-        // An xbl_config build no hash list knows (the pre-OTA one an OTA leaves on the other slot) still gets the
-        // window budget once the ABL is the pinned 279 loader and the Kernel region is the reviewed one.
-        byte[] xbl = BuildKernelRegionXbl(0xA8000000UL, 0x10000000UL);
-        InternalSlotLoaderBudget? budget = InvokeTb710fuPinnedBudget(
-            Tb710fu279AblSha, 1048576, xbl, 4096, 10633132);
-
-        Assert.NotNull(budget);
-        Assert.True(budget!.KnownLoaderMatch);
-        Assert.Equal(Tb710fuPinnedAblProfile, budget.Profile);
-        Assert.Equal(268435456L - 524288 - 10633216 - 8192 - 2097152, budget.MaxRawBytes);
-
-        // The reader's hashes are lower case, the pinned constant upper case: both spell the same loader.
-        Assert.NotNull(InvokeTb710fuPinnedBudget(
-            Tb710fu279AblSha.ToUpperInvariant(), 1048576, xbl, 4096, 10633132));
+        byte[] currentBytes = MakeBoot(
+            kernel: kernel, ramdisk: BootRamdisk, signature: Repeat((byte)'S', 21));
+        byte[] vendorBytes = vendor ?? MakeVendor(ramdisk: VendorRamdisk);
+        byte[] initBytes = MakeBoot(
+            kernel: Array.Empty<byte>(), ramdisk: Array.Empty<byte>(), signature: Ascii("initsig"));
+        return InternalSlotMaterialReader.AnalyzeAndExportBaseAsync(
+            slot,
+            work.Claim("current.img", currentBytes),
+            work.Claim("vendor.img", vendorBytes),
+            work.Claim("init.img", initBytes),
+            work.Claim("abl.bin", Ascii("abl-left-by-a-one-slot-ota")),
+            work.Claim("xbl.bin", Ascii("xbl-config-left-by-a-one-slot-ota")),
+            Path.Combine(work.Dir, "base-" + Guid.NewGuid().ToString("N") + ".img"),
+            peerBudget,
+            peerSlot,
+            CancellationToken.None);
     }
 
     [Fact]
-    public void Tb710fu_pinned_budget_needs_the_pinned_abl_page_and_exact_kernel_region()
+    public async Task Unidentified_slot_borrows_the_identified_other_slot_with_its_own_ramdisks()
     {
-        byte[] xbl = BuildKernelRegionXbl(0xA8000000UL, 0x10000000UL);
-
-        // The pre-OTA loader itself is not evidence: only the loader that will run decides the window.
-        Assert.Null(InvokeTb710fuPinnedBudget(Tb710fuPreOtaAblSha, 1048576, xbl, 4096, 10633132));
-        // Lenovo's stock 495 ABL keeps its own hash-pinned pair; it never takes this path.
-        Assert.Null(InvokeTb710fuPinnedBudget(
-            "1cdc214a8f5cbd24878ccba205cf71c61be998696181d0933e3500113f326d72", 1048576, xbl, 4096, 10633132));
-        Assert.Null(InvokeTb710fuPinnedBudget(Tb710fu279AblSha, 1048575, xbl, 4096, 10633132));
-        Assert.Null(InvokeTb710fuPinnedBudget(Tb710fu279AblSha, 1048576, xbl, 2048, 10633132));
-
-        // A shrunk Kernel region, the Gen5 region base, or no Kernel node keep the conservative policy.
-        Assert.Null(InvokeTb710fuPinnedBudget(
-            Tb710fu279AblSha, 1048576, BuildKernelRegionXbl(0xA8000000UL, 0x0FFFF000UL), 4096, 10633132));
-        Assert.Null(InvokeTb710fuPinnedBudget(
-            Tb710fu279AblSha, 1048576, BuildKernelRegionXbl(0xC7800000UL, 0x10000000UL), 4096, 10633132));
-        Assert.Null(InvokeTb710fuPinnedBudget(
-            Tb710fu279AblSha, 1048576, Ascii("xbl-config-unknown-bytes"), 4096, 10633132));
-    }
-
-    [Fact]
-    public void Tb710fu_sm8650_kernel_region_matcher_reports_the_node_base()
-    {
-        Assert.True(InternalSlotLoaderStructure.TryMatchSm8650KernelRegion(
-            BuildKernelRegionXbl(0xA8000000UL, 0x10000000UL), CancellationToken.None, out ulong kernelBase));
-        Assert.Equal(0xA8000000UL, kernelBase);
-
-        Assert.True(InternalSlotLoaderStructure.TryMatchSm8650KernelRegion(
-            BuildKernelRegionXbl(0xC7800000UL, 0x10000000UL), CancellationToken.None, out kernelBase));
-        Assert.Equal(0xC7800000UL, kernelBase);
-
-        Assert.False(InternalSlotLoaderStructure.TryMatchSm8650KernelRegion(
-            BuildKernelRegionXbl(0xA8000000UL, 0x0FFFF000UL), CancellationToken.None, out kernelBase));
-        Assert.Equal(0UL, kernelBase);
-        Assert.False(InternalSlotLoaderStructure.TryMatchSm8650KernelRegion(null!, CancellationToken.None, out _));
-
-        // The TB322FC spelling of the label is not the SM8650 one: no Kernel node, no match.
-        Assert.False(InternalSlotLoaderStructure.TryMatchSm8650KernelRegion(
-            BuildKernelRegionXbl(0xA8000000UL, 0x10000000UL, "mem-label"), CancellationToken.None, out _));
-    }
-
-    /// <summary>
-    /// Real TB710FU xbl_config captures (the no-unlock build, stock 495, or a pre-OTA build), all of which must
-    /// carry the reviewed Kernel region. Skipped unless TB710FU_XBL_CONFIG_DIR names a directory of them.
-    /// </summary>
-    [Fact]
-    public void Tb710fu_live_xbl_configs_carry_the_kernel_region()
-    {
-        string? directory = Environment.GetEnvironmentVariable("TB710FU_XBL_CONFIG_DIR");
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            return;
-        }
-
-        string[] files = Directory.GetFiles(Path.GetFullPath(directory), "xbl_config*");
-        Assert.NotEmpty(files);
-        foreach (string file in files)
-        {
-            byte[] xbl = File.ReadAllBytes(file);
-            Assert.True(
-                InternalSlotLoaderStructure.TryMatchSm8650KernelRegion(xbl, CancellationToken.None, out ulong kernelBase),
-                Path.GetFileName(file));
-            Assert.Equal(0xA8000000UL, kernelBase);
-            Assert.NotNull(InvokeTb710fuPinnedBudget(Tb710fu279AblSha, 1048576, xbl, 4096, 10633132));
-        }
-    }
-
-    [Fact]
-    public async Task Tb710fu_reader_budgets_a_slot_carrying_the_pinned_abl_with_an_unlisted_xbl_config()
-    {
-        byte[]? pinned = ReadBundledTb710fuAbl();
-        if (pinned is null)
-        {
-            // The pinned loader is an optional build input (BundledTb710fuAospAbl).
-            return;
-        }
-
         using var work = new WorkDir();
         byte[] kernel = MakeArm64(320);
-        InternalSlotMaterial material = await ResolveAsync(
-            work, kernel, slot: "b", abl: pinned, xbl: BuildKernelRegionXbl(0xA8000000UL, 0x10000000UL));
-        Assert.True(material.LoaderBudget.KnownLoaderMatch);
-        Assert.Equal(Tb710fuPinnedAblProfile, material.LoaderBudget.Profile);
-        Assert.True(material.LoaderBudget.MaxRawBytes > 134217728L);
+        InternalSlotLoaderBudget slotA = IdentifiedTb710fuSlotA();
+        Assert.True(slotA.KnownLoaderMatch);
 
-        // The same xbl_config next to any other ABL stays on the conservative policy.
-        InternalSlotMaterial other = await ResolveAsync(
-            work, kernel, slot: "b", xbl: BuildKernelRegionXbl(0xA8000000UL, 0x10000000UL));
-        Assert.False(other.LoaderBudget.KnownLoaderMatch);
-        Assert.Equal(134217728L, other.LoaderBudget.MaxRawBytes);
+        InternalSlotMaterial material = await ResolveWithPeerAsync(work, kernel, "b", slotA, "a");
+
+        InternalSlotLoaderBudget budget = material.LoaderBudget;
+        Assert.True(budget.KnownLoaderMatch);
+        Assert.Equal(PeerSlotProfile, budget.Profile);
+        long total = material.BootRamdiskSize + material.VendorRamdiskSize + material.InitRamdiskSize;
+        long aligned = (total + 4095) / 4096 * 4096;
+        Assert.Equal(268435456L - 524288 - aligned - 8192 - 2097152, budget.MaxRawBytes);
+        Assert.Contains("slot a of the same device is identified as 'tb710fu-abl495-xbl-config-ramdisk-derived'", budget.Evidence);
+        Assert.Contains("align_up(" + total + ", 4096)", budget.Formula);
+
+        // The other direction works the same way.
+        InternalSlotMaterial reverse = await ResolveWithPeerAsync(work, kernel, "a", slotA, "b");
+        Assert.Equal(PeerSlotProfile, reverse.LoaderBudget.Profile);
     }
 
-    private static byte[]? ReadBundledTb710fuAbl()
+    [Fact]
+    public async Task Slot_keeps_the_conservative_policy_without_an_identified_other_slot()
     {
-        using Stream? resource = typeof(InternalSlotMaterialReader).Assembly
-            .GetManifestResourceStream("FreedomInstaller.Tb710fu.AospAbl.img");
-        if (resource is null)
+        using var work = new WorkDir();
+        byte[] kernel = MakeArm64(320);
+        InternalSlotLoaderBudget unknown = InvokeBudget(
+            Tb710fuPreOtaAblSha, 1048576,
+            "ee165befc3fcac316f9c2ea0cd609207774ae5351af554a8706da29a7c90c0a4", 245760,
+            4096, 0, 10633132, 0, 3);
+        Assert.False(unknown.KnownLoaderMatch);
+
+        foreach ((InternalSlotLoaderBudget? peer, string? peerSlot) in new (InternalSlotLoaderBudget?, string?)[]
+                 {
+                     (null, null),
+                     (unknown, "a"),
+                     (IdentifiedTb710fuSlotA(), "b"),
+                     (IdentifiedTb710fuSlotA(), null),
+                     (IdentifiedTb710fuSlotA(), "c"),
+                 })
         {
-            return null;
+            InternalSlotMaterial material = await ResolveWithPeerAsync(work, kernel, "b", peer, peerSlot);
+            Assert.False(material.LoaderBudget.KnownLoaderMatch);
+            Assert.Equal(134217728L, material.LoaderBudget.MaxRawBytes);
         }
 
-        using var copy = new MemoryStream();
-        resource.CopyTo(copy);
-        byte[] bytes = copy.ToArray();
-        Assert.Equal(Tb710fu279AblSha, ShaHex(bytes));
-        return bytes;
-    }
-
-    private static InternalSlotLoaderBudget? InvokeTb710fuPinnedBudget(
-        string ablSha, long ablBytes, byte[] xbl, int pageSize, long total)
-    {
-        MethodInfo method = typeof(InternalSlotMaterialReader).GetMethod(
-            "TryComputeTb710fuPinnedAblBudget", BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException("TryComputeTb710fuPinnedAblBudget not found");
-        return (InternalSlotLoaderBudget?)method.Invoke(
-            null, new object[] { ablSha, ablBytes, xbl, pageSize, total, CancellationToken.None });
-    }
-
-    /// <summary>
-    /// A minimal ELF64 xbl_config whose single LOAD segment is an FDT with
-    /// /soc/memorymap/memory@&lt;base&gt; { device_type = "memory"; MemLabel = "Kernel"; reg = &lt;base size&gt;; }
-    /// (the SM8650 spelling of the label property; the TB322FC loaders spell it mem-label).
-    /// </summary>
-    private static byte[] BuildKernelRegionXbl(ulong kernelBase, ulong kernelSize, string labelProperty = "MemLabel")
-    {
-        var strings = new MemoryStream();
-        int StringOffset(string name)
-        {
-            int at = (int)strings.Length;
-            strings.Write(Ascii(name + "\0"));
-            return at;
-        }
-
-        int deviceType = StringOffset("device_type");
-        int memLabel = StringOffset(labelProperty);
-        int reg = StringOffset("reg");
-
-        var structure = new MemoryStream();
-        void Token(uint value)
-        {
-            byte[] b = new byte[4];
-            BinaryPrimitives.WriteUInt32BigEndian(b, value);
-            structure.Write(b);
-        }
-        void Pad()
-        {
-            while (structure.Length % 4 != 0)
-            {
-                structure.WriteByte(0);
-            }
-        }
-        void Begin(string name)
-        {
-            Token(1);
-            structure.Write(Ascii(name + "\0"));
-            Pad();
-        }
-        void Property(int nameOffset, byte[] value)
-        {
-            Token(3);
-            Token((uint)value.Length);
-            Token((uint)nameOffset);
-            structure.Write(value);
-            Pad();
-        }
-
-        byte[] regValue = new byte[16];
-        BinaryPrimitives.WriteUInt64BigEndian(regValue.AsSpan(0), kernelBase);
-        BinaryPrimitives.WriteUInt64BigEndian(regValue.AsSpan(8), kernelSize);
-
-        Begin(string.Empty);
-        Begin("soc");
-        Begin("memorymap");
-        Begin("memory@" + kernelBase.ToString("X", System.Globalization.CultureInfo.InvariantCulture));
-        Property(deviceType, Ascii("memory\0"));
-        Property(memLabel, Ascii("Kernel\0"));
-        Property(reg, regValue);
-        Token(2);
-        Token(2);
-        Token(2);
-        Token(2);
-        Token(9);
-
-        const int FdtHeader = 40;
-        const int Reservation = FdtHeader;
-        int structOffset = Reservation + 16;
-        int stringsOffset = structOffset + (int)structure.Length;
-        int total = stringsOffset + (int)strings.Length;
-        byte[] fdt = new byte[(total + 7) & ~7];
-        BinaryPrimitives.WriteUInt32BigEndian(fdt.AsSpan(0), 0xD00DFEEDu);
-        BinaryPrimitives.WriteUInt32BigEndian(fdt.AsSpan(4), (uint)fdt.Length);
-        BinaryPrimitives.WriteUInt32BigEndian(fdt.AsSpan(8), (uint)structOffset);
-        BinaryPrimitives.WriteUInt32BigEndian(fdt.AsSpan(12), (uint)stringsOffset);
-        BinaryPrimitives.WriteUInt32BigEndian(fdt.AsSpan(16), Reservation);
-        BinaryPrimitives.WriteUInt32BigEndian(fdt.AsSpan(20), 17);
-        BinaryPrimitives.WriteUInt32BigEndian(fdt.AsSpan(24), 16);
-        BinaryPrimitives.WriteUInt32BigEndian(fdt.AsSpan(32), (uint)strings.Length);
-        BinaryPrimitives.WriteUInt32BigEndian(fdt.AsSpan(36), (uint)structure.Length);
-        structure.ToArray().CopyTo(fdt, structOffset);
-        strings.ToArray().CopyTo(fdt, stringsOffset);
-
-        const int ElfHeader = 64;
-        const int Program = 56;
-        int payload = ElfHeader + Program;
-        byte[] elf = new byte[payload + fdt.Length];
-        elf[0] = 0x7F;
-        elf[1] = (byte)'E';
-        elf[2] = (byte)'L';
-        elf[3] = (byte)'F';
-        elf[4] = 2;
-        elf[5] = 1;
-        elf[6] = 1;
-        BinaryPrimitives.WriteUInt16LittleEndian(elf.AsSpan(16), 2);
-        BinaryPrimitives.WriteUInt16LittleEndian(elf.AsSpan(18), 0xB7);
-        BinaryPrimitives.WriteUInt32LittleEndian(elf.AsSpan(20), 1);
-        BinaryPrimitives.WriteUInt64LittleEndian(elf.AsSpan(32), ElfHeader);
-        BinaryPrimitives.WriteUInt16LittleEndian(elf.AsSpan(52), ElfHeader);
-        BinaryPrimitives.WriteUInt16LittleEndian(elf.AsSpan(54), Program);
-        BinaryPrimitives.WriteUInt16LittleEndian(elf.AsSpan(56), 1);
-        BinaryPrimitives.WriteUInt32LittleEndian(elf.AsSpan(ElfHeader), 1u);
-        BinaryPrimitives.WriteUInt32LittleEndian(elf.AsSpan(ElfHeader + 4), 4u);
-        BinaryPrimitives.WriteUInt64LittleEndian(elf.AsSpan(ElfHeader + 8), (ulong)payload);
-        BinaryPrimitives.WriteUInt64LittleEndian(elf.AsSpan(ElfHeader + 16), 0x10000UL);
-        BinaryPrimitives.WriteUInt64LittleEndian(elf.AsSpan(ElfHeader + 24), 0x10000UL);
-        BinaryPrimitives.WriteUInt64LittleEndian(elf.AsSpan(ElfHeader + 32), (ulong)fdt.Length);
-        BinaryPrimitives.WriteUInt64LittleEndian(elf.AsSpan(ElfHeader + 40), (ulong)fdt.Length);
-        BinaryPrimitives.WriteUInt64LittleEndian(elf.AsSpan(ElfHeader + 48), 1UL);
-        fdt.CopyTo(elf, payload);
-        return elf;
+        // Another page size never takes the window arithmetic, even next to an identified slot.
+        InternalSlotMaterial page8192 = await ResolveWithPeerAsync(
+            work, kernel, "b", IdentifiedTb710fuSlotA(), "a", MakeVendor(ramdisk: VendorRamdisk, page: 8192));
+        Assert.False(page8192.LoaderBudget.KnownLoaderMatch);
     }
 
     private static InternalSlotLoaderBudget InvokeBudget(

@@ -77,6 +77,15 @@ public sealed class EdlRawBootBuildRequest
 
     internal VerifiedEdlFile? ReinstallRecoveryBoot { get; init; }
 
+    /// <summary>
+    /// The identified loader budget of the device's other slot, or null. It is used only when this slot's own
+    /// ABL/xbl_config are not identified (an OTA may update one slot only); see <see cref="PeerSlot"/>.
+    /// </summary>
+    internal InternalSlotLoaderBudget? PeerSlotLoaderBudget { get; init; }
+
+    /// <summary>The slot <see cref="PeerSlotLoaderBudget"/> was measured on.</summary>
+    internal string? PeerSlot { get; init; }
+
     public VerifiedEdlFile VendorBoot { get; }
 
     public VerifiedEdlFile InitBoot { get; }

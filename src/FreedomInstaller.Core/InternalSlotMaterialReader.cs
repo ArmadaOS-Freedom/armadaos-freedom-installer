@@ -162,6 +162,7 @@ public static class InternalSlotMaterialReader
     private const int LoaderAlign = 4096;
     private const long DefaultRawBudget = 134217728;
     private const string DefaultProfile = "conservative-default";
+    private const string PeerSlotProfile = "peer-slot-loader-derived";
     private const string KnownProfile = "tb322fc-abl259-xbl-config-ramdisk-derived";
     private const string StructuralProfile = "tb322fc-abl-kernel-region-derived";
     private const string KnownAblSha256 = "e7062378a1fe977df95341e5d3023dd510cffb283b11902a7cdbe74ba3e43885";
@@ -173,8 +174,6 @@ public static class InternalSlotMaterialReader
     // TB710FU (ZUXOS 1.5.04.495 loaders; A and B are identical). Its xbl_config also reserves the
     // Kernel region memory@A8000000 / 0x10000000, so the same 256 MiB window arithmetic applies.
     private const string Tb710fuProfile = "tb710fu-abl495-xbl-config-ramdisk-derived";
-    private const string Tb710fuPinnedAblProfile = "tb710fu-abl279-xbl-config-kernel-region-derived";
-    private const ulong Tb710fuKernelBase = 0xA8000000UL;
     private const long Tb710fuAblBytes = 1048576;
     private const long Tb710fuXblBytes = 245760;
 
@@ -244,7 +243,28 @@ public static class InternalSlotMaterialReader
         VerifiedEdlFile xblConfig,
         VerifiedEdlFile recoveryBoot,
         string baseOutputPath,
-        CancellationToken token = default)
+        CancellationToken token = default) =>
+        AnalyzeAndExportReinstallBaseAsync(
+            slot, currentBoot, vendorBoot, initBoot, abl, xblConfig, recoveryBoot, baseOutputPath,
+            null, null, token);
+
+    /// <summary>
+    /// <see cref="AnalyzeAndExportReinstallBaseAsync(string, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, string, CancellationToken)"/>
+    /// with the identified loader budget of the other slot of the same device (see
+    /// <see cref="ComputePeerSlotLoaderBudget"/>).
+    /// </summary>
+    internal static Task<InternalSlotMaterial> AnalyzeAndExportReinstallBaseAsync(
+        string slot,
+        VerifiedEdlFile currentBoot,
+        VerifiedEdlFile vendorBoot,
+        VerifiedEdlFile initBoot,
+        VerifiedEdlFile abl,
+        VerifiedEdlFile xblConfig,
+        VerifiedEdlFile recoveryBoot,
+        string baseOutputPath,
+        InternalSlotLoaderBudget? peerBudget,
+        string? peerSlot,
+        CancellationToken token)
     {
         if (slot is not ("a" or "b"))
         {
@@ -267,7 +287,7 @@ public static class InternalSlotMaterialReader
         return Task.Run(
             () => Analyze(
                 slot, currentBoot, vendorBoot, initBoot, abl, xblConfig, token, outputPath,
-                recoveryBoot),
+                recoveryBoot, peerBudget, peerSlot),
             token);
     }
 
@@ -309,6 +329,47 @@ public static class InternalSlotMaterialReader
             token);
     }
 
+    /// <summary>
+    /// <see cref="AnalyzeAndExportBaseAsync(string, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, string, CancellationToken)"/>
+    /// with the identified loader budget of the other slot of the same device. It is used only when this slot's
+    /// own loaders are not identified; see <see cref="ComputePeerSlotLoaderBudget"/>.
+    /// </summary>
+    internal static Task<InternalSlotMaterial> AnalyzeAndExportBaseAsync(
+        string slot,
+        VerifiedEdlFile currentBoot,
+        VerifiedEdlFile vendorBoot,
+        VerifiedEdlFile initBoot,
+        VerifiedEdlFile abl,
+        VerifiedEdlFile xblConfig,
+        string baseOutputPath,
+        InternalSlotLoaderBudget? peerBudget,
+        string? peerSlot,
+        CancellationToken token)
+    {
+        if (slot is not ("a" or "b"))
+        {
+            throw new ArgumentException("slot must be 'a' or 'b'.", nameof(slot));
+        }
+        ArgumentNullException.ThrowIfNull(currentBoot);
+        ArgumentNullException.ThrowIfNull(vendorBoot);
+        ArgumentNullException.ThrowIfNull(initBoot);
+        ArgumentNullException.ThrowIfNull(abl);
+        ArgumentNullException.ThrowIfNull(xblConfig);
+        if (string.IsNullOrWhiteSpace(baseOutputPath))
+        {
+            throw new ArgumentException(
+                "base output path must name a non-empty file path.", nameof(baseOutputPath));
+        }
+
+        string outputPath = Path.GetFullPath(baseOutputPath);
+
+        return Task.Run(
+            () => Analyze(
+                slot, currentBoot, vendorBoot, initBoot, abl, xblConfig, token, outputPath,
+                null, peerBudget, peerSlot),
+            token);
+    }
+
     private static InternalSlotMaterial Analyze(
         string slot,
         VerifiedEdlFile currentBoot,
@@ -318,7 +379,9 @@ public static class InternalSlotMaterialReader
         VerifiedEdlFile xblConfig,
         CancellationToken token,
         string? baseOutputPath = null,
-        VerifiedEdlFile? recoveryBoot = null)
+        VerifiedEdlFile? recoveryBoot = null,
+        InternalSlotLoaderBudget? peerBudget = null,
+        string? peerSlot = null)
     {
         FileStream? currentStream = null;
         FileStream? vendorStream = null;
@@ -358,21 +421,6 @@ public static class InternalSlotMaterialReader
                 init.RamdiskSize,
                 KnownV4Headers);
 
-            // TB710FU: when the slot's ABL is the pinned CN 279 loader (the one a locked install writes in place
-            // of a Lenovo-keyed ABL, see PinnedAospAbl.Tb710fu), the ABL identity is already hash pinned and
-            // only the slot's own xbl_config decides the window. An OTA-updated tablet keeps the pre-OTA
-            // xbl_config build on the other slot, so it is checked by structure (exactly one memory node whose
-            // MemLabel is Kernel, at 0xA8000000, 0x10000000 bytes) instead of by a list of builds.
-            if (!budget.KnownLoaderMatch)
-            {
-                budget = TryComputeTb710fuPinnedAblBudget(
-                    ablSha, abl.Length,
-                    xblBytes,
-                    vendor.PageSize,
-                    current.RamdiskSize + vendor.RamdiskSize + init.RamdiskSize,
-                    token) ?? budget;
-            }
-
             // The exact-pair fast path above is hash pinned. Only when it declines, and only on the
             // reviewed page size, may the structural recognizer promote the same-slot pair. The three
             // v4 headers were already validated by the parsers before this point, and the one array
@@ -385,6 +433,18 @@ public static class InternalSlotMaterialReader
                 budget = ComputeStructuralLoaderBudget(
                     current.RamdiskSize + vendor.RamdiskSize + init.RamdiskSize,
                     loaderEvidence);
+            }
+
+            // Lenovo OTAs often update one slot only, so the other slot keeps an older ABL/xbl_config that no
+            // hash pair or ABL pattern knows. When the other slot of the same device is identified, this slot
+            // takes that identity and only its own ramdisks change the arithmetic.
+            if (!budget.KnownLoaderMatch && peerBudget is not null)
+            {
+                budget = ComputePeerSlotLoaderBudget(
+                    slot, ablSha, xblSha,
+                    vendor.PageSize,
+                    current.RamdiskSize + vendor.RamdiskSize + init.RamdiskSize,
+                    peerBudget, peerSlot) ?? budget;
             }
 
             if (current.KernelSize > int.MaxValue || current.KernelSize > MaxInputBytes)
@@ -860,23 +920,23 @@ public static class InternalSlotMaterialReader
     }
 
     /// <summary>
-    /// The TB710FU window budget for a slot whose ABL is exactly the pinned CN 279 loader, whatever build its
-    /// xbl_config is, as long as that xbl_config reserves the same Kernel region (memory@A8000000, 0x10000000).
-    /// Null when any of the facts differ; the caller then keeps its conservative budget.
+    /// The window budget an unidentified slot borrows from the identified other slot of the same device: same
+    /// page size (4096) and the same 256 MiB Kernel window arithmetic, evaluated with this slot's own ramdisks.
+    /// Null when the other slot is not identified either, or is this slot.
     /// </summary>
-    private static InternalSlotLoaderBudget? TryComputeTb710fuPinnedAblBudget(
-        string ablSha256, long ablBytes,
-        byte[] xblBytes,
+    private static InternalSlotLoaderBudget? ComputePeerSlotLoaderBudget(
+        string slot,
+        string ablSha256,
+        string xblSha256,
         int pageSize,
         long total,
-        CancellationToken token)
+        InternalSlotLoaderBudget peerBudget,
+        string? peerSlot)
     {
-        PinnedAospAbl pinned = PinnedAospAbl.Tb710fu;
-        if (!string.Equals(ablSha256, pinned.ImageSha256, StringComparison.OrdinalIgnoreCase)
-            || ablBytes != pinned.ImageLength
+        if (!peerBudget.KnownLoaderMatch
             || pageSize != KnownPage
-            || !InternalSlotLoaderStructure.TryMatchSm8650KernelRegion(xblBytes, token, out ulong kernelBase)
-            || kernelBase != Tb710fuKernelBase)
+            || peerSlot is not ("a" or "b")
+            || string.Equals(peerSlot, slot, StringComparison.Ordinal))
         {
             return null;
         }
@@ -889,10 +949,13 @@ public static class InternalSlotMaterialReader
         }
 
         return new InternalSlotLoaderBudget(
-            Tb710fuPinnedAblProfile,
+            PeerSlotProfile,
             room,
             true,
-            "identified the pinned TB710FU CN 279 ABL by full sha256+length (the loader a locked install writes), page 4096, three validated v4 headers; the slot's xbl_config carries exactly one memory node with MemLabel Kernel at 0xA8000000 of 0x10000000 bytes (recognized by structure, so pre-OTA builds on the other slot qualify); a 155 MiB unpacked kShimC boot was booted on the CN 279 ABL",
+            "slot " + slot + " loaders not identified (abl sha256 " + ablSha256 + ", xbl_config sha256 " + xblSha256
+                + "); slot " + peerSlot + " of the same device is identified as '" + peerBudget.Profile
+                + "' and an OTA may update one slot only, so its 256 MiB Kernel window is assumed for this slot; "
+                + "page 4096, three validated v4 headers. Slot " + peerSlot + " evidence: " + peerBudget.Evidence,
             $"max_raw_bytes = 268435456 - 524288 - align_up({total}, 4096) - 8192 - 2097152");
     }
 

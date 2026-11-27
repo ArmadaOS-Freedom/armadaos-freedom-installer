@@ -54,8 +54,6 @@ internal static partial class InternalSlotLoaderStructure
     private const int ContainerMaxNameLength = 4096;
     private const string ContainerKernelNodePath = "/soc/memorymap/memory@A8000000";
     private const string ContainerLabelProperty = "mem-label";
-    // The SM8650 (TB710FU) xbl_config spells the same memory-map label property in UEFI style.
-    private const string ContainerSm8650LabelProperty = "MemLabel";
     private const string ContainerDeviceTypeProperty = "device_type";
     private const string ContainerRegProperty = "reg";
     private const string ContainerKernelLabel = "Kernel\0";
@@ -623,38 +621,8 @@ internal static partial class InternalSlotLoaderStructure
         return entryMatches == 1;
     }
 
-    private static bool ContainerTryMatchKernelRegion(byte[] xbl, CancellationToken token) =>
-        ContainerTryMatchKernelRegion(xbl, ContainerLabelProperty, token, out _);
-
-    /// <summary>
-    /// The xbl_config half of the loader check alone, for the SM8650 (TB710FU) layout: the ELF carries exactly
-    /// one FDT memory node whose <c>MemLabel</c> is <c>Kernel</c> and whose reg is 0x10000000 bytes, and
-    /// <paramref name="kernelBase"/> is that node's base. Used where the ABL identity is already pinned by hash
-    /// (the TB710FU CN 279 loader) and only the slot's own xbl_config, whatever its build, decides the 256 MiB
-    /// Kernel window.
-    /// </summary>
-    internal static bool TryMatchSm8650KernelRegion(byte[] xbl, CancellationToken token, out ulong kernelBase)
+    private static bool ContainerTryMatchKernelRegion(byte[] xbl, CancellationToken token)
     {
-        kernelBase = 0;
-        if (xbl == null)
-        {
-            return false;
-        }
-
-        token.ThrowIfCancellationRequested();
-        if (!ContainerTryMatchKernelRegion(xbl, ContainerSm8650LabelProperty, token, out kernelBase))
-        {
-            kernelBase = 0;
-            return false;
-        }
-
-        return true;
-    }
-
-    private static bool ContainerTryMatchKernelRegion(
-        byte[] xbl, string labelProperty, CancellationToken token, out ulong kernelBase)
-    {
-        kernelBase = 0;
         if (xbl.Length < ContainerElf64HeaderSize)
         {
             return false;
@@ -733,7 +701,7 @@ internal static partial class InternalSlotLoaderStructure
                 continue;
             }
 
-            if (!ContainerTryParseFdt(xbl, (int)fileOffset, (int)fileSize, labelProperty, token, ref kernelNodes, ref kernelBase))
+            if (!ContainerTryParseFdt(xbl, (int)fileOffset, (int)fileSize, token, ref kernelNodes))
             {
                 return false;
             }
@@ -751,10 +719,8 @@ internal static partial class InternalSlotLoaderStructure
         byte[] blob,
         int start,
         int limit,
-        string labelProperty,
         CancellationToken token,
-        ref int kernelNodes,
-        ref ulong kernelBase)
+        ref int kernelNodes)
     {
         if (limit < ContainerFdtHeaderSize)
         {
@@ -843,10 +809,8 @@ internal static partial class InternalSlotLoaderStructure
             stringsOffset,
             stringsSize,
             stringsEnd,
-            labelProperty,
             token,
-            ref kernelNodes,
-            ref kernelBase);
+            ref kernelNodes);
     }
 
     private static bool ContainerTryParseFdtStructure(
@@ -857,10 +821,8 @@ internal static partial class InternalSlotLoaderStructure
         long stringsOffset,
         long stringsSize,
         long stringsEnd,
-        string labelProperty,
         CancellationToken token,
-        ref int kernelNodes,
-        ref ulong kernelBase)
+        ref int kernelNodes)
     {
         var frames = new List<ContainerFdtFrame>();
         var names = new List<string>();
@@ -958,8 +920,6 @@ internal static partial class InternalSlotLoaderStructure
                     {
                         return false;
                     }
-
-                    kernelBase = expectedBase;
                 }
 
                 frames.RemoveAt(frames.Count - 1);
@@ -1017,7 +977,7 @@ internal static partial class InternalSlotLoaderStructure
                     return false;
                 }
 
-                ContainerInspectProperty(blob, start + (int)dataStart, (int)valueLength, propertyName, labelProperty, frame);
+                ContainerInspectProperty(blob, start + (int)dataStart, (int)valueLength, propertyName, frame);
                 continue;
             }
 
@@ -1051,10 +1011,9 @@ internal static partial class InternalSlotLoaderStructure
         return rootSeen;
     }
 
-    private static void ContainerInspectProperty(
-        byte[] blob, int offset, int length, string name, string labelProperty, ContainerFdtFrame frame)
+    private static void ContainerInspectProperty(byte[] blob, int offset, int length, string name, ContainerFdtFrame frame)
     {
-        if (string.Equals(name, labelProperty, StringComparison.Ordinal))
+        if (string.Equals(name, ContainerLabelProperty, StringComparison.Ordinal))
         {
             frame.LabelKernel = ContainerEqualsAscii(blob, offset, length, ContainerKernelLabel);
             return;
