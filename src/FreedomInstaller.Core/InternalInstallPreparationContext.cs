@@ -984,8 +984,6 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
                 backupFacts.Geometries,
                 artifactFacts.GptWriteRegions,
                 artifactFacts.BoardSummary?.Length ?? 0,
-                packageSnapshot.LinuxBootRaw.Length,
-                packageSnapshot.LinuxRootRaw.Length,
                 backupFacts.Files,
                 includeOriginalCapture: true,
                 avbNodes: avbNodes,
@@ -1395,8 +1393,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
         if (snapshot.LinuxBootRaw.Length != contract.BootImage.ExpandedBytes
             || !SameSha(snapshot.LinuxBootRaw.Sha256, contract.BootImage.ExpandedSha256)
-            || snapshot.LinuxRootRaw.Length != contract.RootImage.ExpandedBytes
-            || !SameSha(snapshot.LinuxRootRaw.Sha256, contract.RootImage.ExpandedSha256))
+            || snapshot.LinuxRootImage.Length != contract.RootImage.ExpandedBytes
+            || !SameSha(snapshot.LinuxRootImage.Sha256, contract.RootImage.ExpandedSha256))
         {
             throw new InvalidDataException(
                 "The actual expanded raw images are not the two declared direct images.");
@@ -1474,8 +1472,6 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         long miscCaptureBytes,
         long gptWriteBytes,
         long boardReadbackBytes,
-        long linuxBootRawReadbackBytes,
-        long linuxRootRawReadbackBytes,
         long candidateBBytes,
         long candidateABytes,
         long freshMiscBytes,
@@ -1488,8 +1484,6 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             miscCaptureBytes,
             gptWriteBytes,
             boardReadbackBytes,
-            linuxBootRawReadbackBytes,
-            linuxRootRawReadbackBytes,
             candidateBBytes,
             candidateABytes,
             freshMiscBytes,
@@ -1508,16 +1502,13 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         long miscCaptureBytes,
         long gptWriteBytes,
         long boardReadbackBytes,
-        long linuxBootRawReadbackBytes,
-        long linuxRootRawReadbackBytes,
         long candidateBBytes,
         long candidateABytes,
         long freshMiscBytes,
         long overlayUnitBytes)
     {
         if (gptCaptureBytes < 0 || bootACaptureBytes < 0 || bootBCaptureBytes < 0 || miscCaptureBytes < 0
-            || gptWriteBytes < 0 || boardReadbackBytes < 0 || linuxBootRawReadbackBytes < 0
-            || linuxRootRawReadbackBytes < 0 || candidateBBytes < 0 || candidateABytes < 0
+            || gptWriteBytes < 0 || boardReadbackBytes < 0 || candidateBBytes < 0 || candidateABytes < 0
             || freshMiscBytes < 0 || overlayUnitBytes < 0)
         {
             throw new InvalidDataException("The direct execution space inputs must not be negative.");
@@ -1537,10 +1528,8 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         // prepared artifacts, so the old extra write copy was counted twice.
         total = CheckedAdd(total, gptWriteBytes, "The GPT readback budget overflows.");
 
-        // Board summary readback, both expanded raw image readbacks and both full candidate partition readbacks.
+        // Linux image readback is streamed into SHA-256. The board and boot candidate readbacks still leave files.
         total = CheckedAdd(total, boardReadbackBytes, "The board readback budget overflows.");
-        total = CheckedAdd(total, linuxBootRawReadbackBytes, "The raw readback budget overflows.");
-        total = CheckedAdd(total, linuxRootRawReadbackBytes, "The raw readback budget overflows.");
         total = CheckedAdd(total, candidateBBytes, "The candidate readback budget overflows.");
         total = CheckedAdd(total, candidateABytes, "The candidate readback budget overflows.");
 
@@ -1554,7 +1543,7 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
     /// <summary>
     /// The planned budget from the actual prepared facts: six geometries, the four GPT write regions, the board
-    /// summary, both expanded Linux images, the actual boot_a, boot_b and misc captures and every actual direct
+    /// summary, the actual boot_a, boot_b and misc captures and every actual direct
     /// metadata node of this preparation.
     /// <para>
     /// Each metadata node adds its real signed candidate length once, for the full readback of its future
@@ -1567,8 +1556,6 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
         IReadOnlyDictionary<int, EdlGeometry> geometries,
         IReadOnlyList<InternalArtifactRegion> gptWriteRegions,
         long boardSummaryBytes,
-        long linuxBootRawBytes,
-        long linuxRootRawBytes,
         IReadOnlyDictionary<string, EdlCapturedRegion> files,
         bool includeOriginalCapture,
         IReadOnlyList<DirectAvbMetadataNode>? avbNodes = null,
@@ -1617,8 +1604,6 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             misc.Length,
             gptWrite,
             boardSummaryBytes,
-            linuxBootRawBytes,
-            linuxRootRawBytes,
             bootB.Length,
             bootA.Length,
             misc.Length,
@@ -1806,8 +1791,6 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
             _geometries,
             _gptWriteRegions,
             _boardSummary?.Length ?? 0,
-            _package.LinuxBootRaw.Length,
-            _package.LinuxRootRaw.Length,
             _backupFiles,
             includeOriginalCapture,
             _directAvbNodes,

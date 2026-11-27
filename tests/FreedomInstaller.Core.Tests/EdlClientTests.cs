@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -1019,6 +1020,100 @@ public sealed class EdlClientTests : IClassFixture<EdlClientToolchainFixture>
         int after = runner.FirehoseCallCount;
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.EraseAsync(0, 8, 4));
         Assert.Equal(after, runner.FirehoseCallCount);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("duplicate")]
+    [InlineData("wrong-length")]
+    [InlineData("wrong-sector")]
+    [InlineData("no-ack")]
+    [InlineData("device-log")]
+    [InlineData("valid")]
+    public async Task Hash_only_read_requires_exact_trusted_readback_evidence(string variant)
+    {
+        const string digest = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+        const string proof = "\n[INFO] Sector read SHA-256: 8192 bytes, " + digest;
+        string transcript = E003EdlTestData.ReadSuccess(0, 4, 2, 8192, "SHA-256");
+        transcript = variant switch
+        {
+            "missing" => transcript,
+            "duplicate" => transcript + proof + proof,
+            "wrong-length" => transcript + proof.Replace("8192", "4096"),
+            "wrong-sector" => transcript.Replace("LBA 4 to 5", "LBA 5 to 6") + proof,
+            "no-ack" => transcript.Replace("Final ACK received for Read operation.", "") + proof,
+            "device-log" => transcript + proof.Replace("[INFO]", "[DEBUG] DEVPRG LOG: INFO:"),
+            _ => transcript + proof.Replace("[INFO] ", "14:02:00.123 [INFO]  "),
+        };
+
+        var runner = new E003FakeCommandRunner();
+        runner.Enqueue(E003EdlTestData.InitialProbe());
+        runner.Enqueue(transcript);
+        EdlClient client = NewClient(runner, ValidDiscovery());
+        await client.ProbeAsync(0, initialLoader: true);
+
+        if (variant != "valid")
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => client.ReadSha256Async(0, 4, 2, null, null));
+            return;
+        }
+
+        var evidence = await client.ReadSha256Async(0, 4, 2, null, null);
+        Assert.Empty(evidence.FilePath);
+        Assert.Equal(4L, evidence.StartSector);
+        Assert.Equal(2L, evidence.SectorCount);
+        Assert.Equal(8192L, evidence.Length);
+        Assert.Equal(digest, evidence.Sha256);
+        AssertCommand(runner.FirehoseCommands[1], _fixture.Toolchain.ClientPath, ReadTimeout,
+            WithGlobals("read-sector", "4", "2", "-", "--lun", "0", "--sha256-only"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Gzip_write_rejects_changed_compressed_content_before_transfer(bool changed)
+    {
+        string directory = _fixture.NewCaseDirectory(nameof(Gzip_write_rejects_changed_compressed_content_before_transfer));
+        string path = Path.Combine(directory, "root.raw.gz");
+        byte[] raw = Payload(8192);
+        using (var file = File.Create(path))
+        using (var gzip = new GZipStream(file, CompressionLevel.Fastest))
+        {
+            gzip.Write(raw);
+        }
+
+        byte[] compressed = File.ReadAllBytes(path);
+        string expected = Convert.ToHexString(SHA256.HashData(compressed));
+        var image = new VerifiedGzipEdlImage(
+            new VerifiedEdlFile(path, compressed.LongLength, expected), raw.LongLength,
+            Convert.ToHexString(SHA256.HashData(raw)));
+        if (changed)
+        {
+            compressed[^1] ^= 1;
+            File.WriteAllBytes(path, compressed);
+        }
+
+        var runner = new E003FakeCommandRunner();
+        runner.Enqueue(E003EdlTestData.InitialProbe());
+        runner.Enqueue(E003EdlTestData.WriteSuccess(0, 4, 2, raw.Length));
+        EdlClient client = NewClient(runner, ValidDiscovery());
+        await client.ProbeAsync(0, initialLoader: true);
+
+        if (changed)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => client.WriteGzipAsync(0, 4, image, null, null));
+            Assert.Equal(1, runner.FirehoseCallCount);
+        }
+        else
+        {
+            var evidence = await client.WriteGzipAsync(0, 4, image, null, null);
+            Assert.Equal(raw.LongLength, evidence.Length);
+            Assert.Equal(image.Sha256, evidence.Sha256);
+            Assert.Equal(2, runner.FirehoseCallCount);
+            AssertCommand(runner.FirehoseCommands[1], _fixture.Toolchain.ClientPath, WriteTimeout,
+                WithGlobals("write-sector", "4", path, "--lun", "0", "--gzip-expanded-bytes", "8192",
+                    "--gzip-compressed-sha256", expected));
+        }
     }
 
     [Fact]

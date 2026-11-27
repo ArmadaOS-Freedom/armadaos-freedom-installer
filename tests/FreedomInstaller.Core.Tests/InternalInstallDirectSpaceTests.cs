@@ -8,10 +8,8 @@ using Xunit;
 namespace FreedomInstaller.Core.Tests;
 
 /// <summary>
-/// Policy tests for the direct execution free-space budget: the pure twelve-input arithmetic and the
-/// required-versus-available refusal. The twelve arguments are fed in the production order (GPT capture,
-/// boot_a capture, boot_b capture, misc capture, GPT write, board readback, Linux boot raw readback, Linux root
-/// raw readback, candidate B, candidate A, fresh misc, overlay unit).
+/// Direct execution disk space budgets only the data the host saves, including the board and boot candidate
+/// readbacks. The complete Linux boot and root readbacks are streamed into SHA-256.
 /// <para>
 /// This is policy unit verification only: the expected totals are independent literals, not a mirror of the
 /// implementation, and no file, device or free-space probe is touched. It says nothing about a whole flow or
@@ -25,16 +23,15 @@ namespace FreedomInstaller.Core.Tests;
 /// </summary>
 public sealed class InternalInstallDirectSpaceTests
 {
-    // Independent oracle: the twelve sample inputs sum to 18096 with the original capture and to 16176 without
-    // it; the 1920 byte delta is exactly that one capture.
-    private const long TotalWithCapture = 18096L;
-    private const long TotalWithoutCapture = 16176L;
+    // Independent oracle: 5808 bytes with the original capture, 3888 without that capture.
+    private const long TotalWithCapture = 5808L;
+    private const long TotalWithoutCapture = 3888L;
     private const long OriginalCaptureTotal = 1920L;
 
     private const long DummyRequiredBytes = 100L;
 
     [Fact]
-    public void Default_twelve_argument_budget_counts_the_one_original_capture()
+    public void Budget_counts_the_original_capture_and_only_file_backed_readbacks()
     {
         Assert.Equal(TotalWithCapture, Budget(SampleInputs));
     }
@@ -63,9 +60,9 @@ public sealed class InternalInstallDirectSpaceTests
         captureOverflow[1] = 1;             // boot_a capture
         Assert.Throws<InvalidDataException>(() => Budget(captureOverflow));
 
-        long[] readbackOverflow = new long[12];
-        readbackOverflow[9] = long.MaxValue;  // candidate A readback
-        readbackOverflow[10] = 1;             // fresh misc readback
+        long[] readbackOverflow = new long[10];
+        readbackOverflow[7] = long.MaxValue;  // candidate A readback
+        readbackOverflow[8] = 1;             // fresh misc readback
         Assert.Throws<InvalidDataException>(() => Budget(includeOriginalCapture: false, readbackOverflow));
     }
 
@@ -77,7 +74,7 @@ public sealed class InternalInstallDirectSpaceTests
         Assert.Throws<InvalidDataException>(() => Budget(negativeCapture));
 
         long[] negativeReadback = (long[])SampleInputs.Clone();
-        negativeReadback[11] = -1; // overlay unit
+        negativeReadback[9] = -1; // overlay unit
         Assert.Throws<InvalidDataException>(() => Budget(includeOriginalCapture: false, negativeReadback));
     }
 
@@ -119,8 +116,6 @@ public sealed class InternalInstallDirectSpaceTests
         1024L, // miscCaptureBytes
         32L,   // gptWriteBytes
         2048L, // boardReadbackBytes
-        4096L, // linuxBootRawReadbackBytes
-        8192L, // linuxRootRawReadbackBytes
         512L,  // candidateBBytes
         256L,  // candidateABytes
         1024L, // freshMiscBytes
@@ -152,7 +147,7 @@ public sealed class InternalInstallDirectSpaceTests
 
     private static Type[] BudgetSignature(bool includeCaptureSwitch)
     {
-        Type[] signature = new Type[includeCaptureSwitch ? 13 : 12];
+        Type[] signature = new Type[includeCaptureSwitch ? 11 : 10];
         int firstValue = includeCaptureSwitch ? 1 : 0;
 
         if (includeCaptureSwitch)

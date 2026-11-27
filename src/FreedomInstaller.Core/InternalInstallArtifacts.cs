@@ -35,8 +35,9 @@ public sealed class BoardRecoverySpaceException : IOException
 /// A region describes a <b>planned output</b>: the bytes this preparation intends to hand to a later EDL write
 /// step, together with the exact range they belong to. It is never evidence of anything a device returned -
 /// captured device bytes are <see cref="EdlCapturedRegion"/> and stay in the backup set, so a planned file can
-/// never be mistaken for a read-back proof. <see cref="FilePath"/> is absolute, <see cref="Length"/> is the
-/// byte length of the file and <see cref="Sha256"/> is the SHA-256 of exactly those finished file bytes.
+/// never be mistaken for a read-back proof. <see cref="FilePath"/> is absolute. <see cref="Length"/> and
+/// <see cref="Sha256"/> describe the exact bytes planned for the device. For the direct Linux root write,
+/// the path points to the held gzip source and the length and digest describe its verified decoded bytes.
 /// </para>
 /// </summary>
 public sealed record InternalArtifactRegion(

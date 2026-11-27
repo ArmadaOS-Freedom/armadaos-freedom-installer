@@ -308,23 +308,16 @@ public sealed class InternalInstallAvbChainExecutionTests
 
         var boardSummary = Convert.ToInt64(session.Artifacts.BoardSummary.Length);
 
-        // Package contract: the expanded Linux payload sizes actually scheduled by this run.
-        var contract = PackageReader.ReadEdlRawContract(
-            session.Package.PackageDirectory,
-            session.Package.DeviceModel);
-        var linuxBootExpanded = Convert.ToInt64(contract.BootImage.ExpandedBytes);
-        var linuxRootExpanded = Convert.ToInt64(contract.RootImage.ExpandedBytes);
-
         // The trailing BCB unit is a whole-sector-rounded 2 KiB write, not the misc capture.
         var miscSectorSize = Convert.ToInt64(misc.SectorSize);
         var bcbUnit = checked((2048L + miscSectorSize - 1) / miscSectorSize * miscSectorSize);
 
-        // Capture + readback for boot/misc, expanded Linux payloads, and the BCB unit.
+        // Linux image readbacks are hashed without saving a copy. Budget only the
+        // files retained during execution, including Android boot and misc readbacks.
         var baseFuture = checked(
             gptCaptured
             + bootA + bootB + miscLength
             + gptReadback + boardSummary
-            + linuxBootExpanded + linuxRootExpanded
             + bootB + bootA
             + miscLength
             + checked(2L * bcbUnit));

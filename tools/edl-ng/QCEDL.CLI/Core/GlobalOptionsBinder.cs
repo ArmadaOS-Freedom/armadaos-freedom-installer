@@ -34,6 +34,11 @@ internal sealed class GlobalOptionsBinder(
     public string? ImgSize { get; set; }
     public bool RadxaWosPlatform { get; set; }
 
+    internal GlobalOptionsBinder Bind(BindingContext bindingContext)
+    {
+        return GetBoundValue(bindingContext);
+    }
+
     protected override GlobalOptionsBinder GetBoundValue(BindingContext bindingContext)
     {
         var cliLogLevel = bindingContext.ParseResult.GetValueForOption(logLevelOption);

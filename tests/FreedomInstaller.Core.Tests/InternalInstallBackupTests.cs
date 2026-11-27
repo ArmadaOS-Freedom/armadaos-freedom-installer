@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -1339,6 +1340,30 @@ internal sealed class IB001SyntheticDevice
         _overlays.Add((lun, checked(startSector * SectorSize), checked(sectorCount * SectorSize), path));
     }
 
+    internal Stream OpenLastWriteForReadback(IB001Read read)
+    {
+        long start = checked(read.StartSector * SectorSize);
+        long length = checked(read.SectorCount * SectorSize);
+        long end = checked(start + length);
+        for (int index = _overlays.Count - 1; index >= 0; index--)
+        {
+            var overlay = _overlays[index];
+            if (overlay.Lun != read.Lun || overlay.StartByte >= end || overlay.StartByte + overlay.Length <= start)
+            {
+                continue;
+            }
+
+            if (overlay.StartByte == start && overlay.Length == length)
+            {
+                return File.OpenRead(overlay.Path);
+            }
+
+            break;
+        }
+
+        throw new InvalidOperationException("The streamed readback does not cover one complete synthetic write.");
+    }
+
     internal long TotalSectors(int lun) => _totals[lun];
 
     internal string DiskGuid(int lun) => _diskGuids[lun];
@@ -1954,11 +1979,17 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
 
     private Task<ProcessResult> Read(string[] arguments, CancellationToken cancellationToken)
     {
+        bool hashOnly = arguments.Contains("--sha256-only", StringComparer.Ordinal);
+        if (hashOnly && arguments[3] != "-")
+        {
+            throw new InvalidOperationException("IB001 hash-only reads must not name an output file.");
+        }
+
         IB001Read read = new(
             LunArgument(arguments),
             long.Parse(arguments[1], CultureInfo.InvariantCulture),
             long.Parse(arguments[2], CultureInfo.InvariantCulture),
-            arguments[3]);
+            hashOnly ? "SHA-256" : arguments[3]);
 
         _reads.Add(read);
 
@@ -1979,6 +2010,11 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
         // An explicit override keeps absolute priority; otherwise a direct device always renders the range so
         // acknowledged overlays are visible even for an exact GPT/misc window match.
         byte[]? payload = PayloadOverride?.Invoke(read);
+        if (hashOnly)
+        {
+            return ReadSha256Async(read, payload, cancellationToken);
+        }
+
         if (payload is null && _device.IsDirect)
         {
             return ReadDirectAsync(read, cancellationToken);
@@ -1999,6 +2035,18 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
         int exitCode = ReadExitCode?.Invoke(read) ?? 0;
         string output = ReadOutput(read, expected);
         return Task.FromResult(new ProcessResult(exitCode, output, string.Empty));
+    }
+
+    private async Task<ProcessResult> ReadSha256Async(
+        IB001Read read, byte[]? payload, CancellationToken cancellationToken)
+    {
+        using Stream source = payload is null
+            ? _device.OpenLastWriteForReadback(read)
+            : new MemoryStream(payload, writable: false);
+        var digest = Convert.ToHexString(await SHA256.HashDataAsync(source, cancellationToken).ConfigureAwait(false));
+        var output = ReadOutput(read, source.Length)
+            + FormattableString.Invariant($"\n[INFO] Sector read SHA-256: {source.Length} bytes, {digest}");
+        return new ProcessResult(ReadExitCode?.Invoke(read) ?? 0, output, string.Empty);
     }
 
     /// <summary>
@@ -2065,8 +2113,8 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
 
     /// <summary>
     /// Accepts <c>write-sector START FILE --lun LUN</c> for an opted-in direct device only: the real source is
-    /// snapshotted with a bounded 64 KiB stream (hashing as it copies), the overlay is appended only after the
-    /// copy is complete, and the snapshot stays valid even if the caller later mutates or deletes its file.
+    /// snapshotted with a bounded 64 KiB stream, after decompression for a gzip command. The overlay is
+    /// appended only after the copy is complete and stays valid even if the caller later changes its source.
     /// </summary>
     private Task<ProcessResult> Write(string[] arguments)
     {
@@ -2085,6 +2133,8 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
         long startSector = long.Parse(arguments[1], CultureInfo.InvariantCulture);
         string sourcePath = arguments[2];
         int lun = LunArgument(arguments);
+        int expandedBytesIndex = Array.IndexOf(arguments, "--gzip-expanded-bytes");
+        bool gzip = expandedBytesIndex >= 0;
 
         long total = _device.TotalSectors(lun);
         if (!File.Exists(sourcePath))
@@ -2092,14 +2142,15 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
             throw new InvalidOperationException("IB001 fake write-sector source does not exist: " + sourcePath);
         }
 
-        long byteLength = new FileInfo(sourcePath).Length;
-        if (byteLength <= 0 || byteLength % IB001SyntheticDevice.SectorSize != 0)
+        long expectedBytes = gzip
+            ? long.Parse(arguments[expandedBytesIndex + 1], CultureInfo.InvariantCulture)
+            : new FileInfo(sourcePath).Length;
+        if (expectedBytes <= 0 || expectedBytes % IB001SyntheticDevice.SectorSize != 0)
         {
-            throw new InvalidOperationException(
-                "IB001 fake write-sector requires a positive whole-sector file length.");
+            throw new InvalidOperationException("IB001 fake write-sector requires a positive whole-sector image length.");
         }
 
-        long sectorCount = byteLength / IB001SyntheticDevice.SectorSize;
+        long sectorCount = expectedBytes / IB001SyntheticDevice.SectorSize;
         if (startSector < 0 || startSector > total - sectorCount)
         {
             throw new InvalidOperationException("IB001 fake write-sector range is outside LUN " + lun + ".");
@@ -2113,15 +2164,34 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
         using (IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
         {
             byte[] buffer = new byte[SnapshotBufferBytes];
-            using (FileStream source = new(
+            using (FileStream file = new(
                 sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, SnapshotBufferBytes,
                 FileOptions.SequentialScan))
-            using (FileStream destination = new(
-                snapshotPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, SnapshotBufferBytes))
             {
+                if (gzip)
+                {
+                    int digestIndex = Array.IndexOf(arguments, "--gzip-compressed-sha256");
+                    string digest = Convert.ToHexString(SHA256.HashData(file));
+                    if (digestIndex < 0 || !string.Equals(digest, arguments[digestIndex + 1], StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException("IB001 fake write-sector received the wrong compressed digest.");
+                    }
+
+                    file.Position = 0;
+                }
+
+                using var decompressor = gzip ? new GZipStream(file, CompressionMode.Decompress) : null;
+                using var destination = new FileStream(
+                    snapshotPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, SnapshotBufferBytes);
+                Stream source = (Stream?)decompressor ?? file;
                 int read;
                 while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
                 {
+                    if (read > expectedBytes - copied)
+                    {
+                        throw new InvalidOperationException("IB001 fake write-sector source exceeds its claimed length.");
+                    }
+
                     destination.Write(buffer, 0, read);
                     hash.AppendData(buffer, 0, read);
                     copied += read;
@@ -2131,7 +2201,7 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
             sha = Convert.ToHexString(hash.GetHashAndReset());
         }
 
-        if (copied != byteLength)
+        if (copied != expectedBytes)
         {
             throw new InvalidOperationException("IB001 fake write-sector source changed while it was snapshotted.");
         }
@@ -2150,7 +2220,7 @@ internal sealed class IB001FakeEdlRunner : ICommandRunner
 
         return Task.FromResult(new ProcessResult(
             0,
-            E003EdlTestData.WriteSuccess(lun, startSector, sectorCount, byteLength),
+            E003EdlTestData.WriteSuccess(lun, startSector, sectorCount, copied),
             string.Empty));
     }
 
