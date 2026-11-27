@@ -173,6 +173,8 @@ public static class InternalSlotMaterialReader
     // TB710FU (ZUXOS 1.5.04.495 loaders; A and B are identical). Its xbl_config also reserves the
     // Kernel region memory@A8000000 / 0x10000000, so the same 256 MiB window arithmetic applies.
     private const string Tb710fuProfile = "tb710fu-abl495-xbl-config-ramdisk-derived";
+    private const string Tb710fuPinnedAblProfile = "tb710fu-abl279-xbl-config-kernel-region-derived";
+    private const ulong Tb710fuKernelBase = 0xA8000000UL;
     private const long Tb710fuAblBytes = 1048576;
     private const long Tb710fuXblBytes = 245760;
 
@@ -355,6 +357,21 @@ public static class InternalSlotMaterialReader
                 vendor.RamdiskSize,
                 init.RamdiskSize,
                 KnownV4Headers);
+
+            // TB710FU: when the slot's ABL is the pinned CN 279 loader (the one a locked install writes in place
+            // of a Lenovo-keyed ABL, see PinnedAospAbl.Tb710fu), the ABL identity is already hash pinned and
+            // only the slot's own xbl_config decides the window. An OTA-updated tablet keeps the pre-OTA
+            // xbl_config build on the other slot, so it is checked by structure (exactly one memory node whose
+            // MemLabel is Kernel, at 0xA8000000, 0x10000000 bytes) instead of by a list of builds.
+            if (!budget.KnownLoaderMatch)
+            {
+                budget = TryComputeTb710fuPinnedAblBudget(
+                    ablSha, abl.Length,
+                    xblBytes,
+                    vendor.PageSize,
+                    current.RamdiskSize + vendor.RamdiskSize + init.RamdiskSize,
+                    token) ?? budget;
+            }
 
             // The exact-pair fast path above is hash pinned. Only when it declines, and only on the
             // reviewed page size, may the structural recognizer promote the same-slot pair. The three
@@ -840,6 +857,43 @@ public static class InternalSlotMaterialReader
             false,
             "unrecognized loader identity: conservative 128 MiB policy, not a measured hardware limit",
             "max_raw_bytes = 134217728 (conservative fallback)");
+    }
+
+    /// <summary>
+    /// The TB710FU window budget for a slot whose ABL is exactly the pinned CN 279 loader, whatever build its
+    /// xbl_config is, as long as that xbl_config reserves the same Kernel region (memory@A8000000, 0x10000000).
+    /// Null when any of the facts differ; the caller then keeps its conservative budget.
+    /// </summary>
+    private static InternalSlotLoaderBudget? TryComputeTb710fuPinnedAblBudget(
+        string ablSha256, long ablBytes,
+        byte[] xblBytes,
+        int pageSize,
+        long total,
+        CancellationToken token)
+    {
+        PinnedAospAbl pinned = PinnedAospAbl.Tb710fu;
+        if (!string.Equals(ablSha256, pinned.ImageSha256, StringComparison.OrdinalIgnoreCase)
+            || ablBytes != pinned.ImageLength
+            || pageSize != KnownPage
+            || !InternalSlotLoaderStructure.TryMatchSm8650KernelRegion(xblBytes, token, out ulong kernelBase)
+            || kernelBase != Tb710fuKernelBase)
+        {
+            return null;
+        }
+
+        long aligned = AlignUp(total, LoaderAlign);
+        long room = LoaderWindow - LoaderHeadReserve - aligned - LoaderGuard - LoaderTailReserve;
+        if (room <= 0)
+        {
+            throw Reject("loader_budget", $"non-positive raw room {room}");
+        }
+
+        return new InternalSlotLoaderBudget(
+            Tb710fuPinnedAblProfile,
+            room,
+            true,
+            "identified the pinned TB710FU CN 279 ABL by full sha256+length (the loader a locked install writes), page 4096, three validated v4 headers; the slot's xbl_config carries exactly one memory node with MemLabel Kernel at 0xA8000000 of 0x10000000 bytes (recognized by structure, so pre-OTA builds on the other slot qualify); a 155 MiB unpacked kShimC boot was booted on the CN 279 ABL",
+            $"max_raw_bytes = 268435456 - 524288 - align_up({total}, 4096) - 8192 - 2097152");
     }
 
     /// <summary>

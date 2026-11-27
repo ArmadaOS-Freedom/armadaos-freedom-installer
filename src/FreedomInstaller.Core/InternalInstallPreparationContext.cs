@@ -1054,10 +1054,16 @@ internal sealed partial class InternalInstallPreparationContext : IDisposable
 
                 try
                 {
+                    // The ABL that will actually load this slot's boot: a GBL replacement, the pinned AOSP-capable
+                    // loader a direct proof writes over a slot whose live ABL is not AOSP-keyed (TB710FU 279), or the
+                    // live one. The loader budget and the built-source check both follow it, so a pre-OTA ABL left
+                    // on the other slot no longer decides the window of a loader that is about to be replaced.
                     VerifiedEdlFile effectiveSourceAbl = gblInputs?.Sources.TryGetValue(sourceSlot, out var gblSource) == true
                         && gblSource.Replaced
                         ? gblSource.EffectiveAbl
-                        : Claim(backupFacts.Files, "abl_" + sourceSlot);
+                        : directAblProof?.Replacements.TryGetValue("abl_" + sourceSlot, out VerifiedEdlFile? directAbl) == true
+                            ? directAbl!
+                            : Claim(backupFacts.Files, "abl_" + sourceSlot);
 
                     EdlRawBuiltBoot built = await EdlRawBootBuilder
                         .BuildAsync(
