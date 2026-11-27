@@ -201,6 +201,13 @@ public sealed partial class OfflineUpdatePackageTests
             if (executablePath == "/usr/bin/python3" && arguments.Contains("probe"))
                 return Task.FromResult(new OfflineUpdateSshCommandResult(0, BootstrapProbe(model), string.Empty));
 
+            if (executablePath == "/usr/bin/python3" && arguments.Contains("migrate"))
+                return Task.FromResult(new OfflineUpdateSshCommandResult(
+                    0,
+                    "{\"schemaVersion\":1,\"ok\":true,\"command\":\"migrate\"," +
+                    "\"state\":\"already-v3\",\"descriptorVersion\":3}",
+                    string.Empty));
+
             if (executablePath == "/usr/bin/python3" && arguments.Contains("install"))
             {
                 InstallCount++;

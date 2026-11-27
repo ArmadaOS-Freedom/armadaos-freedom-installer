@@ -264,7 +264,11 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
 
         Assert.False(result.Deployed);
         Assert.Single(session.ProbesExecuted());
-        Assert.Single(session.Uploads);
+        // The bootstrap and migration scripts are staged, but the newer
+        // runtime must never be replaced by the older bundle.
+        Assert.DoesNotContain(
+            session.Uploads,
+            u => u.Path.EndsWith("armada-offline-updater.tar.gz", StringComparison.Ordinal));
         Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
         Assert.Single(CleanupCommands(session));
     }
@@ -418,6 +422,26 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
         Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
         Assert.DoesNotContain(session.Uploads, u => u.Path.EndsWith(".tar.gz", StringComparison.Ordinal));
         Assert.Single(CleanupCommands(session));
+    }
+
+    [Fact]
+    public async Task Ensure_UnsupportedModelIsNeverMigrated()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(model: "TB999XX", entryPresent: true, version: BundleVersion, capable: true),
+                FullyCapableProbe(),
+            }),
+        };
+
+        await Coordinator().EnsureAsync(session);
+
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("migrate"));
+        Assert.DoesNotContain(
+            session.Uploads,
+            u => u.Path.EndsWith("armada-offline-recovery-migration.py", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1177,12 +1201,90 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
         Assert.Contains(OfflineUpdateBootstrapCoordinator.ReadyPhase, phases);
     }
 
+    [Fact]
+    public async Task Ensure_MigratesTheRecoveryDescriptorBeforeDeploying()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(),
+                FullyCapableProbe(),
+            }),
+        };
+        var phases = new List<string>();
+
+        await Coordinator(phases: phases).EnsureAsync(session);
+
+        var migrate = Assert.Single(session.Commands, c => c.Arguments.Contains("migrate"));
+        var install = Assert.Single(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.True(
+            session.Commands.IndexOf(migrate) < session.Commands.IndexOf(install),
+            "the descriptor must be migrated before the bundled runtime is deployed");
+        Assert.True(migrate.UseSudo);
+        Assert.Equal("/usr/bin/python3", migrate.Executable);
+        Assert.Contains(TemporaryDirectory + "/armada-offline-recovery-migration.py", migrate.Arguments);
+        Assert.Equal("TB323FU", migrate.Arguments[^1]);
+        Assert.Contains(
+            session.Uploads,
+            u => u.Path == TemporaryDirectory + "/armada-offline-recovery-migration.py");
+        Assert.Contains(OfflineUpdateBootstrapCoordinator.MigratingPhase, phases);
+    }
+
+    [Fact]
+    public async Task Ensure_DoesNotMigrateWhenTheDeviceCannotUpgrade()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[]
+            {
+                Probe(upgradeEligible: false, entryPresent: true, version: BundleVersion, capable: true),
+            }),
+        };
+
+        var result = await Coordinator().EnsureAsync(session);
+
+        Assert.False(result.Deployed);
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("migrate"));
+        Assert.DoesNotContain(
+            session.Uploads,
+            u => u.Path.EndsWith("armada-offline-recovery-migration.py", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Ensure_MigrationFailureAbortsBeforeAnyDeployment()
+    {
+        var session = new FakeSession
+        {
+            ProbeResponses = new Queue<string>(new[] { Probe() }),
+            MigrationResult = new OfflineUpdateSshCommandResult(
+                1,
+                "{\"schemaVersion\":1,\"ok\":false,\"command\":\"migrate\"," +
+                "\"error\":\"settings-not-verified\",\"message\":\"the launcher has not verified usable internal settings\"}",
+                string.Empty),
+        };
+
+        var error = await Assert.ThrowsAsync<OfflineUpdateBootstrapException>(
+            () => Coordinator().EnsureAsync(session));
+
+        Assert.Equal(OfflineUpdateBootstrapFailure.DescriptorMigrationFailed, error.Reason);
+        Assert.Contains("settings-not-verified", error.Message);
+        Assert.DoesNotContain(session.Commands, c => c.Arguments.Contains("install"));
+        Assert.DoesNotContain(
+            session.Uploads,
+            u => u.Path.EndsWith("armada-offline-updater.tar.gz", StringComparison.Ordinal));
+        Assert.Single(CleanupCommands(session));
+    }
+
     private sealed class FakeSession : IOfflineUpdateManagedSession
     {
         internal Queue<string> ProbeResponses { get; init; } = new();
 
         internal OfflineUpdateSshCommandResult InstallResult { get; init; } =
             new(0, InstallReceipt(), string.Empty);
+
+        internal OfflineUpdateSshCommandResult MigrationResult { get; init; } =
+            new(0, "{\"schemaVersion\":1,\"ok\":true,\"command\":\"migrate\",\"state\":\"already-v3\",\"descriptorVersion\":3}", string.Empty);
 
         internal string DirectoryOutput { get; init; } = TemporaryDirectory + "\n";
 
@@ -1230,6 +1332,9 @@ public sealed class OfflineUpdateBootstrapCoordinatorTests
 
             if (executablePath == "/usr/bin/python3" && arguments.Contains("install"))
                 return Task.FromResult(InstallResult);
+
+            if (executablePath == "/usr/bin/python3" && arguments.Contains("migrate"))
+                return Task.FromResult(MigrationResult);
 
             return Task.FromResult(new OfflineUpdateSshCommandResult(0, string.Empty, string.Empty));
         }

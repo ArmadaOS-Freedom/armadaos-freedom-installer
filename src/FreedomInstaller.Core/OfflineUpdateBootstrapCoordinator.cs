@@ -20,6 +20,13 @@ public enum OfflineUpdateBootstrapFailure
     /// instead.
     /// </summary>
     UpdaterIncompatible = 6,
+
+    /// <summary>
+    /// A legacy v1/v2 ARMADA_BACKUP descriptor could not be upgraded to v3.
+    /// The installed updater refuses that layout before preflight can report
+    /// anything, so continuing would only surface a less actionable error.
+    /// </summary>
+    DescriptorMigrationFailed = 7,
 }
 
 public sealed class OfflineUpdateBootstrapException : IOException
@@ -98,6 +105,7 @@ public sealed record OfflineUpdateBootstrapResult(bool Deployed, OfflineUpdateBo
 public sealed class OfflineUpdateBootstrapCoordinator
 {
     public const string ProbingPhase = "bootstrap_probe";
+    public const string MigratingPhase = "bootstrap_migrate";
     public const string DeployingPhase = "bootstrap_deploy";
     public const string VerifyingPhase = "bootstrap_verify";
     public const string ReadyPhase = "bootstrap_ready";
@@ -195,6 +203,20 @@ public sealed class OfflineUpdateBootstrapCoordinator
                     OfflineUpdateBootstrapFailure.ProbeFailed,
                     "The device is not ready for the offline updater bootstrap: " +
                     (probe.Detail ?? "the probe did not report a reason") + ".");
+            }
+
+            // The updater refuses a legacy v1/v2 ARMADA_BACKUP descriptor when
+            // it opens the trial journal, before preflight can report anything
+            // useful. Repair it here, while the only writer is this root-capable
+            // session: the migration is independent of the bundle, so a tablet
+            // whose installed runtime predates the migration is still fixed.
+            if (probe.Upgrade.Eligible &&
+                OfflineUpdateRecoveryDescriptorMigration.IsSupportedModel(probe.System.Model))
+            {
+                Report(MigratingPhase, null);
+                await OfflineUpdateRecoveryDescriptorMigration
+                    .EnsureAsync(session, directory, probe.System.Model, _useSudoForInstall, token)
+                    .ConfigureAwait(false);
             }
 
             if (!NeedsDeployment(probe))

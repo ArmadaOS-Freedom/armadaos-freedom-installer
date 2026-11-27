@@ -322,9 +322,12 @@ public sealed class OfflineUpdateSshManagedConnection : IOfflineUpdateConnection
                     catch (OfflineUpdateBootstrapException ex)
                     {
                         throw new OfflineUpdateSshManagedException(
-                            ex.Reason == OfflineUpdateBootstrapFailure.SudoUnavailable
-                                ? OfflineUpdateSshManagedFailure.SudoUnavailable
-                                : OfflineUpdateSshManagedFailure.Bootstrap,
+                            ex.Reason switch
+                            {
+                                OfflineUpdateBootstrapFailure.SudoUnavailable => OfflineUpdateSshManagedFailure.SudoUnavailable,
+                                OfflineUpdateBootstrapFailure.DescriptorMigrationFailed => OfflineUpdateSshManagedFailure.DescriptorMigration,
+                                _ => OfflineUpdateSshManagedFailure.Bootstrap,
+                            },
                             ex.Message,
                             ex);
                     }

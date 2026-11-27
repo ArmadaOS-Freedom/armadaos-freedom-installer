@@ -228,6 +228,52 @@ public sealed class OfflineUpdateSshConnectionTests : IDisposable
     }
 
     [LinuxFact]
+    public async Task Connect_MigratesTheRecoveryDescriptorOverTheKeyRoute()
+    {
+        var connection = await OfflineUpdateSshConnection.ConnectAsync(FakeOptions("success"));
+        try
+        {
+            var log = File.ReadAllLines(Path.Combine(_directory, "migration.log"));
+            Assert.Contains("migrate --model TB323FU", log[0], StringComparison.Ordinal);
+            Assert.StartsWith("script-bytes=", log[1], StringComparison.Ordinal);
+            Assert.True(int.Parse(log[1]["script-bytes=".Length..]) > 1000);
+        }
+        finally
+        {
+            await connection.DisposeAsync();
+        }
+        await AssertOwnedProcessExited();
+    }
+
+    [LinuxFact]
+    public async Task Connect_FailsWhenTheRecoveryMigrationIsRefused()
+    {
+        var ex = await Assert.ThrowsAsync<IOException>(() =>
+            OfflineUpdateSshConnection.ConnectAsync(FakeOptions("migrate-fail")));
+        Assert.Contains("settings-not-verified", ex.Message, StringComparison.Ordinal);
+        await AssertOwnedProcessExited();
+    }
+
+    [LinuxTheory]
+    [InlineData("no-mutating-upgrade")]
+    [InlineData("tb710fu-legacy")]
+    [InlineData("armada-boot-with-slots")]
+    public async Task Connect_DoesNotMigrateWhenTheDeviceCannotTakeAMutatingUpgrade(string mode)
+    {
+        var connection = await OfflineUpdateSshConnection.ConnectAsync(FakeOptions(mode));
+        try
+        {
+            Assert.NotEqual(JsonValueKind.Undefined, connection.DeviceInfo.GetProperty("model").ValueKind);
+        }
+        finally
+        {
+            await connection.DisposeAsync();
+        }
+        Assert.False(File.Exists(Path.Combine(_directory, "migration.log")));
+        await AssertOwnedProcessExited();
+    }
+
+    [LinuxFact]
     public async Task BrokenFrame_FailsWithoutRetryAndProcessExits()
     {
         var ex = await Assert.ThrowsAsync<IOException>(() =>
@@ -412,6 +458,16 @@ public sealed class OfflineUpdateSshConnectionTests : IDisposable
     private const string Script = @"#!/usr/bin/python3
 import json, os, sys, time
 cwd = os.getcwd()
+if 'armada-offline-migration' in sys.argv[-1]:
+    data = sys.stdin.buffer.read()
+    with open(os.path.join(cwd, 'migration.log'), 'w', encoding='utf-8') as f:
+        f.write(sys.argv[-1] + '\n')
+        f.write('script-bytes=' + str(len(data)) + '\n')
+    if 'migrate-fail' in sys.argv:
+        print('{""schemaVersion"":1,""ok"":false,""command"":""migrate"",""error"":""settings-not-verified"",""message"":""not verified""}')
+        sys.exit(1)
+    print('{""schemaVersion"":1,""ok"":true,""command"":""migrate"",""state"":""already-v3"",""descriptorVersion"":3}')
+    sys.exit(0)
 with open(os.path.join(cwd, 'argv.json'), 'w', encoding='utf-8') as f:
     json.dump(sys.argv[1:], f)
 with open(os.path.join(cwd, 'pid.txt'), 'w', encoding='utf-8') as f:
@@ -446,7 +502,15 @@ while True:
         sys.stdout.buffer.flush()
         sys.exit(0)
     if method == 'info':
-        result = {'schemaVersion': 1, 'updaterVersion': '0.8.0', 'model': 'TB323FU', 'recoveryGuid': '01234567-89ab-cdef-0123-456789abcdef', 'receivedMethod': method}
+        result = {'schemaVersion': 1, 'updaterVersion': '0.8.0', 'model': 'TB323FU', 'bootPolicy': 'dual-boot-no-slot-control', 'actualSlot': 'a', 'inactiveSlot': 'b', 'recoveryGuid': '01234567-89ab-cdef-0123-456789abcdef', 'receivedMethod': method}
+        if mode == 'no-mutating-upgrade':
+            result['bootPolicy'] = 'legacy-single-slot'
+        elif mode == 'tb710fu-legacy':
+            result['model'] = 'TB710FU'
+            result['actualSlot'] = None
+            result['inactiveSlot'] = None
+        elif mode == 'armada-boot-with-slots':
+            result['bootSource'] = 'armada_boot'
     else:
         result = {'receivedMethod': method, 'sessionId': '0123456789abcdef0123456789abcdef'}
     response = {'protocolVersion': 1, 'id': request['id'], 'ok': True, 'result': result}
@@ -460,6 +524,15 @@ if mode == 'stubborn':
 internal sealed class LinuxFactAttribute : FactAttribute
 {
     public LinuxFactAttribute()
+    {
+        if (!OperatingSystem.IsLinux() || !File.Exists("/usr/bin/python3"))
+            Skip = "Requires Linux and /usr/bin/python3.";
+    }
+}
+
+internal sealed class LinuxTheoryAttribute : TheoryAttribute
+{
+    public LinuxTheoryAttribute()
     {
         if (!OperatingSystem.IsLinux() || !File.Exists("/usr/bin/python3"))
             Skip = "Requires Linux and /usr/bin/python3.";
