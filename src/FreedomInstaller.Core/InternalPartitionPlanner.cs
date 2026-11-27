@@ -78,22 +78,17 @@ public static class InternalPartitionPlanner
     /// space Android currently uses is never read.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="original"/> or <paramref name="range"/> is null.</exception>
-    /// <exception cref="InvalidOperationException">The installed Linux layout is ambiguous, as for <see cref="FindInstalledLinuxLayout"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The table has no or more than one userdata partition, or the installed Linux layout is ambiguous, exactly as for
+    /// <see cref="Plan"/> and <see cref="FindInstalledLinuxLayout"/>.
+    /// </exception>
     public static long DefaultAndroidGiB(GptTable original, AndroidAllocationRange range)
     {
         ArgumentNullException.ThrowIfNull(original);
         ArgumentNullException.ThrowIfNull(range);
-        long userdataBytes = 0;
-        foreach (GptPartition partition in original.Partitions)
-        {
-            if (string.Equals(partition.Name, "userdata", StringComparison.OrdinalIgnoreCase))
-            {
-                userdataBytes = partition.SectorCount * (long)original.SectorSize;
-                break;
-            }
-        }
-
-        long wholeGiB = userdataBytes / GiB;
+        // The same userdata lookup as Plan and GetAndroidRange (trimmed, case-insensitive, unique).
+        GptPartition userdata = FindUserdata(original.Partitions);
+        long wholeGiB = userdata.SectorCount * (long)original.SectorSize / GiB;
         bool reinstall = FindInstalledLinuxLayout(original) is not null;
         long proposal = reinstall ? wholeGiB : wholeGiB / 2;
         return Math.Clamp(proposal, range.MinimumGiB, range.MaximumGiB);

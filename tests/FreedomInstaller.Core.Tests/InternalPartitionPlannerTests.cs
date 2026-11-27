@@ -306,6 +306,20 @@ public sealed class InternalPartitionPlannerTests
     }
 
     [Fact]
+    public void DefaultAndroidGiB_FindsUserdataLikeThePlanner()
+    {
+        // A padded, differently cased userdata name is the planner's userdata too, so the reinstall default stays 107.
+        GptTable table = Table(
+            4096, 251456913408L, 6, 61390842,
+            Part(2, "  UserData  ", 5105064, 28049408),
+            Part(3, "ARMADA_BOOT", 33154560, 262144),
+            Part(4, "ARMADA_ROOT", 33416704, 27449600),
+            Part(5, "ARMADA_BACKUP", 60866304, 524288));
+
+        Assert.Equal(107, InternalPartitionPlanner.DefaultAndroidGiB(table, Range(table)));
+    }
+
+    [Fact]
     public void DefaultAndroidGiB_IsClampedIntoTheRange()
     {
         GptTable table = Tb710fuInstalledTable();
