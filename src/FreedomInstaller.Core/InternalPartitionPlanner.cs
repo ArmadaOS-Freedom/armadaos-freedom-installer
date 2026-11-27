@@ -71,6 +71,35 @@ public static class InternalPartitionPlanner
         => BuildPlan(original, androidGiB, storage);
 
     /// <summary>
+    /// The default Android size both installer windows offer before the user moves the slider. A fresh or old-route
+    /// table proposes half of the original userdata (whole GiB); a reinstall, whose original table already carries
+    /// the installed Linux layout (<see cref="FindInstalledLinuxLayout"/>), proposes the whole userdata (whole GiB)
+    /// so leaving the slider alone keeps the Android data. The proposal is clamped into <paramref name="range"/>; the
+    /// space Android currently uses is never read.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="original"/> or <paramref name="range"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">The installed Linux layout is ambiguous, as for <see cref="FindInstalledLinuxLayout"/>.</exception>
+    public static long DefaultAndroidGiB(GptTable original, AndroidAllocationRange range)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(range);
+        long userdataBytes = 0;
+        foreach (GptPartition partition in original.Partitions)
+        {
+            if (string.Equals(partition.Name, "userdata", StringComparison.OrdinalIgnoreCase))
+            {
+                userdataBytes = partition.SectorCount * (long)original.SectorSize;
+                break;
+            }
+        }
+
+        long wholeGiB = userdataBytes / GiB;
+        bool reinstall = FindInstalledLinuxLayout(original) is not null;
+        long proposal = reinstall ? wholeGiB : wholeGiB / 2;
+        return Math.Clamp(proposal, range.MinimumGiB, range.MaximumGiB);
+    }
+
+    /// <summary>
     /// Returns the inclusive whole-GiB Android range that <see cref="Plan"/> accepts for
     /// <paramref name="original"/> and <paramref name="storage"/>: the smallest choice is 16 GiB and the
     /// largest is the biggest whole GiB that still satisfies the same acceptance rules.

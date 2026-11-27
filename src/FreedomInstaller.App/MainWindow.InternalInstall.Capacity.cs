@@ -434,7 +434,8 @@ public partial class MainWindow
         }
 
         var previous = _internalInstallAndroidGiB;
-        var proposal = InternalInstallDefaultAndroidGiB(table, range);
+        // 默认提案（Core，两个窗口同一个）：全新 / 旧路线取 userdata 的一半；重装取整个 userdata，不动滑条即保留安卓数据。
+        var proposal = InternalPartitionPlanner.DefaultAndroidGiB(table, range);
 
         // 同一路径重新校验时保留用户已经选过的合法值；只有超出新范围才退回提案。
         var chosen = previous >= range.MinimumGiB && previous <= range.MaximumGiB
@@ -456,33 +457,6 @@ public partial class MainWindow
         }
 
         return ApplyInternalInstallCapacityPlan(chosen);
-    }
-
-    /// <summary>
-    /// 默认提案：全新 / 旧路线取原始 userdata 整 GiB 的一半；重装（原始 GPT 已是已安装 Linux 布局）取整个
-    /// userdata 范围（whole GiB）。两者都夹到真实范围内，不读取当前安卓已用空间。
-    /// </summary>
-    private static long InternalInstallDefaultAndroidGiB(GptTable table, AndroidAllocationRange range)
-    {
-        long userdataBytes = 0;
-        foreach (var partition in table.Partitions)
-        {
-            if (string.Equals(partition.Name, "userdata", StringComparison.OrdinalIgnoreCase))
-            {
-                userdataBytes = partition.SectorCount * (long)table.SectorSize;
-                break;
-            }
-        }
-
-        var wholeGiB = userdataBytes / Gibibyte;
-        bool reinstall = InternalPartitionPlanner.FindInstalledLinuxLayout(table) is not null;
-        var proposal = reinstall ? wholeGiB : wholeGiB / 2;
-        if (proposal < range.MinimumGiB)
-        {
-            return range.MinimumGiB;
-        }
-
-        return proposal > range.MaximumGiB ? range.MaximumGiB : proposal;
     }
 
     /// <summary>滑条移动：只重算规划并作废旧方案对象；不写文件、不哈希、不重建 GPT。</summary>
