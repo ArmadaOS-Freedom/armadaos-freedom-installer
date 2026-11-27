@@ -107,6 +107,12 @@
     <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.Diagnostics.cs"
                       LogicalName="FreedomInstaller.Tests.MainWindow.Diagnostics.cs"
                       Link="MainWindow.Diagnostics.cs" />
+    <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.InternalInstall.Capacity.cs"
+                      LogicalName="FreedomInstaller.Tests.MainWindow.InternalInstall.Capacity.cs"
+                      Link="MainWindow.InternalInstall.Capacity.cs" />
+    <EmbeddedResource Include="..\..\src\FreedomInstaller.Mac\MainWindow.Install.cs"
+                      LogicalName="FreedomInstaller.Tests.Mac.MainWindow.Install.cs"
+                      Link="Mac.MainWindow.Install.cs" />
     <EmbeddedResource Include="..\..\src\FreedomInstaller.App\MainWindow.Functions.cs"
                       LogicalName="FreedomInstaller.Tests.MainWindow.Functions.cs"
                       Link="MainWindow.Functions.cs" />

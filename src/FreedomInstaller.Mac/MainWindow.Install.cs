@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
@@ -55,7 +55,7 @@ public partial class MainWindow
     private InternalInstallBackend? _internalInstallBackend;
     private bool _internalInstallExecutionActive;
     private bool _internalInstallExecuteAttempted;
-    private string? _internalInstallExecutionError;
+    private UiMessage? _internalInstallExecutionError;
     private string? _lastProgressLog;
 
     private sealed record PowerSample(int? Percentage, bool? ExternalPower, DateTimeOffset CapturedAt);
@@ -432,12 +432,11 @@ public partial class MainWindow
                 acceptProgress = false;
                 _internalInstallDeviceCheck = null;
                 _internalInstallPower = null;
-                var diagnostic = string.IsNullOrWhiteSpace(exception.Message) ? UnknownValue : exception.Message;
                 var failure = UiText.BootloaderCompatibilityFailure(exception)
-                    ?? M("Dynamic.InternalInstall.Check.Failed", diagnostic);
+                    ?? M("Dynamic.InternalInstall.Check.Failed", exception);
                 SetText(InternalInstallCheckProgressText, failure);
                 SetText(InternalInstallCheckStatusText, failure);
-                AppendLog(failure);
+                AppendLog(M("Dynamic.RawValue", exception.ToString()));
             }
         });
     }
@@ -680,12 +679,12 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(path))
         {
-            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedOriginal"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedOriginal"));
         }
         var resolved = UninstallBackupDirectorySelection.Resolve(path);
         if (resolved.Kind != UninstallBackupDirectorySelection.SelectionKind.Selected || resolved.DirectoryPath is null)
         {
-            throw new InvalidOperationException(T("Dynamic.RecoverySource.NeedSpecificOriginal"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.RecoverySource.NeedSpecificOriginal"));
         }
         var recovery = await InternalInstallBackup.OpenRecoveryAsync(client, resolved.DirectoryPath, token: token);
         try { BoardRecoveryBackup.ValidateSourceForReuse(current, recovery); }
@@ -833,7 +832,7 @@ public partial class MainWindow
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
                 InternalInstallBackupProgressBar.IsIndeterminate = false;
-                SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Check.Failed", exception.Message);
+                SetText(InternalInstallBackupStatusText, "Dynamic.InternalInstall.Check.Failed", exception);
                 SetText(InternalInstallBackupVerifiedText, "Dynamic.InternalInstall.Backup.FailedNote");
                 AppendLog(M("Dynamic.InternalInstall.Check.Failed", exception.Message));
             }
@@ -988,7 +987,7 @@ public partial class MainWindow
                 {
                     object reasons = validation.Storage is null && validation.IsValid
                         ? M("Dynamic.InternalInstall.Capacity.StorageMissing")
-                        : string.Join(T("Dynamic.Package.ReasonSeparator"), validation.Reasons);
+                        : validation;
                     SetText(InternalInstallPackageStatusText, "Dynamic.InternalInstall.Capacity.Invalid", reasons);
                     if (!validation.IsValid)
                         AppendLog(M("Dynamic.RawValue", string.Join(" | ", validation.Reasons)));
@@ -1229,7 +1228,7 @@ public partial class MainWindow
                 if (_internalInstallBackend is not null)
                 {
                     // Never replace a backend that could not be released.
-                    throw new InvalidOperationException(T("Dynamic.InternalInstall.Execution.ReleaseBlocked"));
+                    throw new LocalizedInvalidOperationException(M("Dynamic.InternalInstall.Execution.ReleaseBlocked"));
                 }
 
                 SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Prepared.PreparingArtifacts");
@@ -1260,13 +1259,7 @@ public partial class MainWindow
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
                 ResetConfirmation();
-                var key = UiText.BootloaderCompatibilityFailure(exception, check.FastbootLockState)
-                    ?? (exception.Message switch
-                    {
-                        var m when m.StartsWith("requires-complete-backup-with-efisp:", StringComparison.Ordinal) =>
-                            M("Dynamic.InternalInstall.Prepared.CompleteBackupWithEfispRequired"),
-                        _ => M("Dynamic.InternalInstall.Prepared.Failed", exception.Message),
-                    });
+                var key = UiText.InternalInstallPreparationFailure(exception, check.FastbootLockState);
                 SetText(InternalInstallCapacityStatusText, key);
                 AppendLog(key);
                 // Same technical-details line as the Windows window; the failure text above carries no detail.
@@ -1319,6 +1312,13 @@ public partial class MainWindow
             InternalInstallConfirmBootBackupText,
             inactiveWarning is null ? bootMessage : M("Dynamic.InternalInstall.Execution.WithFailureDetails", bootMessage, inactiveWarning));
 
+        var preserveAndroid = prepared.AndroidDataErase == false;
+        SetText(InternalInstallConfirmWarningText, preserveAndroid
+            ? "Dynamic.InternalInstall.Execution.Warning.PreserveAndroid"
+            : "Static.InternalInstall.Confirm.Warning");
+        SetText(InternalInstallEraseRiskText, preserveAndroid
+            ? "Dynamic.InternalInstall.Execution.EraseRisk.PreserveAndroid"
+            : "Static.InternalInstall.Confirm.EraseRisk");
         InternalInstallVerificationDetails.IsExpanded = false;
         InternalInstallEraseRiskCheck.IsChecked = false;
         InternalInstallEraseRiskCheck.IsEnabled = backup is not null && validation is { IsValid: true };
@@ -1394,7 +1394,9 @@ public partial class MainWindow
             UnknownValue));
         SetText(InternalInstallCapacityStatusText, "Dynamic.InternalInstall.Prepared.StatusReady");
         SetText(InternalInstallConfirmStatusText, "Dynamic.InternalInstall.Prepared.StatusReady");
-        SetText(InternalInstallConfirmLeadText, "Dynamic.InternalInstall.Execution.Lead.Ready");
+        SetText(InternalInstallConfirmLeadText, preserveAndroid
+            ? "Dynamic.InternalInstall.Execution.Lead.Ready.PreserveAndroid"
+            : "Dynamic.InternalInstall.Execution.Lead.Ready");
         SetText(InternalInstallAcceptanceStatusText, "Dynamic.InternalInstall.Execution.Acceptance.NotStarted");
     }
 
@@ -1466,7 +1468,9 @@ public partial class MainWindow
         var answer = await MessageDialog.AskAsync(
             this,
             T("Dynamic.InternalInstall.Execution.Dialog.Title"),
-            T("Dynamic.InternalInstall.Execution.Dialog.Body",
+            T(prepared.AndroidDataErase == false
+                    ? "Dynamic.InternalInstall.Execution.Dialog.Body.PreserveAndroid"
+                    : "Dynamic.InternalInstall.Execution.Dialog.Body",
                 UiText.ModelName(_internalInstallBackup!.Model),
                 prepared.AndroidSerial,
                 FormatExecutionBytes(prepared.AndroidGiB * Gibibyte),
@@ -1501,7 +1505,7 @@ public partial class MainWindow
             {
                 if (backend.Snapshot.WriteState == InternalInstallWriteState.NoneIssued)
                 {
-                    _internalInstallExecutionError = exception.Message;
+                    _internalInstallExecutionError = UiText.DisplayError(exception);
                 }
 
                 AppendLog(M("Dynamic.InternalInstall.Execution.Log.Exception", exception.Message));
@@ -1515,7 +1519,7 @@ public partial class MainWindow
                     if (backend.Snapshot.WriteState == InternalInstallWriteState.NoneIssued
                         && result.Outcome is InternalInstallOutcome.Failed or InternalInstallOutcome.Cancelled)
                     {
-                        _internalInstallExecutionError ??= result.Diagnostic ?? result.ErrorCode;
+                        _internalInstallExecutionError ??= UiText.InternalInstallExecutionFailure(result);
                     }
 
                     AppendLog(M(
@@ -1568,12 +1572,14 @@ public partial class MainWindow
         var snapshot = backend?.Snapshot;
         if (snapshot is null || !snapshot.ExecutionStarted || snapshot.WriteState == InternalInstallWriteState.NoneIssued)
         {
-            SetText(InternalInstallConfirmLeadText, "Dynamic.InternalInstall.Execution.Lead.Ready");
+            SetText(InternalInstallConfirmLeadText, backend?.Prepared.AndroidDataErase == false
+                ? "Dynamic.InternalInstall.Execution.Lead.Ready.PreserveAndroid"
+                : "Dynamic.InternalInstall.Execution.Lead.Ready");
             if (_internalInstallExecutionActive)
             {
                 SetText(InternalInstallConfirmStatusText, "Dynamic.InternalInstall.Execution.Status.Starting");
             }
-            else if (!string.IsNullOrWhiteSpace(_internalInstallExecutionError))
+            else if (_internalInstallExecutionError is not null)
             {
                 SetText(InternalInstallConfirmStatusText, "Dynamic.InternalInstall.Execution.PrewriteFailed", _internalInstallExecutionError);
             }
@@ -1644,8 +1650,8 @@ public partial class MainWindow
 
     private UiMessage FailureDetails(InternalInstallSnapshot snapshot, InternalInstallResult? result)
     {
-        object diagnostic = !string.IsNullOrWhiteSpace(result?.Diagnostic) ? result!.Diagnostic!
-            : !string.IsNullOrWhiteSpace(_internalInstallExecutionError) ? _internalInstallExecutionError!
+        object diagnostic = !string.IsNullOrWhiteSpace(result?.Diagnostic) ? UiText.InternalInstallExecutionFailure(result!)
+            : _internalInstallExecutionError is not null ? _internalInstallExecutionError
             : M("Dynamic.InternalInstall.Execution.NoDiagnostic");
         return M(
             "Dynamic.InternalInstall.Execution.FailureDetails",
@@ -1875,7 +1881,8 @@ public partial class MainWindow
                     }
                     catch (Exception exception) when (exception is not OutOfMemoryException)
                     {
-                        SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ProofFailed", exception.Message);
+                        SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ProofFailed", exception);
+                        AppendLog(M("Dynamic.RawValue", exception.ToString()));
                         return;
                     }
                 }
@@ -1889,7 +1896,8 @@ public partial class MainWindow
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
-                    SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ResetUnknown", exception.Message);
+                    SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ResetUnknown", exception);
+                    AppendLog(M("Dynamic.RawValue", exception.ToString()));
                 }
             }
             else
@@ -1899,7 +1907,7 @@ public partial class MainWindow
 
             var transport = Transport;
             var deadline = DateTime.UtcNow.AddMinutes(4);
-            string? lastError = null;
+            Exception? lastError = null;
             while (DateTime.UtcNow < deadline)
             {
                 await Task.Delay(TimeSpan.FromSeconds(3), token);
@@ -1944,12 +1952,14 @@ public partial class MainWindow
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
                 {
-                    lastError = exception.Message;
-                    SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.Retrying", lastError);
+                    lastError = exception;
+                    SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.Retrying", UiText.DisplayError(exception));
                 }
             }
 
-            SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ReturnUnconfirmed", lastError ?? UnknownValue);
+            SetText(InternalInstallExitMaintenanceStatusText, "Dynamic.InternalInstall.Exit.ReturnUnconfirmed", lastError);
+            if (lastError is not null)
+                AppendLog(M("Dynamic.RawValue", lastError.ToString()));
         });
 
         if (!_internalInstallExitVerified)

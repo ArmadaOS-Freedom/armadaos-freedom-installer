@@ -108,7 +108,7 @@ public static partial class PackageImporter
             {
                 reasons.AddRange(validation.Reasons);
                 DeleteStage(stage, root, reasons);
-                return Invalid(sourcePath, expectedModel, reasons);
+                return Invalid(sourcePath, expectedModel, reasons, validation.UserIssue);
             }
 
             if (!string.Equals(validation.Version, bundleVersion, StringComparison.Ordinal))
@@ -130,7 +130,7 @@ public static partial class PackageImporter
         {
             reasons.Add($"导入安装包时发生错误：{exception.Message}");
             DeleteStage(stage, root, reasons);
-            return Invalid(sourcePath, expectedModel, reasons);
+            return Invalid(sourcePath, expectedModel, reasons, PackageValidationIssue.FromException(exception));
         }
     }
 

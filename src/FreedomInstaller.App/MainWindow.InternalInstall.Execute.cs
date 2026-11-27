@@ -52,7 +52,7 @@ public partial class MainWindow
     /// 只在真实执行入口捕获的安装前复核失败原因（来自后端诊断或实际异常）。
     /// 仅用于界面说明，绝不参与任何权限、写入或完成判断；后端一旦真正开始写入就不会显示。
     /// </summary>
-    private string? _internalInstallExecutionError;
+    private UiMessage? _internalInstallExecutionError;
 
     /// <summary>
     /// 当前实例是否已经真正开始过写入（以后端快照为唯一依据）。
@@ -313,7 +313,8 @@ public partial class MainWindow
             // 入口自身的异常同样只在尚未开始写入时作为可见原因；不猜测任何设备状态。
             if (!HasInternalInstallExecutionStarted)
             {
-                _internalInstallExecutionError = exception.Message;
+                _internalInstallExecutionError = UiText.DisplayError(exception);
+                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Execute"), exception);
             }
 
             AppendLocalizedLog(
@@ -416,7 +417,7 @@ public partial class MainWindow
                 {
                     if (backend.Snapshot.WriteState == InternalInstallWriteState.NoneIssued)
                     {
-                        _internalInstallExecutionError = exception.Message;
+                        _internalInstallExecutionError = UiText.DisplayError(exception);
                     }
 
                     AppendLocalizedLog(M("Dynamic.InternalInstall.Execution.Log.Cancelled"));
@@ -427,14 +428,14 @@ public partial class MainWindow
                     // 准入标记无法区分「被拒绝」与「已写入」，只有写状态仍是 NoneIssued 才说明确实没有写入。
                     if (backend.Snapshot.WriteState == InternalInstallWriteState.NoneIssued)
                     {
-                        _internalInstallExecutionError = exception.Message;
+                        _internalInstallExecutionError = UiText.DisplayError(exception);
                     }
 
                     AppendLocalizedLog(
                         M("Dynamic.InternalInstall.Execution.Log.Exception", exception.Message));
                     RecordDiagnosticFailure(
                         M("Dynamic.Diagnostics.Stage.Execute"),
-                        exception.Message);
+                        exception);
                 }
                 finally
                 {
@@ -529,13 +530,11 @@ public partial class MainWindow
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(result.Diagnostic))
+        if (result.WorkDiskSpaceFailure is not null
+            || !string.IsNullOrWhiteSpace(result.Diagnostic)
+            || !string.IsNullOrWhiteSpace(result.ErrorCode))
         {
-            _internalInstallExecutionError = result.Diagnostic;
-        }
-        else if (!string.IsNullOrWhiteSpace(result.ErrorCode))
-        {
-            _internalInstallExecutionError = result.ErrorCode;
+            _internalInstallExecutionError = UiText.InternalInstallExecutionFailure(result);
         }
     }
 
@@ -709,7 +708,7 @@ public partial class MainWindow
         {
             SetText(InternalInstallConfirmLeadText, readyLeadKey);
             if (!_internalInstallExecutionActive
-                && !string.IsNullOrWhiteSpace(_internalInstallExecutionError))
+                && _internalInstallExecutionError is not null)
             {
                 SetText(
                     InternalInstallConfirmStatusText,
@@ -742,12 +741,10 @@ public partial class MainWindow
             {
                 SetText(InternalInstallConfirmStatusText, "Dynamic.InternalInstall.Execution.Status.Starting");
             }
-            else if (prewriteTerminal || !string.IsNullOrWhiteSpace(_internalInstallExecutionError))
+            else if (prewriteTerminal || _internalInstallExecutionError is not null)
             {
                 // 只显示真实捕获到的后端诊断 / 异常；安装尚未开始，不声称任何个人数据状态。
-                object reason = string.IsNullOrWhiteSpace(_internalInstallExecutionError)
-                    ? M("Dynamic.InternalInstall.Execution.NoDiagnostic")
-                    : _internalInstallExecutionError!;
+                var reason = _internalInstallExecutionError ?? M("Dynamic.InternalInstall.Execution.NoDiagnostic");
 
                 UiMessage text = M("Dynamic.InternalInstall.Execution.PrewriteFailed", reason);
 
@@ -883,12 +880,12 @@ public partial class MainWindow
         object diagnostic;
         if (!string.IsNullOrWhiteSpace(result?.Diagnostic))
         {
-            diagnostic = result!.Diagnostic!;
+            diagnostic = UiText.InternalInstallExecutionFailure(result!);
         }
-        else if (!string.IsNullOrWhiteSpace(_internalInstallExecutionError))
+        else if (_internalInstallExecutionError is not null)
         {
             // 只回退到执行入口实际捕获的写入前异常；两者都没有时如实说明后端未提供原因。
-            diagnostic = _internalInstallExecutionError!;
+            diagnostic = _internalInstallExecutionError;
         }
         else
         {
@@ -1162,7 +1159,8 @@ public partial class MainWindow
         {
             RecordDiagnosticFailure(
                 M("Dynamic.Diagnostics.Stage.Execute"),
-                result.Diagnostic ?? result.ErrorCode);
+                result.Diagnostic ?? result.ErrorCode,
+                UiText.InternalInstallExecutionFailure(result));
         }
     }
 

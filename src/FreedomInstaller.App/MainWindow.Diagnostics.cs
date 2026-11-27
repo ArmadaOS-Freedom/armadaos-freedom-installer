@@ -38,9 +38,7 @@ public partial class MainWindow
     private bool _diagnosticAblAvailable;
     private bool _diagnosticBootAvailable;
 
-    // Full failure context kept for the diagnostic summary only. The UI keeps showing
-    // the first line as before; the summary redaction reads this nullable field so a
-    // multi-line reason is not truncated to what the label displays.
+    // Full failure context is redacted for export independently of the localized banner.
     private string? _diagnosticLastFailureFullDetail;
 
     // Immutable snapshot of the most recent successful device check and when it was observed.
@@ -73,19 +71,19 @@ public partial class MainWindow
     }
 
     /// <summary>记录最近一次诊断失败；面板在首次失败后可见，导出失败不清空此内容。</summary>
-    private void RecordDiagnosticFailure(UiMessage stage, string? detail)
-        => RecordDiagnosticFailure(stage, detail, detail);
+    private void RecordDiagnosticFailure(UiMessage stage, Exception exception)
+        => RecordDiagnosticFailure(stage, InstallerLog.DescribeFailure(exception), UiText.DisplayError(exception));
 
     /// <summary>
     /// 记录最近一次诊断失败：<paramref name="fullDetail"/> 存入完整上下文供导出脱敏使用，
-    /// <paramref name="displayDetail"/> 只用于面板首行展示。
+    /// <paramref name="displayDetail"/> 随当前界面语言渲染，不能传入已格式化的日志文本。
     /// <paramref name="attemptBootFiles"/> 仅在失败备份发布尝试快照时非空；
     /// 其余调用一律省略或传 null 并清除旧尝试快照。
     /// </summary>
     private void RecordDiagnosticFailure(
         UiMessage stage,
         string? fullDetail,
-        string? displayDetail,
+        UiMessage displayDetail,
         IReadOnlyList<DiagnosticBootFile>? attemptBootFiles = null)
     {
         _diagnosticLastFailureFullDetail = string.IsNullOrWhiteSpace(fullDetail) ? null : fullDetail;
@@ -93,9 +91,8 @@ public partial class MainWindow
         _diagnosticAttemptBootEvidence = attemptBootFiles is { Count: > 0 }
             ? new List<DiagnosticBootFile>(attemptBootFiles).AsReadOnly()
             : null;
-        var firstLine = FirstLine(displayDetail);
         if (DiagnosticFailureText is not null)
-            SetText(DiagnosticFailureText, "Dynamic.Diagnostics.Failure", stage, firstLine);
+            SetText(DiagnosticFailureText, "Dynamic.Diagnostics.Failure", stage, displayDetail);
         if (DiagnosticFailurePanel is not null)
             DiagnosticFailurePanel.Visibility = _showingDiagnostics ? Visibility.Collapsed : Visibility.Visible;
         NoteDiagnosticAttachmentFailure(stage);
@@ -518,13 +515,4 @@ public partial class MainWindow
         }
     }
 
-    private static string FirstLine(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
-        var idx = text.IndexOfAny(new[] { '\r', '\n' });
-        var line = idx >= 0 ? text.Substring(0, idx) : text;
-        line = line.Trim();
-        if (line.Length > 200) line = line.Substring(0, 200);
-        return line;
-    }
 }

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using FreedomInstaller.Core;
 
 namespace FreedomInstaller.App;
@@ -168,6 +169,9 @@ internal sealed class UiText
     internal string GetForDisplay(string key, params object?[] args) =>
         string.IsNullOrEmpty(key) ? string.Empty : FormatKey(key, args, 0, true);
 
+    internal static UiMessage InternalInstallExecutionFailure(InternalInstallResult result) =>
+        DisplayError((object?)result.WorkDiskSpaceFailure ?? result.Diagnostic ?? result.ErrorCode);
+
     /// <summary>
     /// Maps a raw or untyped value flowing to the visible surface onto a localized semantic message.
     /// Already-localized messages are passed through; null or blank values become a neutral fallback.
@@ -182,12 +186,65 @@ internal sealed class UiText
                 return new UiMessage("Dynamic.ErrorDetail.Generic");
             return message;
         }
+
+        if (value is InternalInstallWorkDiskSpaceException space)
+        {
+            return WorkDiskSpaceFailure(space);
+        }
+
+        if (value is BackupDestinationSpaceException backupSpace)
+        {
+            return new UiMessage("Dynamic.ErrorDetail.BackupDestinationSpace",
+                RoundGiBDown(backupSpace.AvailableBytes), RoundGiBUp(backupSpace.RequiredBytes));
+        }
+
+        if (value is BoardRecoverySpaceException boardSpace)
+        {
+            return new UiMessage("Dynamic.ErrorDetail.BoardRecoverySpace",
+                RoundGiBDown(boardSpace.AvailableBytes), RoundGiBUp(boardSpace.RequiredBytes));
+        }
+
+        if (value is InternalInstallLinuxSpaceException linuxSpace)
+        {
+            return new UiMessage(
+                linuxSpace.AndroidGiB > linuxSpace.MinimumAndroidGiB
+                    ? "Dynamic.ErrorDetail.LinuxSpaceAdjustAllocation"
+                    : "Dynamic.ErrorDetail.LinuxSpaceTooSmall",
+                RoundGiBDown(linuxSpace.AvailableLinuxBytes),
+                RoundGiBUp(linuxSpace.RequiredLinuxBytes),
+                linuxSpace.MinimumAndroidGiB);
+        }
+
+        if (value is MaintenanceException maintenance)
+        {
+            return new UiMessage("Dynamic.ErrorDetail.Maintenance" + (maintenance.Code switch
+            {
+                MaintenanceErrorCode.UnsupportedProfile => "Unsupported",
+                MaintenanceErrorCode.ModelMismatch => "ModelMismatch",
+                MaintenanceErrorCode.BuildMismatch => "BuildMismatch",
+                MaintenanceErrorCode.MissingAsset => "MissingAsset",
+                MaintenanceErrorCode.AssetSizeMismatch or MaintenanceErrorCode.AssetHashMismatch => "Integrity",
+                MaintenanceErrorCode.UnsafeEnvironment => "WorkDirectory",
+                MaintenanceErrorCode.HandshakeMismatch => "HandshakeMismatch",
+                _ => "InvalidBundle",
+            }));
+        }
+
+        if (value is InternalStorageReadException storage)
+        {
+            return new UiMessage(storage.Failure == InternalStorageReadFailure.Unavailable
+                ? "Dynamic.ErrorDetail.StorageUnavailable"
+                : "Dynamic.ErrorDetail.StorageInvalid");
+        }
+
         var text = value is Exception exception ? exception.Message : value as string;
         if (!string.IsNullOrEmpty(text))
         {
-            var match = System.Text.RegularExpressions.Regex.Match(text, @"\ANo EDL endpoint for serial \S+ appeared within ([0-9]+(?:[.,][0-9]+)?) seconds\.\z");
+            var match = Regex.Match(text, @"\ANo EDL endpoint for serial \S+ appeared within ([0-9]+(?:[.,][0-9]+)?) seconds\.\z");
             if (match.Success)
                 return new UiMessage("Dynamic.ErrorDetail.EdlTimeout", match.Groups[1].Value);
+            if (BootImageSizeFailure(text) is { } bootImageSize)
+                return bootImageSize;
             if (text.StartsWith("requires-compatible-bootloader:", StringComparison.Ordinal) || text.StartsWith("blocked-locked-g4-first-install-firmware:", StringComparison.Ordinal))
                 return new UiMessage("Dynamic.ErrorDetail.Compatibility");
         }
@@ -196,6 +253,11 @@ internal sealed class UiText
             TimeoutException => "Timeout",
             UnauthorizedAccessException or System.Security.SecurityException => "Security",
             FileNotFoundException or DirectoryNotFoundException => "FileNotFound",
+            IOException io when io.HResult is unchecked((int)0x80070070) or unchecked((int)0x80070027)
+                || (!OperatingSystem.IsWindows() && io.HResult == 28) => "DiskFull",
+            OfflineUpdateRemoteException => "OfflineRequestRejected",
+            InvalidDataException or JsonException => "InvalidData",
+            NotSupportedException => "NotSupported",
             OperationCanceledException => "Canceled",
             null => "Unknown",
             _ => "Generic",
@@ -203,25 +265,108 @@ internal sealed class UiText
         return new UiMessage("Dynamic.ErrorDetail." + key);
     }
 
+    private static readonly (string Pattern, string Key)[] PackageReasonPatterns =
+    {
+        (@"\Aartifact \S+ 声明的文件缺失：(.+)。\z", "MissingFile"),
+        (@"\A(?:安装包元数据缺失|合集缺少)[:：]?\s*(\S+)。\z", "MissingFile"),
+        (@"\A(?:(?:CI 下载包|合集)缺少(?:签名声明的)?分卷|分卷文件缺失)：(?:.*[/\\])?([^/\\]+)。\z", "MissingVolume"),
+        (@"\A(?:CI 下载包缺少签名文件|缺少升级包描述文件或签名|升级包描述文件与签名必须同时存在)：.+。\z", "MissingSignature"),
+        (@"\A分卷数量不匹配：实际为 ([0-9]+)，描述文件要求 ([0-9]+)。\z", "VolumeCount"),
+        (@"\Aartifact \S+ 的文件长度 ([0-9]+) 与声明的 ([0-9]+) 不一致：(.+)。\z", "ArtifactSize"),
+        (@"\A分卷 (.+) 大小不匹配：实际为 ([0-9]+)，期望 ([0-9]+)。\z", "VolumeSize"),
+        (@"\A(?:artifact \S+ 的 SHA256 与声明不一致：|升级包条目内容哈希不匹配：)(.+)。\z", "FileChecksum"),
+        (@"\A分卷 (.+) 的 SHA-256 校验失败。\z", "VolumeChecksum"),
+        (@"\A升级包整体 SHA-256 校验失败。\z", "ArchiveChecksum"),
+        (@"\A分卷合并后的整体 SHA-256 或字节数校验失败。\z", "ArchiveChecksum"),
+        (@"\A安装包的 deviceModel (\S+) 与期望型号 (\S+) 不一致，拒绝使用。\z", "WrongModel"),
+        (@"\A合集不包含请求的 deviceModel (\S+)，不做缺省型号推断。\z", "MissingModel"),
+        (@"\A安装包没有声明安装目标 (\S+)，拒绝安装到该目标。\z", "WrongTarget"),
+        (@"\Apackage\.json 没有声明 installTargets，旧版安装包只允许安装到设备内置存储。\z", "WrongTarget"),
+        (@"\A(?:合集|升级包描述文件)版本 (\S+) 与(?:所选安装包|合集)版本 (\S+) 不一致，拒绝使用。\z", "VersionMismatch"),
+        (@"\A(?:合集包含加密条目，当前不支持带密码的归档|升级包条目已加密|升级包内不允许存在加密项)：(.+)。\z", "EncryptedEntry"),
+        (@"\A(?:合集包含重复条目（忽略大小写）|升级包包含重复的 ZIP 条目|升级包包含重复条目)：(.+)。\z", "DuplicateEntry"),
+    };
+
+    private static UiMessage? PackageImportIssue(PackageValidationIssue? issue) => issue?.Kind switch
+    {
+        PackageValidationIssueKind.MissingFile => new UiMessage("Dynamic.Package.Issue.MissingFile", issue.FileName),
+        PackageValidationIssueKind.DiskFull => new UiMessage("Dynamic.ErrorDetail.DiskFull"),
+        PackageValidationIssueKind.AccessDenied => new UiMessage("Dynamic.ErrorDetail.Security"),
+        _ => null,
+    };
+
+    private static UiMessage PackageReason(string reason)
+    {
+        const string importPrefix = "导入安装包时发生错误：";
+        const string readPrefix = "读取安装包时发生错误：";
+        var wrapped = reason.StartsWith(importPrefix, StringComparison.Ordinal)
+            || reason.StartsWith(readPrefix, StringComparison.Ordinal);
+        if (wrapped)
+        {
+            var prefix = reason.StartsWith(importPrefix, StringComparison.Ordinal) ? importPrefix : readPrefix;
+            reason = reason[prefix.Length..];
+        }
+
+        foreach (var (pattern, key) in PackageReasonPatterns)
+        {
+            var match = Regex.Match(reason, pattern, RegexOptions.CultureInvariant);
+            if (!match.Success)
+                continue;
+
+            var arguments = new object?[match.Groups.Count - 1];
+            for (var index = 0; index < arguments.Length; index++)
+                arguments[index] = match.Groups[index + 1].Value;
+            return new UiMessage("Dynamic.Package.Issue." + key, arguments);
+        }
+
+        if (reason.Contains("signature", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("签名校验", StringComparison.Ordinal))
+            return new UiMessage("Dynamic.Package.Issue.Signature");
+        if (reason.Contains("SHA256", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("SHA-256", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("哈希不匹配", StringComparison.Ordinal))
+            return new UiMessage("Dynamic.Package.Issue.Integrity");
+        if (reason.Contains("分卷", StringComparison.Ordinal))
+            return new UiMessage("Dynamic.Package.Issue.Volumes");
+        if (reason.StartsWith("工作目录", StringComparison.Ordinal))
+            return new UiMessage("Dynamic.ErrorDetail.MaintenanceWorkDirectory");
+        if (reason.Contains("清单", StringComparison.Ordinal) || reason.Contains("package.json", StringComparison.Ordinal)
+            || reason.Contains("bundle.json", StringComparison.Ordinal) || reason.Contains("schemaVersion", StringComparison.Ordinal))
+            return new UiMessage("Dynamic.Package.Issue.Manifest");
+        return new UiMessage(wrapped ? "Dynamic.Package.Issue.Unreadable" : "Dynamic.Package.Issue.Unrecognized");
+    }
+
+    private static UiMessage? BootImageSizeFailure(string detail)
+    {
+        var match = Regex.Match(detail,
+            @"\Apacked raw image exceeds the slot loader budget \(raw image actual bytes ([0-9]+), MaxRawBytes limit ([0-9]+)(?:, target slot '([ab])', source slot '[ab]')?\)\z",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            match = Regex.Match(detail,
+                @"\A(?:BSS-expanded Linux payload|the BSS-expanded Linux payload|the packed TF payload) ([0-9]+) exceeds the slot loader budget ([0-9]+)\z",
+                RegexOptions.CultureInvariant);
+        }
+        if (!match.Success
+            || !long.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var actual)
+            || !long.TryParse(match.Groups[2].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var limit))
+        {
+            return null;
+        }
+
+        const decimal bytesPerMiB = 1048576m;
+        var actualMiB = actual / bytesPerMiB;
+        var limitMiB = limit / bytesPerMiB;
+        return match.Groups[3].Success
+            ? new UiMessage("Dynamic.ErrorDetail.BootImageSlotLimit", match.Groups[3].Value.ToUpperInvariant(), actualMiB, limitMiB, actual, limit)
+            : new UiMessage("Dynamic.ErrorDetail.BootImageLimit", actualMiB, limitMiB, actual, limit);
+    }
+
     /// <summary>
-    /// Maps a preparation failure to a localizable message. Known cases (disk space, the four
-    /// backend prefix diagnostics, already-localized preparation failures) get dedicated text;
-    /// other reasons keep the generic message without the raw exception text.
+    /// Uses install-specific compatibility messages where possible, then the shared error mapper.
     /// </summary>
     internal static UiMessage InternalInstallPreparationFailure(Exception exception, BootloaderState? lockState = null)
     {
-        if (exception is InternalInstallWorkDiskSpaceException space)
-        {
-            return space.AvailableBytes is long available
-                ? new UiMessage(
-                    "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceKnown",
-                    RoundGiBDown(available),
-                    RoundGiBUp(space.RequiredBytes))
-                : new UiMessage(
-                    "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceUnknown",
-                    RoundGiBUp(space.RequiredBytes));
-        }
-
         if (exception is LocalizedInvalidOperationException localized)
         {
             return localized.UserMessage;
@@ -250,7 +395,10 @@ internal sealed class UiText
             }
         }
 
-        return new UiMessage("Dynamic.InternalInstall.Prepared.Failed");
+        var failure = DisplayError(exception);
+        return failure.Key is "Dynamic.ErrorDetail.Generic" or "Dynamic.ErrorDetail.Compatibility"
+            ? new UiMessage("Dynamic.InternalInstall.Prepared.Failed")
+            : failure;
     }
 
     /// <summary>
@@ -281,6 +429,16 @@ internal sealed class UiText
     }
 
     private const decimal BytesPerGiB = 1073741824m;
+
+    private static UiMessage WorkDiskSpaceFailure(InternalInstallWorkDiskSpaceException space) =>
+        space.AvailableBytes is long available
+            ? new UiMessage(
+                "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceKnown",
+                RoundGiBDown(available),
+                RoundGiBUp(space.RequiredBytes))
+            : new UiMessage(
+                "Dynamic.InternalInstall.Prepared.InsufficientDiskSpaceUnknown",
+                RoundGiBUp(space.RequiredBytes));
 
     private static decimal RoundGiBDown(long bytes) =>
         decimal.Floor(((decimal)bytes / BytesPerGiB) * 100m) / 100m;
@@ -314,7 +472,32 @@ internal sealed class UiText
             var argument = args[index];
             if (index < 32 && (mask & (1 << index)) != 0)
             {
-                if (display)
+                if (argument is PackageValidationResult validation)
+                {
+                    if (display && PackageImportIssue(validation.UserIssue) is { } issue)
+                    {
+                        argument = issue;
+                    }
+                    else if (display)
+                    {
+                        var reasons = new List<string>();
+                        foreach (var reason in validation.Reasons)
+                        {
+                            var detail = PackageReason(reason);
+                            var rendered = FormatKey(detail.Key, detail.Arguments, depth + 1, display);
+                            if (!reasons.Contains(rendered))
+                                reasons.Add(rendered);
+                        }
+                        argument = reasons.Count > 0
+                            ? string.Join(ResolveFormat("Dynamic.Package.ReasonSeparator"), reasons)
+                            : ResolveFormat("Dynamic.Package.Issue.Unrecognized");
+                    }
+                    else
+                    {
+                        argument = string.Join(" | ", validation.Reasons);
+                    }
+                }
+                else if (display)
                 {
                     argument = DisplayError(argument);
                 }
@@ -442,8 +625,7 @@ internal sealed class UiText
         "Dynamic.UninstallFlow.Transaction.StatusRecoveryFailed" or
         "Dynamic.UninstallFlow.EdlRestore.Run.FailedAfterWrite" or
         "Dynamic.UninstallFlow.EdlRestore.Run.FailedBeforeWrite" or
-        "Dynamic.UserdataUninstall.Status.SourceInvalid" or
-        "Dynamic.OfflineUpdate.StateRestartRejected" => 2,
+        "Dynamic.UserdataUninstall.Status.SourceInvalid" => 2,
         "Dynamic.InternalInstall.Exit.ResetUnknownUnconfirmed" => 3,
         "Dynamic.OfflineUpdate.StateDamagedSessionRecord" or
         "Dynamic.UserdataUninstall.Runtime.StockRestoreFailed" => 4,

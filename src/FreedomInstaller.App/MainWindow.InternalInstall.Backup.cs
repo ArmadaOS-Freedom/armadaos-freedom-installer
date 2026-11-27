@@ -478,7 +478,7 @@ public partial class MainWindow
                 SetInternalInstallBackupStatus(
                     M(
                         "Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceUnavailable",
-                        exception.Message));
+                        exception));
                 SetInternalInstallBackupVerified(
                     M("Dynamic.InternalInstall.Backup.FailedNote"));
                 return;
@@ -521,7 +521,7 @@ public partial class MainWindow
                 SetInternalInstallBackupStatus(
                     M(
                         "Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceUnavailable",
-                        exception.Message));
+                        exception));
                 return;
             }
 
@@ -932,17 +932,14 @@ public partial class MainWindow
                     acceptProgress = false;
                     _internalInstallBackup = null;
 
-                    var diagnostic = string.IsNullOrWhiteSpace(exception.Message)
-                        ? UnknownValue
-                        : exception.Message;
                     var failure = useExisting
                         ? M(
                             "Dynamic.InternalInstall.Backup.ExistingFailed",
-                            diagnostic,
+                            exception,
                             existingDirectory!)
                         : M(
                             "Dynamic.InternalInstall.Backup.Failed",
-                            diagnostic,
+                            exception,
                             parentPath);
 
                     StopInternalInstallBackupProgress();
@@ -957,8 +954,8 @@ public partial class MainWindow
                     // 其余（含已有备份模式）传 null，按既有流程清除旧快照。
                     RecordDiagnosticFailure(
                         M("Dynamic.Diagnostics.Stage.Backup"),
-                        diagnostic,
-                        diagnostic,
+                        InstallerLog.DescribeFailure(exception),
+                        UiText.DisplayError(exception),
                         internalAutoBranch && !useExisting ? diagnosticAblCaptures : null);
                 }
                 finally

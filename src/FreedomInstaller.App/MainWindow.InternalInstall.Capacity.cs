@@ -277,7 +277,7 @@ public partial class MainWindow
                 or NotSupportedException
                 or ArgumentException)
             {
-                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
+                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception);
                 SetInternalInstallCapacityPackageStatus(
                     M("Dynamic.InternalInstall.Capacity.StatusWorkRootFailed", exception));
                 return;
@@ -327,7 +327,7 @@ public partial class MainWindow
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
                 M("Dynamic.InternalInstall.Capacity.ImportFailed", exception));
-            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception);
         }
         catch (Exception exception)
         {
@@ -335,7 +335,7 @@ public partial class MainWindow
             InvalidateInternalInstallAllocation(clearPackage: false);
             SetInternalInstallCapacityPackageStatus(
                 M("Dynamic.InternalInstall.Capacity.ImportFailed", exception));
-            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception.Message);
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), exception);
         }
         finally
         {
@@ -354,10 +354,9 @@ public partial class MainWindow
         var validation = imported.Validation;
         if (!validation.IsValid)
         {
-            var reasons = string.Join(T("Dynamic.Package.ReasonSeparator"), validation.Reasons);
-            SetInternalInstallCapacityPackageStatus(
-                M("Dynamic.InternalInstall.Capacity.Invalid", reasons));
-            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), reasons);
+            var rejected = M("Dynamic.InternalInstall.Capacity.Invalid", validation);
+            SetInternalInstallCapacityPackageStatus(rejected);
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Zip"), string.Join(" | ", validation.Reasons), rejected);
             return;
         }
 
@@ -428,9 +427,9 @@ public partial class MainWindow
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
-            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Capacity"), exception.Message);
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Capacity"), exception);
             DisableInternalInstallCapacitySlider(
-                M("Dynamic.InternalInstall.Capacity.RangeFailed", exception.Message));
+                M("Dynamic.InternalInstall.Capacity.RangeFailed", exception));
             return false;
         }
 
@@ -568,7 +567,7 @@ public partial class MainWindow
         {
             _internalInstallAllocation = null;
             _internalInstallAndroidGiB = 0;
-            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Capacity"), exception.Message);
+            RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Capacity"), exception);
             if (_ready)
             {
                 SetText(InternalInstallCapacityTotalText, "Dynamic.RawValue", UnknownValue);
@@ -617,10 +616,10 @@ public partial class MainWindow
     {
         if (!_internalInstallBackupUseExisting) return workParent;
         string persistent = _workSession?.RecordsDirectory
-            ?? throw new InvalidOperationException(T("Dynamic.InternalInstall.Prepared.NeedParent"));
+            ?? throw new LocalizedInvalidOperationException(M("Dynamic.InternalInstall.Prepared.NeedParent"));
         if (!string.IsNullOrWhiteSpace(_internalInstallBackupExistingDirectory) &&
             !IsInternalInstallBackupParentOutsideExisting(persistent, _internalInstallBackupExistingDirectory))
-            throw new InvalidOperationException(T("Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceConflict",
+            throw new LocalizedInvalidOperationException(M("Dynamic.InternalInstall.Backup.ExistingEnvironmentWorkspaceConflict",
                 _internalInstallBackupExistingDirectory));
         Directory.CreateDirectory(persistent);
         return persistent;
@@ -679,6 +678,7 @@ public partial class MainWindow
 
         // 进入真正的新准备工作前清空旧的引导文件证据与最近一次附件失败判决；
         // 即使哈希命中等缓存路径不进入此处，旧证据也不会被新失败复用。
+        ClearDiagnosticFailure();
         ResetDiagnosticBootEvidence();
 
         var rendered = false;
@@ -770,7 +770,8 @@ public partial class MainWindow
                     SetInternalInstallConfirmStatus(failure);
                     AppendLocalizedLog(failure);
                     AppendWorkLogLine(T("Dynamic.InternalInstall.Prepared.TechnicalDetails", InstallerLog.DescribeFailure(exception)));
-                    RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Prepare"), exception.Message);
+                    RecordDiagnosticFailure(
+                        M("Dynamic.Diagnostics.Stage.Prepare"), InstallerLog.DescribeFailure(exception), failure);
                 }
                 finally
                 {

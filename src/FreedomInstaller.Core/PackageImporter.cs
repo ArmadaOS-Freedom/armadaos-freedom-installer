@@ -445,7 +445,7 @@ public static partial class PackageImporter
                 {
                     reasons.AddRange(validation.Reasons);
                     DeleteStage(stage, root, reasons);
-                    return Invalid(sourcePath, expectedModel, reasons);
+                    return Invalid(sourcePath, expectedModel, reasons, validation.UserIssue);
                 }
 
                 if (!string.Equals(validation.Version, bundleVersion, StringComparison.Ordinal))
@@ -467,7 +467,7 @@ public static partial class PackageImporter
         {
             reasons.Add($"导入安装包时发生错误：{exception.Message}");
             DeleteStage(stage, root, reasons);
-            return Invalid(sourcePath, expectedModel, reasons);
+            return Invalid(sourcePath, expectedModel, reasons, PackageValidationIssue.FromException(exception));
         }
     }
 
@@ -608,7 +608,8 @@ public static partial class PackageImporter
         return CaptureArchiveSnapshot(source.Parts, ReadExpectedArchiveBytes(descriptor), root, token);
     }
 
-    private static ImportedPackage Invalid(string sourcePath, string deviceModel, List<string> reasons)
+    private static ImportedPackage Invalid(
+        string sourcePath, string deviceModel, List<string> reasons, PackageValidationIssue? issue = null)
     {
         if (reasons.Count == 0)
         {
@@ -619,7 +620,7 @@ public static partial class PackageImporter
             sourcePath,
             string.Empty,
             deviceModel,
-            new PackageValidationResult(false, reasons, null),
+            new PackageValidationResult(false, reasons, null) { UserIssue = issue },
             null,
             null);
     }

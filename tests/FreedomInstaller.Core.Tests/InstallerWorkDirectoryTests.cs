@@ -337,12 +337,14 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
             _ => 50 * GiB,
             InstallerWorkDirectory.ProbeDirectoryWritability));
 
-        Assert.Throws<IOException>(() => InstallerWorkDirectory.Resolve(
+        var lowSpace = Assert.Throws<InternalInstallWorkDiskSpaceException>(() => InstallerWorkDirectory.Resolve(
             customPath,
             _localAppData,
             volumes,
             path => path.StartsWith(_systemRoot, StringComparison.Ordinal) ? 512L * 1024 * 1024 : 50 * GiB,
             InstallerWorkDirectory.ProbeDirectoryWritability));
+        Assert.Equal(GiB, lowSpace.RequiredBytes);
+        Assert.Equal(512L * 1024 * 1024, lowSpace.AvailableBytes);
 
         Assert.Throws<IOException>(() => InstallerWorkDirectory.Resolve(
             customPath,
@@ -412,8 +414,10 @@ public sealed class InstallerWorkDirectoryTests : IDisposable
     {
         bool probed = false;
         string custom = Path.Combine(_dataRoot, "custom");
-        Assert.Throws<IOException>(() => InstallerWorkDirectory.Resolve(custom, _localAppData,
+        var unknownSpace = Assert.Throws<InternalInstallWorkDiskSpaceException>(() => InstallerWorkDirectory.Resolve(custom, _localAppData,
             Array.Empty<InstallerWorkVolume>(), _ => null, _ => probed = true));
+        Assert.Equal(GiB, unknownSpace.RequiredBytes);
+        Assert.Null(unknownSpace.AvailableBytes);
         Assert.False(probed);
         Assert.False(Directory.Exists(custom));
     }

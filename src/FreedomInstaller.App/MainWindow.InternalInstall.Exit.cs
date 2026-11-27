@@ -337,7 +337,7 @@ public partial class MainWindow
                             RecordDiagnosticFailure(
                                 M("Dynamic.Diagnostics.Stage.Exit"),
                                 resetFullDetail ?? _uiText.Format(cancelledMessage),
-                                _uiText.Format(cancelledMessage));
+                                cancelledMessage);
                         }
                         break;
 
@@ -660,7 +660,7 @@ public partial class MainWindow
             case "Dynamic.InternalInstall.Exit.Mismatch":
             case "Dynamic.InternalInstall.Exit.ResetUnknownUnconfirmed":
             case "Dynamic.InternalInstall.Exit.ReturnUnconfirmed":
-                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Exit"), _uiText.Format(message));
+                RecordDiagnosticFailure(M("Dynamic.Diagnostics.Stage.Exit"), _uiText.Format(message), message);
                 break;
         }
     }

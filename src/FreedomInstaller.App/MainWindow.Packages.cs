@@ -128,8 +128,7 @@ public partial class MainWindow
         var validation = prepared.Validation;
         if (!validation.IsValid)
         {
-            var reasons = string.Join(T("Dynamic.Package.ReasonSeparator"), validation.Reasons);
-            SetText(PackageStatusText, "Dynamic.Package.StatusRejectedForModel", UiText.ModelName(knownModel), reasons);
+            SetText(PackageStatusText, "Dynamic.Package.StatusRejectedForModel", UiText.ModelName(knownModel), validation);
             AppendLocalizedLog(M("Dynamic.Log.PackageRejectedForModel", UiText.ModelName(knownModel)));
             AppendLocalizedLog(M("Dynamic.RawValue", string.Join(" | ", validation.Reasons)));
             SetText(ProgressStatusText, "Dynamic.Package.StatusRejectedShort");
@@ -252,7 +251,7 @@ public partial class MainWindow
             or UnauthorizedAccessException
             or InvalidOperationException)
         {
-            SetText(PackageStatusText, "Dynamic.Package.StatusCleanupFailed", exception.Message);
+            SetText(PackageStatusText, "Dynamic.Package.StatusCleanupFailed", exception);
             AppendLocalizedLog(M("Dynamic.Log.PackageCleanupFailed", exception.Message));
             return false;
         }

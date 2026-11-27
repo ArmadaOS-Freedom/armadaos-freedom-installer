@@ -70,6 +70,26 @@ public sealed record AllocationPlan(
 /// <summary>Installation gate. When <see cref="IsReady"/> is false, <see cref="Reasons"/> is non-empty and names every blocker.</summary>
 public sealed record Readiness(bool IsReady, IReadOnlyList<string> Reasons);
 
+public enum PackageValidationIssueKind
+{
+    MissingFile,
+    DiskFull,
+    AccessDenied,
+}
+
+public sealed record PackageValidationIssue(PackageValidationIssueKind Kind, string? FileName = null)
+{
+    internal static PackageValidationIssue? FromException(Exception exception) => exception switch
+    {
+        FileNotFoundException missing when !string.IsNullOrEmpty(missing.FileName) =>
+            new(PackageValidationIssueKind.MissingFile, Path.GetFileName(missing.FileName)),
+        UnauthorizedAccessException or System.Security.SecurityException => new(PackageValidationIssueKind.AccessDenied),
+        IOException io when io.HResult is unchecked((int)0x80070070) or unchecked((int)0x80070027)
+            || (!OperatingSystem.IsWindows() && io.HResult == 28) => new(PackageValidationIssueKind.DiskFull),
+        _ => null,
+    };
+}
+
 /// <summary>
 /// Result of <see cref="PackageReader.Validate"/>.
 /// <para>
@@ -103,6 +123,9 @@ public sealed record PackageValidationResult
 
     /// <summary>Every reason the package was rejected. Non-empty whenever <see cref="IsValid"/> is false.</summary>
     public IReadOnlyList<string> Reasons { get; }
+
+    /// <summary>First recognized cause that can be presented without translating diagnostic text.</summary>
+    public PackageValidationIssue? UserIssue { get; init; }
 
     /// <summary>Storage declaration of the package. Non-null only for a fully valid package.</summary>
     public PackageStorage? Storage { get; }

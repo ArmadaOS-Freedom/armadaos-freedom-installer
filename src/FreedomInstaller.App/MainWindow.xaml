@@ -867,7 +867,7 @@
                 </Button>
             </Grid>
 
-            <!-- 诊断失败提示：默认折叠，仅在导出诊断信息失败时显示。 -->
+            <!-- 操作失败提示：显示当前语言的原因，并提供诊断包入口。 -->
             <Border x:Name="DiagnosticFailurePanel"
                     Visibility="Collapsed"
                     Margin="0,8,0,0"

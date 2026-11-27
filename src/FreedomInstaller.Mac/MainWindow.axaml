@@ -361,7 +361,8 @@
                                    Text="{DynamicResource Static.InternalInstall.Confirm.Lead}"
                                    Classes="BodyText"
                                    Margin="0,6,0,0" />
-                        <TextBlock Text="{DynamicResource Static.InternalInstall.Confirm.Warning}"
+                        <TextBlock x:Name="InternalInstallConfirmWarningText"
+                                   Text="{DynamicResource Static.InternalInstall.Confirm.Warning}"
                                    Classes="BodyText Warn"
                                    Margin="0,8,0,0" />
 
@@ -441,7 +442,7 @@
                                       IsChecked="False"
                                       IsEnabled="False"
                                       IsCheckedChanged="OnInternalInstallEraseRiskChanged">
-                                <TextBlock Text="{DynamicResource Static.InternalInstall.Confirm.EraseRisk}" TextWrapping="Wrap" FontSize="13" />
+                                <TextBlock x:Name="InternalInstallEraseRiskText" Text="{DynamicResource Static.InternalInstall.Confirm.EraseRisk}" TextWrapping="Wrap" FontSize="13" />
                             </CheckBox>
                         </Border>
                         <Expander x:Name="InternalInstallVerificationDetails"

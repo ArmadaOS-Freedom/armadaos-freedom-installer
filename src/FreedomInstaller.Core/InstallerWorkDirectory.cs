@@ -219,9 +219,11 @@ public static class InstallerWorkDirectory
 
         long? preFree = TryReadFreeOrThrow(readFree, ancestor, fullPath);
         if (preFree is null)
-            throw new IOException($"Unable to determine available free space for explicit installer work directory '{fullPath}'.");
+            throw new InternalInstallWorkDiskSpaceException(MinimumWorkingReserveBytes, null,
+                $"Unable to determine available free space for explicit installer work directory '{fullPath}'.");
         if (preFree.Value < MinimumWorkingReserveBytes)
-            throw new IOException($"Explicit installer work directory '{fullPath}' has {preFree.Value} bytes free; at least {MinimumWorkingReserveBytes} bytes are required for startup working reserve.");
+            throw new InternalInstallWorkDiskSpaceException(MinimumWorkingReserveBytes, preFree.Value,
+                $"Explicit installer work directory '{fullPath}' has {preFree.Value} bytes free; at least {MinimumWorkingReserveBytes} bytes are required for startup working reserve.");
 
         try
         {
@@ -234,9 +236,11 @@ public static class InstallerWorkDirectory
 
         long? postFree = TryReadFreeOrThrow(readFree, fullPath, fullPath);
         if (postFree is null)
-            throw new IOException($"Unable to verify available free space after probing explicit installer work directory '{fullPath}'.");
+            throw new InternalInstallWorkDiskSpaceException(MinimumWorkingReserveBytes, null,
+                $"Unable to verify available free space after probing explicit installer work directory '{fullPath}'.");
         if (postFree.Value < MinimumWorkingReserveBytes)
-            throw new IOException($"Explicit installer work directory '{fullPath}' has insufficient free space ({postFree.Value} bytes).");
+            throw new InternalInstallWorkDiskSpaceException(MinimumWorkingReserveBytes, postFree.Value,
+                $"Explicit installer work directory '{fullPath}' has insufficient free space ({postFree.Value} bytes).");
 
         return new InstallerWorkDirectoryResult(fullPath, postFree.Value);
     }

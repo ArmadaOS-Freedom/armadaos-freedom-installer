@@ -255,6 +255,7 @@ namespace FreedomInstaller.App
 
         private async Task ImportModernTfInstallPackageAsync(CancellationToken token)
         {
+            _tfInstallError = null;
             if (!IsModernTfInstallMode || HasUnresolvedModernTfInstallState)
             {
                 return;
@@ -267,21 +268,21 @@ namespace FreedomInstaller.App
                 || string.IsNullOrWhiteSpace(parent)
                 || !Directory.Exists(parent))
             {
-                SetTfStatus(M("Dynamic.TfInstall.NeedInputs"));
+                SetTfStatus(_tfInstallError = M("Dynamic.TfInstall.NeedInputs"));
                 return;
             }
 
             string source = PackagePathBox.Text?.Trim() ?? string.Empty;
             if (source.Length == 0 || (!Directory.Exists(source) && !File.Exists(source)))
             {
-                SetTfStatus(M("Dynamic.TfInstall.NeedInputs"));
+                SetTfStatus(_tfInstallError = M("Dynamic.TfInstall.NeedInputs"));
                 return;
             }
 
             string model = fresh.Model;
             if (string.IsNullOrWhiteSpace(model))
             {
-                SetTfStatus(M("Dynamic.TfInstall.NeedInputs"));
+                SetTfStatus(_tfInstallError = M("Dynamic.TfInstall.NeedInputs"));
                 return;
             }
 
@@ -317,12 +318,11 @@ namespace FreedomInstaller.App
 
             SetTfStatus(M("Dynamic.TfInstall.PackageImporting"));
 
-            string workRoot = Directory.CreateDirectory(
-                Path.Combine(parent, ".armada-installer-tf-package")).FullName;
-
             ImportedPackage? imported = null;
             try
             {
+                string workRoot = Directory.CreateDirectory(
+                    Path.Combine(parent, ".armada-installer-tf-package")).FullName;
                 imported = await PackageImporter.ImportAsync(source, model, InstallationTarget.TfCard, workRoot, token);
 
                 _tfInstallPackage = imported;
@@ -336,7 +336,10 @@ namespace FreedomInstaller.App
                     && string.Equals(imported.DeviceModel, model, StringComparison.Ordinal);
                 if (!usable)
                 {
-                    SetTfStatus(M("Dynamic.TfInstall.PackageRejected"));
+                    _tfInstallError = validation is { IsValid: false }
+                        ? M("Dynamic.Package.StatusRejectedForModel", UiText.ModelName(model), validation)
+                        : M("Dynamic.TfInstall.PackageRejected");
+                    SetTfStatus(_tfInstallError);
                     if (validation?.Reasons != null)
                     {
                         foreach (var reason in validation.Reasons)
@@ -356,7 +359,8 @@ namespace FreedomInstaller.App
             }
             catch (Exception ex)
             {
-                SetTfStatus(M("Dynamic.TfInstall.PackageRejected"));
+                _tfInstallError = M("Dynamic.TfInstall.PackageFailed", UiText.DisplayError(ex));
+                SetTfStatus(_tfInstallError);
                 AppendLocalizedLog(M("Dynamic.RawValue", (ex.GetType().FullName ?? ex.GetType().Name) + ": " + ex.Message));
                 DiscardModernTfInstallImport(imported);
             }
@@ -493,7 +497,8 @@ namespace FreedomInstaller.App
                         || !string.Equals(_tfInstallPackage.DeviceModel, fresh.Model, StringComparison.Ordinal)
                         || !string.Equals(_tfInstallPackageSource, PackagePathBox.Text?.Trim(), StringComparison.Ordinal))
                     {
-                        SetTfStatus(M("Dynamic.TfInstall.PackageRejected"));
+                        _tfInstallError ??= M("Dynamic.TfInstall.PackageRejected");
+                        SetTfStatus(_tfInstallError);
                         return;
                     }
 
@@ -577,7 +582,7 @@ namespace FreedomInstaller.App
             }
             catch (Exception ex)
             {
-                _tfInstallError = M("Dynamic.TfInstall.PrepareFailed");
+                _tfInstallError = M("Dynamic.TfInstall.PrepareFailureDetail", UiText.DisplayError(ex));
                 SetTfStatus(_tfInstallError);
                 AppendLocalizedLog(M("Dynamic.RawValue", (ex.GetType().FullName ?? ex.GetType().Name) + ": " + ex.Message));
             }
@@ -677,7 +682,7 @@ namespace FreedomInstaller.App
                         return;
                     }
 
-                    _tfInstallError = M("Dynamic.TfInstall.PackageRejected");
+                    _tfInstallError ??= M("Dynamic.TfInstall.PackageRejected");
                     SetTfStatus(_tfInstallError);
                 });
             }

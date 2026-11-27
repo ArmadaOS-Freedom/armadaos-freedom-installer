@@ -420,7 +420,7 @@ public partial class MainWindow
                 _restorePlan = null;
                 var failure = M(
                     "Dynamic.UninstallFlow.EdlRestore.PrepareFailed",
-                    exception.Message);
+                    exception);
                 ApplyEdlUninstallOutcome(failure, false);
                 AppendLocalizedLog(failure);
             }
@@ -665,14 +665,15 @@ public partial class MainWindow
                     {
                         message = M(
                             "Dynamic.UninstallFlow.EdlRestore.Run.ResetUnconfirmed",
-                            T("Dynamic.UninstallFlow.EdlRestore.Run.Cancelled"));
+                            M("Dynamic.UninstallFlow.EdlRestore.Run.Cancelled"));
                         SetText(ConnectionStatusText, "Dynamic.UninstallFlow.EdlRestore.ResetUnknownConnection");
                     }
                     catch (Exception exception)
                     {
                         message = M(
                             "Dynamic.UninstallFlow.EdlRestore.Run.ResetUnconfirmed",
-                            exception.Message);
+                            exception);
+                        AppendWorkLogLine(InstallerLog.DescribeFailure(exception));
                         SetText(ConnectionStatusText, "Dynamic.UninstallFlow.EdlRestore.ResetUnknownConnection");
                     }
                 }

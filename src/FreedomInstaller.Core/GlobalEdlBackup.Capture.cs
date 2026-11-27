@@ -11,6 +11,20 @@ using System.Threading.Tasks;
 
 namespace FreedomInstaller.Core;
 
+/// <summary>The chosen backup destination cannot hold the requested capture.</summary>
+public sealed class BackupDestinationSpaceException : InvalidOperationException
+{
+    internal BackupDestinationSpaceException(long availableBytes, long requiredBytes, string diagnostic)
+        : base(diagnostic)
+    {
+        AvailableBytes = availableBytes;
+        RequiredBytes = requiredBytes;
+    }
+
+    public long AvailableBytes { get; }
+    public long RequiredBytes { get; }
+}
+
 /// <summary>
 /// Original-layout global capture. Every region is read from the device with explicit, sector-aligned
 /// spans, compressed into sequential GZip chunks and proven by a full decompression/hash pass before the
@@ -946,7 +960,9 @@ public static partial class GlobalEdlBackup
 
         if (available.HasValue && available.Value < required)
         {
-            throw new InvalidOperationException(
+            throw new BackupDestinationSpaceException(
+                available.Value,
+                required,
                 "Not enough free space on " + root + ": " + CaptureText(available.Value)
                 + " bytes available, at least " + CaptureText(required) + " bytes are required for this capture.");
         }

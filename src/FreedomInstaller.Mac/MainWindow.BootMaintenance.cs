@@ -884,10 +884,9 @@ public partial class MainWindow
                     _bootMaintenanceDeviceCheck = null;
                     _bootMaintenancePower = null;
                     RenderBootMaintenanceCheckPlaceholders();
-                    var diagnostic = string.IsNullOrWhiteSpace(exception.Message) ? UnknownValue : exception.Message;
-                    SetText(BootMaintenanceCheckProgressText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
-                    SetText(BootMaintenanceCheckStatusText, "Dynamic.InternalInstall.Check.Failed", diagnostic);
-                    AppendBootMaintenanceLog(M("Dynamic.InternalInstall.Check.Failed", diagnostic));
+                    SetText(BootMaintenanceCheckProgressText, "Dynamic.InternalInstall.Check.Failed", exception);
+                    SetText(BootMaintenanceCheckStatusText, "Dynamic.InternalInstall.Check.Failed", exception);
+                    AppendBootMaintenanceLog(M("Dynamic.RawValue", exception.ToString()));
                 }
             });
         }
@@ -1177,7 +1176,7 @@ public partial class MainWindow
                 }
                 catch (OperationCanceledException ex)
                 {
-                    SetText(BootMaintenanceCheckStatusText, M("Dynamic.BootMaintenance.Edl.ReadOnlyFailed"));
+                    SetText(BootMaintenanceCheckStatusText, M("Dynamic.Mac.BootMaintenance.ReadOnlyFailureDetail", UiText.DisplayError(ex)));
                     AppendBootMaintenanceLog(M("Dynamic.RawValue", ex.Message));
                 }
                 catch (Exception ex) when (DeviceModelRoutes.IsRouteRefusal(ex))
@@ -1187,7 +1186,7 @@ public partial class MainWindow
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    SetText(BootMaintenanceCheckStatusText, M("Dynamic.BootMaintenance.Edl.ReadOnlyFailed"));
+                    SetText(BootMaintenanceCheckStatusText, M("Dynamic.Mac.BootMaintenance.ReadOnlyFailureDetail", UiText.DisplayError(ex)));
                     AppendBootMaintenanceLog(M("Dynamic.RawValue", $"{ex.GetType().FullName}: {ex.Message}"));
                 }
             });
@@ -1592,7 +1591,7 @@ public partial class MainWindow
                     _bootMaintenanceBackup = null;
                     BootMaintenanceBackupProgressBar.IsIndeterminate = false;
                     BootMaintenanceBackupProgressBar.Value = 0;
-                    SetText(BootMaintenanceBackupStatusText, M("Dynamic.BootMaintenance.Edl.ReadOnlyFailed"));
+                    SetText(BootMaintenanceBackupStatusText, M("Dynamic.Mac.BootMaintenance.ReadOnlyFailureDetail", UiText.DisplayError(ex)));
                     SetText(BootMaintenanceBackupVerifiedText, M("Dynamic.InternalInstall.Backup.FailedNote"));
                     AppendBootMaintenanceLog(M("Dynamic.RawValue", ex.Message));
                 }
@@ -1601,7 +1600,7 @@ public partial class MainWindow
                     _bootMaintenanceBackup = null;
                     BootMaintenanceBackupProgressBar.IsIndeterminate = false;
                     BootMaintenanceBackupProgressBar.Value = 0;
-                    SetText(BootMaintenanceBackupStatusText, M("Dynamic.BootMaintenance.Edl.ReadOnlyFailed"));
+                    SetText(BootMaintenanceBackupStatusText, M("Dynamic.Mac.BootMaintenance.ReadOnlyFailureDetail", UiText.DisplayError(ex)));
                     SetText(BootMaintenanceBackupVerifiedText, M("Dynamic.InternalInstall.Backup.FailedNote"));
                     AppendBootMaintenanceLog(M("Dynamic.RawValue", $"{ex.GetType().FullName}: {ex.Message}"));
                 }
@@ -1988,8 +1987,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// 只对确切前缀映射到具体文案；其余失败一律回到通用「准备失败」。
-    /// 真实异常原文始终保留在折叠诊断日志里，界面上绝不出现内部前缀。
+    /// 使用引导维护专用提示；其他已知故障交给共用错误文案。
     /// </summary>
     private static UiMessage MapBootMaintenancePreparationMessage(Exception failure)
     {
@@ -2016,7 +2014,7 @@ public partial class MainWindow
             }
         }
 
-        return M("Dynamic.BootMaintenance.Status.PrepareFailed");
+        return M("Dynamic.BootMaintenance.Status.PrepareFailureDetail", UiText.DisplayError(failure));
     }
 
     /// <summary>

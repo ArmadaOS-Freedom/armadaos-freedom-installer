@@ -710,7 +710,8 @@ public sealed class InternalInstallResult
         InternalInstallUserAction requiredUserAction,
         string evidenceDirectory,
         string? errorCode,
-        string? diagnostic)
+        string? diagnostic,
+        InternalInstallWorkDiskSpaceException? workDiskSpaceFailure = null)
     {
         ArgumentNullException.ThrowIfNull(verifiedSlots);
         ArgumentNullException.ThrowIfNull(evidenceDirectory);
@@ -725,6 +726,7 @@ public sealed class InternalInstallResult
         EvidenceDirectory = evidenceDirectory;
         ErrorCode = errorCode;
         Diagnostic = diagnostic;
+        WorkDiskSpaceFailure = workDiskSpaceFailure;
     }
 
     /// <summary>The overall outcome of the run.</summary>
@@ -756,4 +758,7 @@ public sealed class InternalInstallResult
 
     /// <summary>Human-readable diagnostic text; never part of the contract.</summary>
     public string? Diagnostic { get; }
+
+    /// <summary>Computer work-disk capacity failure before any device write, when known.</summary>
+    public InternalInstallWorkDiskSpaceException? WorkDiskSpaceFailure { get; }
 }

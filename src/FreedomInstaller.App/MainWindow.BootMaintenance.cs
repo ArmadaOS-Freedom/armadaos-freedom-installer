@@ -423,8 +423,7 @@ public partial class MainWindow
     // ---------- 准备失败的具体文案映射 ----------
 
     /// <summary>
-    /// 只对三个确切前缀映射到具体文案；其余失败一律回到通用「准备失败」。
-    /// 真实异常原文始终保留在折叠诊断日志里，界面上绝不出现内部前缀。
+    /// 使用引导维护专用提示，再交由共用映射处理其他错误。
     /// </summary>
     private UiMessage MapBootMaintenancePreparationMessage(Exception failure)
     {
@@ -451,7 +450,7 @@ public partial class MainWindow
             }
         }
 
-        return M("Dynamic.BootMaintenance.Status.PrepareFailed");
+        return M("Dynamic.BootMaintenance.Status.PrepareFailureDetail", UiText.DisplayError(failure));
     }
 
     // ---------- 已导入修复包的释放 ----------
@@ -774,7 +773,8 @@ public partial class MainWindow
         }
         else if (_bootMaintenanceLastError is not null)
         {
-            SetText(BootMaintenanceConfirmStatusText, M("Dynamic.BootMaintenance.Status.PrepareFailed"));
+            SetText(BootMaintenanceConfirmStatusText,
+                _bootMaintenanceLastPreparationMessage ?? M("Dynamic.BootMaintenance.Status.PrepareFailed"));
         }
         else
         {

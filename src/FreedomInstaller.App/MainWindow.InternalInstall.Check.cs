@@ -208,7 +208,8 @@ public partial class MainWindow
                         SetInternalInstallCheckStatus(noDevicesMessage);
                         RecordDiagnosticFailure(
                             M("Dynamic.Diagnostics.Stage.Check"),
-                            _uiText.Format(noDevicesMessage));
+                            _uiText.Format(noDevicesMessage),
+                            noDevicesMessage);
                         return;
                     }
 
@@ -234,7 +235,8 @@ public partial class MainWindow
                         SetInternalInstallCheckStatus(notAuthorizedMessage);
                         RecordDiagnosticFailure(
                             M("Dynamic.Diagnostics.Stage.Check"),
-                            _uiText.Format(notAuthorizedMessage));
+                            _uiText.Format(notAuthorizedMessage),
+                            notAuthorizedMessage);
                         return;
                     }
 
@@ -338,7 +340,8 @@ public partial class MainWindow
                         AppendLocalizedLog(M("Dynamic.InternalInstall.Check.Failed", Placeholder(result.Error)));
                         RecordDiagnosticFailure(
                             M("Dynamic.Diagnostics.Stage.Check"),
-                            $"{T(InternalInstallCheckStageKey(result.FailedStage))}: {Placeholder(result.Error)}");
+                            $"{T(InternalInstallCheckStageKey(result.FailedStage))}: {Placeholder(result.Error)}",
+                            InternalInstallDeviceCheckFailure(result));
                     }
 
                     RenderInternalInstallPower();
@@ -362,18 +365,15 @@ public partial class MainWindow
                     _internalInstallPower = null;
                     _internalInstallBoardBackupDetected = false;
                     RenderInternalInstallCheckPlaceholders();
-                    var diagnostic = string.IsNullOrWhiteSpace(exception.Message)
-                        ? UnknownValue
-                        : exception.Message;
                     var failure = UiText.BootloaderCompatibilityFailure(exception)
-                        ?? M("Dynamic.InternalInstall.Check.Failed", diagnostic);
+                        ?? M("Dynamic.InternalInstall.Check.Failed", exception);
                     SetInternalInstallCheckProgress(failure);
                     SetInternalInstallCheckStatus(failure);
                     AppendLocalizedLog(failure);
                     RecordDiagnosticFailure(
                         M("Dynamic.Diagnostics.Stage.Check"),
                         InstallerLog.DescribeFailure(exception),
-                        diagnostic);
+                        failure);
                 }
             });
         }
@@ -703,11 +703,7 @@ public partial class MainWindow
                     "Dynamic.InternalInstall.Check.FailedStage",
                     M(InternalInstallCheckStageKey(result.FailedStage))));
 
-            var error = Placeholder(result.Error);
-            SetInternalInstallCheckStatus(
-                result.AndroidReturn == AndroidReturnState.Unconfirmed
-                    ? M("Dynamic.InternalInstall.Check.ReturnUnconfirmed", error)
-                    : M("Dynamic.InternalInstall.Check.Failed", error));
+            SetInternalInstallCheckStatus(InternalInstallDeviceCheckFailure(result));
             return;
         }
 
@@ -736,6 +732,12 @@ public partial class MainWindow
         SetText(InternalInstallRouteText, "Dynamic.InternalInstall.Check.RouteUnavailable");
         SetInternalInstallCheckStatus(M("Dynamic.InternalInstall.Check.ProfileUnavailable"));
     }
+
+    private UiMessage InternalInstallDeviceCheckFailure(InternalDeviceCheckResult result) =>
+        M(result.AndroidReturn == AndroidReturnState.Unconfirmed
+                ? "Dynamic.InternalInstall.Check.ReturnUnconfirmed"
+                : "Dynamic.InternalInstall.Check.Failed",
+            result.Error);
 
     /// <summary>把第 0 步的全部结论字段重写成占位值（语言切换后不会复活旧结果）。</summary>
     private void RenderInternalInstallCheckPlaceholders()

@@ -253,28 +253,28 @@ public partial class MainWindow : Window
                 _fastbootPath = MacTools.FindAndroidTool("fastboot");
             });
 
-            var missing = new List<string>();
+            var missing = new List<UiMessage>();
             if (_adbPath is null)
             {
-                missing.Add("adb");
+                missing.Add(M("Dynamic.RawValue", "adb"));
             }
 
             // Step 1 reboots into fastboot to read the lock state and reboots back with it, so a missing fastboot
             // would only show after the tablet has left Android.
             if (_fastbootPath is null)
             {
-                missing.Add("fastboot");
+                missing.Add(M("Dynamic.RawValue", "fastboot"));
             }
 
             if (edlModels.Count == 0)
             {
-                missing.Add("9008 tools");
+                missing.Add(M("Dynamic.Mac.Environment.EdlTools"));
             }
 
             var packersFound = MacTools.Exists(MacTools.PackerResource) && MacTools.Exists(MacTools.UnpackerResource);
             if (!packersFound)
             {
-                missing.Add("boot packers");
+                missing.Add(M("Dynamic.Mac.Environment.BootPackers"));
             }
 
             var toolsOk = missing.Count == 0;
@@ -287,7 +287,8 @@ public partial class MainWindow : Window
                         MacTools.IsEmbedded(MacTools.PackerResource)
                             ? M("Dynamic.Mac.Environment.Bundled")
                             : MacTools.ToolsDirectory ?? UnknownValue)
-                    : M("Dynamic.Mac.Environment.ToolsMissing", string.Join(", ", missing)));
+                    : M("Dynamic.Mac.Environment.ToolsMissing", missing.Aggregate(
+                        (left, right) => M("Dynamic.Mac.Environment.JoinMissingTools", left, right))));
             SetText(EnvironmentDriverStatusText, "Dynamic.Mac.Environment.DriverReady");
 
             _environmentReady = systemOk && toolsOk;
@@ -297,7 +298,8 @@ public partial class MainWindow : Window
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException)
         {
             _environmentReady = false;
-            SetText(EnvironmentStatusText, "Dynamic.Environment.CheckFailed");
+            SetText(EnvironmentStatusText, "Dynamic.Mac.Environment.CheckFailureDetail", UiText.DisplayError(exception));
+            AppendLog(M("Dynamic.RawValue", exception.ToString()));
         }
         finally
         {

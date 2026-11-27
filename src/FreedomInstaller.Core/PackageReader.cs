@@ -124,7 +124,10 @@ public static partial class PackageReader
         catch (Exception exception) when (IsExpectedFailure(exception))
         {
             reasons.Add($"读取安装包时发生错误：{exception.Message}");
-            return new PackageValidationResult(false, reasons, null);
+            return new PackageValidationResult(false, reasons, null)
+            {
+                UserIssue = PackageValidationIssue.FromException(exception),
+            };
         }
     }
 

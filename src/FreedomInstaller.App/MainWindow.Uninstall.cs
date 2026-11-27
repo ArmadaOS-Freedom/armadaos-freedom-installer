@@ -423,7 +423,7 @@ public partial class MainWindow
 
         if (!same)
         {
-            throw new InvalidOperationException(T("Dynamic.UninstallFlow.Input.LegacyRecordMismatch"));
+            throw new LocalizedInvalidOperationException(M("Dynamic.UninstallFlow.Input.LegacyRecordMismatch"));
         }
     }
 

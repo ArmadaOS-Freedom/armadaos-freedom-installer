@@ -49,8 +49,8 @@ namespace FreedomInstaller.Core.Tests
                     }
                     else if (scenario == "null-picker")
                     {
-                        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => shell.ResolveAsync(setup.Current, setup.DurableParent));
-                        Assert.Equal("Dynamic.RecoverySource.NeedOriginal", ex.Message);
+                        var ex = await Assert.ThrowsAsync<LocalizedInvalidOperationException>(() => shell.ResolveAsync(setup.Current, setup.DurableParent));
+                        Assert.Equal("Dynamic.RecoverySource.NeedOriginal", ex.UserMessage.Key);
                         Assert.Equal(expectedPickerCalls, shell.PickerCallCount);
                         Assert.True(shell.BoardBackupSelected);
                         Assert.Contains(shell.TestLog, m => m == "Dynamic.RecoverySource.BoardInvalid");

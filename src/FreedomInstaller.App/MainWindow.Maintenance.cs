@@ -58,7 +58,7 @@ public partial class MainWindow
             SetText(
                 UninstallEdlStatusText,
                 "Dynamic.UninstallFlow.Maintenance.StatusAndroidReadFailed",
-                exception.Message);
+                exception);
             AppendLocalizedLog(M(
                 "Dynamic.UninstallFlow.Maintenance.StatusAndroidReadFailed",
                 exception.Message));
@@ -123,7 +123,7 @@ public partial class MainWindow
             SetText(
                 UninstallEdlStatusText,
                 "Dynamic.UninstallFlow.Maintenance.WorkRootCreateFailed",
-                exception.Message);
+                exception);
             AppendLocalizedLog(M(
                 "Dynamic.UninstallFlow.Maintenance.WorkRootCreateFailed",
                 exception.Message));

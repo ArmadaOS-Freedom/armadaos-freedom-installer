@@ -15,6 +15,20 @@ using static FreedomInstaller.Core.InternalPartitionPlanner;
 
 namespace FreedomInstaller.Core;
 
+/// <summary>The recovery archive does not fit in the fixed board backup area.</summary>
+public sealed class BoardRecoverySpaceException : IOException
+{
+    internal BoardRecoverySpaceException(long requiredBytes, long availableBytes)
+        : base($"The gzip member spans {requiredBytes} bytes; it must fit the {availableBytes} bytes behind the header.")
+    {
+        RequiredBytes = requiredBytes;
+        AvailableBytes = availableBytes;
+    }
+
+    public long RequiredBytes { get; }
+    public long AvailableBytes { get; }
+}
+
 /// <summary>
 /// One payload file an artifact preparation plans to write, or has written, below the artifact directory.
 /// <para>
@@ -2150,10 +2164,14 @@ public static class InternalInstallArtifacts
         stream.Flush(flushToDisk: true);
 
         compressedBytes = stream.Position - BoardHeaderBytes;
-        if (compressedBytes <= 0 || compressedBytes > BootSettingsRegion.Offset - BoardHeaderBytes)
+        var availableArchiveBytes = BootSettingsRegion.Offset - BoardHeaderBytes;
+        if (compressedBytes <= 0)
         {
-            throw new InvalidDataException(
-                $"The gzip member spans {compressedBytes} bytes; it must fit the {BootSettingsRegion.Offset - BoardHeaderBytes} bytes behind the header.");
+            throw new InvalidDataException("The board recovery archive's compressed payload is empty.");
+        }
+        if (compressedBytes > availableArchiveBytes)
+        {
+            throw new BoardRecoverySpaceException(compressedBytes, availableArchiveBytes);
         }
 
         compressedSha256 = HashRange(stream, BoardHeaderBytes, compressedBytes, token);
