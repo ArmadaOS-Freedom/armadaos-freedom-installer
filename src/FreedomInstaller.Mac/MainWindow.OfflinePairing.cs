@@ -148,6 +148,7 @@ public partial class MainWindow
                     string key = p.Phase switch
                     {
                         OfflineUpdateBootstrapCoordinator.ProbingPhase => "Dynamic.OfflineUpdate.BootstrapProbing",
+                        OfflineUpdateBootstrapCoordinator.MigratingPhase => "Dynamic.OfflineUpdate.BootstrapMigrating",
                         OfflineUpdateBootstrapCoordinator.DeployingPhase => "Dynamic.OfflineUpdate.BootstrapDeploying",
                         OfflineUpdateBootstrapCoordinator.VerifyingPhase => "Dynamic.OfflineUpdate.BootstrapVerifying",
                         _ => "Dynamic.OfflineUpdate.BootstrapReady",
@@ -380,6 +381,7 @@ public partial class MainWindow
         OfflineUpdateSshManagedFailure.SudoUnavailable => "Dynamic.OfflineUpdate.ErrorSudoUnavailable",
         OfflineUpdateSshManagedFailure.UpdaterUnavailable => "Dynamic.OfflineUpdate.ErrorUpdateComponentsMissing",
         OfflineUpdateSshManagedFailure.Bootstrap => "Dynamic.OfflineUpdate.ErrorBootstrapFailed",
+        OfflineUpdateSshManagedFailure.DescriptorMigration => "Dynamic.OfflineUpdate.ErrorDescriptorMigrationFailed",
         OfflineUpdateSshManagedFailure.Timeout => "Dynamic.OfflineUpdate.ErrorConnectTimeout",
         _ => "Dynamic.OfflineUpdate.ErrorConnectFailed",
     };

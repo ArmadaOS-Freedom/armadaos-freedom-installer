@@ -247,6 +247,7 @@ public enum OfflineUpdateSshManagedFailure
     UpdaterUnavailable = 4,
     Timeout = 5,
     Bootstrap = 6,
+    DescriptorMigration = 7,
 }
 
 public sealed class OfflineUpdateSshManagedException : IOException

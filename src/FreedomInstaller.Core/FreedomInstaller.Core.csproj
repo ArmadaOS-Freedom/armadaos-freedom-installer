@@ -30,6 +30,12 @@
     <EmbeddedResource Include="Resources\armadaos-freedom.pub"
                       LogicalName="FreedomInstaller.UpdateTrust.PublicKey.pem"
                       WithCulture="false" />
+    <!-- Runs on the tablet before the offline updater starts. Standalone by
+         design: it must repair a legacy ARMADA_BACKUP descriptor without
+         importing the installed (and possibly incompatible) update runtime. -->
+    <EmbeddedResource Include="Resources\offline-recovery-descriptor-migration.py"
+                      LogicalName="FreedomInstaller.OfflineRecoveryDescriptor.Script.py"
+                      WithCulture="false" />
   </ItemGroup>
 
   <ItemGroup>

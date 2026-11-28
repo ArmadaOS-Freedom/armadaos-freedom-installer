@@ -109,6 +109,24 @@ public sealed class OfflineUpdateSshConnection : IOfflineUpdateConnection
 
             var info = await connection._rpc.GetInfoAsync(token).ConfigureAwait(false);
             connection.DeviceInfo = info.Clone();
+
+            // The public-key route never runs the password bootstrap, so a
+            // tablet paired long ago would otherwise keep its legacy v1/v2
+            // recovery descriptor and fail the updater's trial-journal open.
+            // Only a device that advertises the mutating-upgrade contract may
+            // be written; a read-only connection to an ineligible device must
+            // stay read-only.
+            var model = info.TryGetProperty("model", out var modelElement) &&
+                        modelElement.ValueKind == JsonValueKind.String
+                ? modelElement.GetString()
+                : null;
+            if (OfflineUpdateRecoveryDescriptorMigration.IsMigrationTarget(info, model))
+            {
+                await OfflineUpdateRecoveryDescriptorMigration
+                    .EnsureOverKeyRouteAsync(options, model!, token)
+                    .ConfigureAwait(false);
+            }
+
             return connection;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -161,7 +179,12 @@ public sealed class OfflineUpdateSshConnection : IOfflineUpdateConnection
         return sb.ToString();
     }
 
-    internal static ProcessStartInfo CreateStartInfo(OfflineUpdateSshOptions options)
+    internal static ProcessStartInfo CreateStartInfo(OfflineUpdateSshOptions options) =>
+        CreateStartInfoForCommand(options, remoteCommand: null);
+
+    private static ProcessStartInfo CreateStartInfoForCommand(
+        OfflineUpdateSshOptions options,
+        string? remoteCommand)
     {
         ArgumentNullException.ThrowIfNull(options);
 
@@ -221,13 +244,123 @@ public sealed class OfflineUpdateSshConnection : IOfflineUpdateConnection
             "-p", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "-l", userName,
             host,
-            userName == "root" ? RootRemoteCommand : NonRootRemoteCommand,
+            remoteCommand ?? (userName == "root" ? RootRemoteCommand : NonRootRemoteCommand),
         })
         {
             psi.ArgumentList.Add(arg);
         }
 
         return psi;
+    }
+
+    private const int MaxOneShotOutputBytes = 64 * 1024;
+
+    /// <summary>
+    /// Runs one bounded command over the same public-key transport used for
+    /// the updater. The script is piped on stdin, so no helper has to be
+    /// installed on the tablet and no shell quoting of its contents is needed.
+    /// </summary>
+    internal static async Task<OfflineUpdateSshCommandResult> RunRemoteCommandAsync(
+        OfflineUpdateSshOptions options,
+        string remoteCommand,
+        byte[]? standardInput,
+        TimeSpan timeout,
+        CancellationToken token)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(remoteCommand);
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be positive.");
+        token.ThrowIfCancellationRequested();
+
+        using var process = new Process { StartInfo = CreateStartInfoForCommand(options, remoteCommand) };
+        if (!process.Start())
+            throw new IOException("Failed to start the OpenSSH client process.");
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token);
+        linked.CancelAfter(timeout);
+        var stdout = ReadBoundedAsync(process.StandardOutput.BaseStream, linked.Token);
+        var stderr = ReadBoundedAsync(process.StandardError.BaseStream, linked.Token);
+        try
+        {
+            if (standardInput is { Length: > 0 })
+            {
+                try
+                {
+                    await process.StandardInput.BaseStream
+                        .WriteAsync(standardInput, linked.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (IOException)
+                {
+                    // The client already exited; its stderr explains why.
+                }
+            }
+
+            try
+            {
+                process.StandardInput.Close();
+            }
+            catch (IOException)
+            {
+                // Same: the exit status and stderr carry the real failure.
+            }
+
+            await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
+            return new OfflineUpdateSshCommandResult(
+                process.ExitCode,
+                await stdout.ConfigureAwait(false),
+                await stderr.ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            TryKill(process);
+            throw new TimeoutException("The remote command did not finish in time.");
+        }
+        catch
+        {
+            TryKill(process);
+            throw;
+        }
+    }
+
+    private static async Task<string> ReadBoundedAsync(Stream stream, CancellationToken token)
+    {
+        var buffer = new byte[8192];
+        using var output = new MemoryStream();
+        while (true)
+        {
+            int read;
+            try
+            {
+                read = await stream.ReadAsync(buffer, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            if (read == 0)
+                break;
+
+            var take = Math.Min(read, MaxOneShotOutputBytes - (int)output.Length);
+            if (take > 0)
+                output.Write(buffer, 0, take);
+        }
+
+        return Encoding.UTF8.GetString(output.ToArray());
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Best effort; the process is already going away.
+        }
     }
 
     internal static string? ValidateBindAddress(string? bindAddress)
