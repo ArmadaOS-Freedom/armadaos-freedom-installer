@@ -1044,11 +1044,9 @@ public partial class MainWindow
         }
 
         _internalInstallRange = range;
-        long userdataBytes = table.Partitions
-            .Where(partition => string.Equals(partition.Name, "userdata", StringComparison.OrdinalIgnoreCase))
-            .Select(partition => partition.SectorCount * (long)table.SectorSize)
-            .FirstOrDefault();
-        var proposal = Math.Clamp(userdataBytes / Gibibyte / 2, range.MinimumGiB, range.MaximumGiB);
+        // Same default as the WPF window (Core): half of userdata for a fresh or old-route table, the whole userdata
+        // for a reinstall over the installed Linux layout, so leaving the slider alone keeps the Android data.
+        var proposal = InternalPartitionPlanner.DefaultAndroidGiB(table, range);
         var chosen = _internalInstallAndroidGiB >= range.MinimumGiB && _internalInstallAndroidGiB <= range.MaximumGiB
             ? _internalInstallAndroidGiB
             : proposal;

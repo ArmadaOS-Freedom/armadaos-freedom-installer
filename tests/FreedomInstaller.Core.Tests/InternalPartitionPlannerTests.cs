@@ -267,6 +267,67 @@ public sealed class InternalPartitionPlannerTests
         }
     }
 
+    // ---------------------------------------------------------------- default Android size (both windows)
+
+    // The real TB710FU LUN0 after a Freedom install (11/27): 107 GiB userdata, then the installed Linux layout.
+    private static GptTable Tb710fuInstalledTable() => Table(
+        4096, 251456913408L, 6, 61390842,
+        Part(2, "userdata", 5105064, 28049408),
+        Part(3, "ARMADA_BOOT", 33154560, 262144),
+        Part(4, "ARMADA_ROOT", 33416704, 27449600),
+        Part(5, "ARMADA_BACKUP", 60866304, 524288));
+
+    [Fact]
+    public void DefaultAndroidGiB_FreshTable_ProposesHalfOfTheUserdata()
+    {
+        GptTable table = G4Table(Part(2, "userdata", G4UserdataStart, G4UserdataCount));
+
+        long expected = G4UserdataCount * 4096 / GiB / 2;
+        Assert.Equal(expected, InternalPartitionPlanner.DefaultAndroidGiB(table, Range(table)));
+    }
+
+    [Fact]
+    public void DefaultAndroidGiB_Reinstall_ProposesTheWholeUserdataAndThatPlanKeepsTheLayout()
+    {
+        // Leaving the slider alone over an installed layout must be the overlay install: the same userdata and the
+        // same ARMADA_BOOT/ROOT/BACKUP extents, so no Android data erase.
+        GptTable table = Tb710fuInstalledTable();
+
+        long proposal = InternalPartitionPlanner.DefaultAndroidGiB(table, Range(table));
+        Assert.Equal(107, proposal);
+
+        InternalAllocationPlan plan = InternalPartitionPlanner.Plan(table, proposal, DefaultStorage());
+        Assert.Equal(28049408, plan.AndroidSectorCount);
+        Assert.Equal(33154560, plan.LinuxBootStartSector);
+        Assert.Equal(262144, plan.LinuxBootSectorCount);
+        Assert.Equal(33416704, plan.LinuxRootStartSector);
+        Assert.Equal(27449600, plan.LinuxRootSectorCount);
+        Assert.Equal(60866304, plan.BackupStartSector);
+    }
+
+    [Fact]
+    public void DefaultAndroidGiB_FindsUserdataLikeThePlanner()
+    {
+        // A padded, differently cased userdata name is the planner's userdata too, so the reinstall default stays 107.
+        GptTable table = Table(
+            4096, 251456913408L, 6, 61390842,
+            Part(2, "  UserData  ", 5105064, 28049408),
+            Part(3, "ARMADA_BOOT", 33154560, 262144),
+            Part(4, "ARMADA_ROOT", 33416704, 27449600),
+            Part(5, "ARMADA_BACKUP", 60866304, 524288));
+
+        Assert.Equal(107, InternalPartitionPlanner.DefaultAndroidGiB(table, Range(table)));
+    }
+
+    [Fact]
+    public void DefaultAndroidGiB_IsClampedIntoTheRange()
+    {
+        GptTable table = Tb710fuInstalledTable();
+        var narrow = new AndroidAllocationRange(16, 64);
+
+        Assert.Equal(64, InternalPartitionPlanner.DefaultAndroidGiB(table, narrow));
+    }
+
     // ---------------------------------------------------------------- launcher defaults backup selection
 
     [Fact]
