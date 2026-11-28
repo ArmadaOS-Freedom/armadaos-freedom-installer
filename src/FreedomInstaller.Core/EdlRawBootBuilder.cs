@@ -252,6 +252,8 @@ public static partial class EdlRawBootBuilder
                     request.XblConfig,
                     recoveryBoot,
                     baseImagePath,
+                    request.PeerSlotLoaderBudget,
+                    request.PeerSlot,
                     token)
                 : InternalSlotMaterialReader.AnalyzeAndExportBaseAsync(
                     sourceSlot,
@@ -261,6 +263,8 @@ public static partial class EdlRawBootBuilder
                     request.Abl,
                     request.XblConfig,
                     baseImagePath,
+                    request.PeerSlotLoaderBudget,
+                    request.PeerSlot,
                     token))
                 .ConfigureAwait(false);
 

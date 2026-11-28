@@ -1518,6 +1518,99 @@ public sealed class InternalSlotMaterialReaderTests
         Assert.False(InvokeBudget(ablSha, 1048576, KnownXblSha, 245760, 4096, 0, 10633132, 0, 3).KnownLoaderMatch);
     }
 
+    // ------------------------------------------- a slot an OTA left behind borrows the other slot
+
+    // The whole abl_b partition of an OTA-updated stock TB710FU ZUXOS 1.5.04.495 tablet (pre-OTA loader).
+    private const string Tb710fuPreOtaAblSha =
+        "dcb879bbfde77519b131b87ab5d09c903a0d785cff70127d792244aa88b35ccb";
+    private const string PeerSlotProfile = "peer-slot-loader-derived";
+
+    private static InternalSlotLoaderBudget IdentifiedTb710fuSlotA() => InvokeBudget(
+        "1cdc214a8f5cbd24878ccba205cf71c61be998696181d0933e3500113f326d72", 1048576,
+        "ee165befc3fcac316f9c2ea0cd609207774ae5351af554a8706da29a7c90c0a4", 245760,
+        4096, 0, 10633132, 0, 3);
+
+    private static Task<InternalSlotMaterial> ResolveWithPeerAsync(
+        WorkDir work,
+        byte[] kernel,
+        string slot,
+        InternalSlotLoaderBudget? peerBudget,
+        string? peerSlot,
+        byte[]? vendor = null)
+    {
+        byte[] currentBytes = MakeBoot(
+            kernel: kernel, ramdisk: BootRamdisk, signature: Repeat((byte)'S', 21));
+        byte[] vendorBytes = vendor ?? MakeVendor(ramdisk: VendorRamdisk);
+        byte[] initBytes = MakeBoot(
+            kernel: Array.Empty<byte>(), ramdisk: Array.Empty<byte>(), signature: Ascii("initsig"));
+        return InternalSlotMaterialReader.AnalyzeAndExportBaseAsync(
+            slot,
+            work.Claim("current.img", currentBytes),
+            work.Claim("vendor.img", vendorBytes),
+            work.Claim("init.img", initBytes),
+            work.Claim("abl.bin", Ascii("abl-left-by-a-one-slot-ota")),
+            work.Claim("xbl.bin", Ascii("xbl-config-left-by-a-one-slot-ota")),
+            Path.Combine(work.Dir, "base-" + Guid.NewGuid().ToString("N") + ".img"),
+            peerBudget,
+            peerSlot,
+            CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Unidentified_slot_borrows_the_identified_other_slot_with_its_own_ramdisks()
+    {
+        using var work = new WorkDir();
+        byte[] kernel = MakeArm64(320);
+        InternalSlotLoaderBudget slotA = IdentifiedTb710fuSlotA();
+        Assert.True(slotA.KnownLoaderMatch);
+
+        InternalSlotMaterial material = await ResolveWithPeerAsync(work, kernel, "b", slotA, "a");
+
+        InternalSlotLoaderBudget budget = material.LoaderBudget;
+        Assert.True(budget.KnownLoaderMatch);
+        Assert.Equal(PeerSlotProfile, budget.Profile);
+        long total = material.BootRamdiskSize + material.VendorRamdiskSize + material.InitRamdiskSize;
+        long aligned = (total + 4095) / 4096 * 4096;
+        Assert.Equal(268435456L - 524288 - aligned - 8192 - 2097152, budget.MaxRawBytes);
+        Assert.Contains("slot a of the same device is identified as 'tb710fu-abl495-xbl-config-ramdisk-derived'", budget.Evidence);
+        Assert.Contains("align_up(" + total + ", 4096)", budget.Formula);
+
+        // The other direction works the same way.
+        InternalSlotMaterial reverse = await ResolveWithPeerAsync(work, kernel, "a", slotA, "b");
+        Assert.Equal(PeerSlotProfile, reverse.LoaderBudget.Profile);
+    }
+
+    [Fact]
+    public async Task Slot_keeps_the_conservative_policy_without_an_identified_other_slot()
+    {
+        using var work = new WorkDir();
+        byte[] kernel = MakeArm64(320);
+        InternalSlotLoaderBudget unknown = InvokeBudget(
+            Tb710fuPreOtaAblSha, 1048576,
+            "ee165befc3fcac316f9c2ea0cd609207774ae5351af554a8706da29a7c90c0a4", 245760,
+            4096, 0, 10633132, 0, 3);
+        Assert.False(unknown.KnownLoaderMatch);
+
+        foreach ((InternalSlotLoaderBudget? peer, string? peerSlot) in new (InternalSlotLoaderBudget?, string?)[]
+                 {
+                     (null, null),
+                     (unknown, "a"),
+                     (IdentifiedTb710fuSlotA(), "b"),
+                     (IdentifiedTb710fuSlotA(), null),
+                     (IdentifiedTb710fuSlotA(), "c"),
+                 })
+        {
+            InternalSlotMaterial material = await ResolveWithPeerAsync(work, kernel, "b", peer, peerSlot);
+            Assert.False(material.LoaderBudget.KnownLoaderMatch);
+            Assert.Equal(134217728L, material.LoaderBudget.MaxRawBytes);
+        }
+
+        // Another page size never takes the window arithmetic, even next to an identified slot.
+        InternalSlotMaterial page8192 = await ResolveWithPeerAsync(
+            work, kernel, "b", IdentifiedTb710fuSlotA(), "a", MakeVendor(ramdisk: VendorRamdisk, page: 8192));
+        Assert.False(page8192.LoaderBudget.KnownLoaderMatch);
+    }
+
     private static InternalSlotLoaderBudget InvokeBudget(
         string ablSha, long ablBytes, string xblSha, long xblBytes,
         int pageSize, long bootRamdisk, long vendorRamdisk, long initRamdisk,

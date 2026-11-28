@@ -162,6 +162,7 @@ public static class InternalSlotMaterialReader
     private const int LoaderAlign = 4096;
     private const long DefaultRawBudget = 134217728;
     private const string DefaultProfile = "conservative-default";
+    private const string PeerSlotProfile = "peer-slot-loader-derived";
     private const string KnownProfile = "tb322fc-abl259-xbl-config-ramdisk-derived";
     private const string StructuralProfile = "tb322fc-abl-kernel-region-derived";
     private const string KnownAblSha256 = "e7062378a1fe977df95341e5d3023dd510cffb283b11902a7cdbe74ba3e43885";
@@ -242,7 +243,28 @@ public static class InternalSlotMaterialReader
         VerifiedEdlFile xblConfig,
         VerifiedEdlFile recoveryBoot,
         string baseOutputPath,
-        CancellationToken token = default)
+        CancellationToken token = default) =>
+        AnalyzeAndExportReinstallBaseAsync(
+            slot, currentBoot, vendorBoot, initBoot, abl, xblConfig, recoveryBoot, baseOutputPath,
+            null, null, token);
+
+    /// <summary>
+    /// <see cref="AnalyzeAndExportReinstallBaseAsync(string, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, string, CancellationToken)"/>
+    /// with the identified loader budget of the other slot of the same device (see
+    /// <see cref="ComputePeerSlotLoaderBudget"/>).
+    /// </summary>
+    internal static Task<InternalSlotMaterial> AnalyzeAndExportReinstallBaseAsync(
+        string slot,
+        VerifiedEdlFile currentBoot,
+        VerifiedEdlFile vendorBoot,
+        VerifiedEdlFile initBoot,
+        VerifiedEdlFile abl,
+        VerifiedEdlFile xblConfig,
+        VerifiedEdlFile recoveryBoot,
+        string baseOutputPath,
+        InternalSlotLoaderBudget? peerBudget,
+        string? peerSlot,
+        CancellationToken token)
     {
         if (slot is not ("a" or "b"))
         {
@@ -265,7 +287,7 @@ public static class InternalSlotMaterialReader
         return Task.Run(
             () => Analyze(
                 slot, currentBoot, vendorBoot, initBoot, abl, xblConfig, token, outputPath,
-                recoveryBoot),
+                recoveryBoot, peerBudget, peerSlot),
             token);
     }
 
@@ -307,6 +329,47 @@ public static class InternalSlotMaterialReader
             token);
     }
 
+    /// <summary>
+    /// <see cref="AnalyzeAndExportBaseAsync(string, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, VerifiedEdlFile, string, CancellationToken)"/>
+    /// with the identified loader budget of the other slot of the same device. It is used only when this slot's
+    /// own loaders are not identified; see <see cref="ComputePeerSlotLoaderBudget"/>.
+    /// </summary>
+    internal static Task<InternalSlotMaterial> AnalyzeAndExportBaseAsync(
+        string slot,
+        VerifiedEdlFile currentBoot,
+        VerifiedEdlFile vendorBoot,
+        VerifiedEdlFile initBoot,
+        VerifiedEdlFile abl,
+        VerifiedEdlFile xblConfig,
+        string baseOutputPath,
+        InternalSlotLoaderBudget? peerBudget,
+        string? peerSlot,
+        CancellationToken token)
+    {
+        if (slot is not ("a" or "b"))
+        {
+            throw new ArgumentException("slot must be 'a' or 'b'.", nameof(slot));
+        }
+        ArgumentNullException.ThrowIfNull(currentBoot);
+        ArgumentNullException.ThrowIfNull(vendorBoot);
+        ArgumentNullException.ThrowIfNull(initBoot);
+        ArgumentNullException.ThrowIfNull(abl);
+        ArgumentNullException.ThrowIfNull(xblConfig);
+        if (string.IsNullOrWhiteSpace(baseOutputPath))
+        {
+            throw new ArgumentException(
+                "base output path must name a non-empty file path.", nameof(baseOutputPath));
+        }
+
+        string outputPath = Path.GetFullPath(baseOutputPath);
+
+        return Task.Run(
+            () => Analyze(
+                slot, currentBoot, vendorBoot, initBoot, abl, xblConfig, token, outputPath,
+                null, peerBudget, peerSlot),
+            token);
+    }
+
     private static InternalSlotMaterial Analyze(
         string slot,
         VerifiedEdlFile currentBoot,
@@ -316,7 +379,9 @@ public static class InternalSlotMaterialReader
         VerifiedEdlFile xblConfig,
         CancellationToken token,
         string? baseOutputPath = null,
-        VerifiedEdlFile? recoveryBoot = null)
+        VerifiedEdlFile? recoveryBoot = null,
+        InternalSlotLoaderBudget? peerBudget = null,
+        string? peerSlot = null)
     {
         FileStream? currentStream = null;
         FileStream? vendorStream = null;
@@ -368,6 +433,18 @@ public static class InternalSlotMaterialReader
                 budget = ComputeStructuralLoaderBudget(
                     current.RamdiskSize + vendor.RamdiskSize + init.RamdiskSize,
                     loaderEvidence);
+            }
+
+            // Lenovo OTAs often update one slot only, so the other slot keeps an older ABL/xbl_config that no
+            // hash pair or ABL pattern knows. When the other slot of the same device is identified, this slot
+            // takes that identity and only its own ramdisks change the arithmetic.
+            if (!budget.KnownLoaderMatch && peerBudget is not null)
+            {
+                budget = ComputePeerSlotLoaderBudget(
+                    slot, ablSha, xblSha,
+                    vendor.PageSize,
+                    current.RamdiskSize + vendor.RamdiskSize + init.RamdiskSize,
+                    peerBudget, peerSlot) ?? budget;
             }
 
             if (current.KernelSize > int.MaxValue || current.KernelSize > MaxInputBytes)
@@ -840,6 +917,46 @@ public static class InternalSlotMaterialReader
             false,
             "unrecognized loader identity: conservative 128 MiB policy, not a measured hardware limit",
             "max_raw_bytes = 134217728 (conservative fallback)");
+    }
+
+    /// <summary>
+    /// The window budget an unidentified slot borrows from the identified other slot of the same device: same
+    /// page size (4096) and the same 256 MiB Kernel window arithmetic, evaluated with this slot's own ramdisks.
+    /// Null when the other slot is not identified either, or is this slot.
+    /// </summary>
+    private static InternalSlotLoaderBudget? ComputePeerSlotLoaderBudget(
+        string slot,
+        string ablSha256,
+        string xblSha256,
+        int pageSize,
+        long total,
+        InternalSlotLoaderBudget peerBudget,
+        string? peerSlot)
+    {
+        if (!peerBudget.KnownLoaderMatch
+            || pageSize != KnownPage
+            || peerSlot is not ("a" or "b")
+            || string.Equals(peerSlot, slot, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        long aligned = AlignUp(total, LoaderAlign);
+        long room = LoaderWindow - LoaderHeadReserve - aligned - LoaderGuard - LoaderTailReserve;
+        if (room <= 0)
+        {
+            throw Reject("loader_budget", $"non-positive raw room {room}");
+        }
+
+        return new InternalSlotLoaderBudget(
+            PeerSlotProfile,
+            room,
+            true,
+            "slot " + slot + " loaders not identified (abl sha256 " + ablSha256 + ", xbl_config sha256 " + xblSha256
+                + "); slot " + peerSlot + " of the same device is identified as '" + peerBudget.Profile
+                + "' and an OTA may update one slot only, so its 256 MiB Kernel window is assumed for this slot; "
+                + "page 4096, three validated v4 headers. Slot " + peerSlot + " evidence: " + peerBudget.Evidence,
+            $"max_raw_bytes = 268435456 - 524288 - align_up({total}, 4096) - 8192 - 2097152");
     }
 
     /// <summary>
